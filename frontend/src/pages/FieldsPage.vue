@@ -15,6 +15,9 @@ type Field = {
   forecastYield: string
   harvestDate: string
   imageUrl: string
+  soilType: string
+  moisture: string
+  lastOperation: string
 }
 
 const router = useRouter()
@@ -30,6 +33,9 @@ const fields = ref<Field[]>([
     readinessPercent: 85,
     forecastYield: '45 ц/га',
     harvestDate: '12.08',
+    soilType: 'Чернозём тяжёлый',
+    moisture: '18%',
+    lastOperation: 'Внесение КАС',
     imageUrl:
       'https://images.unsplash.com/photo-1523348837708-15d4a09cfac2?auto=format&fit=crop&w=400&q=80',
   },
@@ -43,6 +49,9 @@ const fields = ref<Field[]>([
     readinessPercent: 40,
     forecastYield: '72 ц/га',
     harvestDate: '25.09',
+    soilType: 'Супесь',
+    moisture: '22%',
+    lastOperation: 'Междурядная культивация',
     imageUrl:
       'https://images.unsplash.com/photo-1594488344604-037042831a29?auto=format&fit=crop&w=400&q=80',
   },
@@ -56,6 +65,9 @@ const fields = ref<Field[]>([
     readinessPercent: 60,
     forecastYield: '28 ц/га',
     harvestDate: '05.09',
+    soilType: 'Суглинок',
+    moisture: '20%',
+    lastOperation: 'Опрыскивание гербицидом',
     imageUrl:
       'https://images.unsplash.com/photo-1530507629858-e4977d30e9e0?auto=format&fit=crop&w=400&q=80',
   },
@@ -69,6 +81,9 @@ const fields = ref<Field[]>([
     readinessPercent: 92,
     forecastYield: '34 ц/га',
     harvestDate: '15.08',
+    soilType: 'Чернозём средний',
+    moisture: '16%',
+    lastOperation: 'Фунгицидная обработка',
     imageUrl:
       'https://images.unsplash.com/photo-1464303350174-88981f335b71?auto=format&fit=crop&w=400&q=80',
   },
@@ -82,6 +97,9 @@ const fields = ref<Field[]>([
     readinessPercent: 22,
     forecastYield: '39 ц/га',
     harvestDate: '30.09',
+    soilType: 'Супесь',
+    moisture: '24%',
+    lastOperation: 'Вспашка',
     imageUrl:
       'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=400&q=80',
   },
@@ -90,6 +108,7 @@ const fields = ref<Field[]>([
 const cropFilter = ref<CropKey>('all')
 const searchText = ref('')
 const selectedFieldId = ref(fields.value[0]?.id ?? null)
+const multiSelectedIds = ref<string[]>([])
 
 const selectedField = computed(() => fields.value.find((f) => f.id === selectedFieldId.value) ?? null)
 
@@ -103,12 +122,37 @@ const filteredFields = computed(() => {
   })
 })
 
+const selectedFields = computed(() =>
+  fields.value.filter((f) => multiSelectedIds.value.includes(f.id)),
+)
+
+const totalSelectedArea = computed(() =>
+  selectedFields.value.reduce((sum, f) => sum + f.area, 0),
+)
+
+const avgSelectedReadiness = computed(() => {
+  if (!selectedFields.value.length) return 0
+  const total = selectedFields.value.reduce((sum, f) => sum + f.readinessPercent, 0)
+  return Math.round(total / selectedFields.value.length)
+})
+
 function setCropFilter(next: CropKey) {
   cropFilter.value = next
 }
 
 function selectField(id: string) {
   selectedFieldId.value = id
+}
+
+function toggleMultiSelect(id: string) {
+  const idx = multiSelectedIds.value.indexOf(id)
+  if (idx === -1) {
+    multiSelectedIds.value = [...multiSelectedIds.value, id]
+  } else {
+    const next = [...multiSelectedIds.value]
+    next.splice(idx, 1)
+    multiSelectedIds.value = next
+  }
 }
 
 function openReports() {
@@ -205,6 +249,7 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
             :class="{
               'is-active': p.id === selectedFieldId,
               'is-dimmed': !visibleFieldIds.has(p.id),
+              'is-selected-group': multiSelectedIds.includes(p.id),
             }"
             :data-field-id="p.id"
             :d="p.d"
@@ -237,9 +282,19 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
               <span class="crop-badge">{{ f.cropName }}</span>
             </div>
             <div class="field-info">
-              <div>
-                <div class="type-label">{{ f.name }} • {{ f.area }} Га</div>
-                <div class="type-value">{{ f.stage }}</div>
+              <div class="field-card-header">
+                <div>
+                  <div class="type-label">{{ f.name }} • {{ f.area }} Га</div>
+                  <div class="type-value">{{ f.stage }}</div>
+                </div>
+                <label class="select-checkbox">
+                  <input
+                    type="checkbox"
+                    :checked="multiSelectedIds.includes(f.id)"
+                    @click.stop="toggleMultiSelect(f.id)"
+                  />
+                  <span />
+                </label>
               </div>
               <div>
                 <div class="type-label" style="margin-bottom: 8px">Готовность к уборке: {{ f.readinessPercent }}%</div>
@@ -255,6 +310,20 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
                 <div style="text-align: right">
                   <div class="type-label">Окно уборки</div>
                   <div class="type-value">{{ f.harvestDate }}</div>
+                </div>
+              </div>
+              <div class="stats-row stats-row-secondary">
+                <div>
+                  <div class="type-label">Тип почвы</div>
+                  <div class="type-value">{{ f.soilType }}</div>
+                </div>
+                <div>
+                  <div class="type-label">Влажность</div>
+                  <div class="type-value">{{ f.moisture }}</div>
+                </div>
+                <div style="text-align: right">
+                  <div class="type-label">Последняя операция</div>
+                  <div class="type-value">{{ f.lastOperation }}</div>
                 </div>
               </div>
             </div>
@@ -298,6 +367,18 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
                         ? 'В активной вегетации'
                         : 'Ранняя стадия'
                   }}
+                </div>
+              </div>
+              <div
+                v-if="selectedFields.length > 1"
+                class="field-details-aggregate"
+              >
+                <div class="type-label" style="margin-bottom: 6px">
+                  Группа полей ({{ selectedFields.length }})
+                </div>
+                <div class="type-value">
+                  Суммарная площадь: {{ totalSelectedArea }} Га • Средняя готовность:
+                  {{ avgSelectedReadiness }}%
                 </div>
               </div>
             </div>
@@ -564,6 +645,13 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
   gap: var(--space-md);
 }
 
+.field-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-md);
+}
+
 .progress-bar-container {
   height: 4px;
   background: rgba(255, 255, 255, 0.1);
@@ -580,6 +668,13 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
   display: flex;
   justify-content: space-between;
   gap: var(--space-md);
+}
+
+.stats-row-secondary {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 8px;
+  margin-top: 4px;
+  font-size: 0.8rem;
 }
 
 .field-details {
@@ -664,6 +759,48 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
   height: 7px;
   border-radius: 50%;
   background: var(--accent-green);
+}
+
+.select-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+}
+
+.select-checkbox input {
+  display: none;
+}
+
+.select-checkbox span {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: transparent;
+  transition:
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.select-checkbox input:checked + span {
+  background: var(--accent-green);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+
+.field-details-aggregate {
+  grid-column: 1 / -1;
+  padding-top: var(--space-sm);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.field-polygon.is-selected-group {
+  opacity: 1;
+  stroke-width: 2;
 }
 
 @media (max-width: 1024px) {

@@ -19,6 +19,7 @@ const isAuthLayout = computed(() => route.name === 'login')
         <li><RouterLink class="nav-item" to="/fields">Поля и культуры</RouterLink></li>
         <li><RouterLink class="nav-item" to="/tasks">Журнал работ</RouterLink></li>
         <li><RouterLink class="nav-item" to="/reports">Отчеты</RouterLink></li>
+        <li><RouterLink class="nav-item" to="/mechanic">Экран механизатора</RouterLink></li>
         <li>
           <RouterLink class="nav-item" to="/login" style="margin-top: var(--space-lg); color: var(--accent-green)">
             Выйти

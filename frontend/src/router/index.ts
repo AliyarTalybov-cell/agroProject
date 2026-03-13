@@ -6,6 +6,7 @@ import FieldsPage from '@/pages/FieldsPage.vue'
 import LoginPage from '@/pages/LoginPage.vue'
 import ReportsPage from '@/pages/ReportsPage.vue'
 import TasksPage from '@/pages/TasksPage.vue'
+import MechanicPage from '@/pages/MechanicPage.vue'
 
 export const routes = [
   { path: '/', redirect: '/dashboard' },
@@ -14,6 +15,7 @@ export const routes = [
   { path: '/fields', name: 'fields', component: FieldsPage },
   { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true },
   { path: '/tasks', name: 'tasks', component: TasksPage },
+  { path: '/mechanic', name: 'mechanic', component: MechanicPage },
   { path: '/reports', name: 'reports', component: ReportsPage },
 ] as const
 
