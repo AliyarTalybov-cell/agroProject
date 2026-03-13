@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
 
 type DateRangeKey = 'today' | 'week' | 'month'
@@ -102,6 +102,19 @@ const activeRange = ref<DateRangeKey>('today')
 const selectedEmployee = ref<string>('all')
 const selectedCategory = ref<DowntimeCategory | 'all'>('all')
 
+const hoveredCategory = ref<DowntimeCategory | null>(null)
+const animateProgress = ref(0)
+onMounted(() => {
+  const duration = 700
+  const start = performance.now()
+  const tick = (now: number) => {
+    const elapsed = now - start
+    animateProgress.value = Math.min(1, elapsed / duration)
+    if (animateProgress.value < 1) requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+})
+
 const employees = computed(() => {
   const unique = new Set(events.value.map((e) => e.employee))
   return Array.from(unique)
@@ -134,6 +147,18 @@ const avgDurationMinutes = computed(() =>
 )
 
 const totalHoursLabel = computed(() => `${(totalMinutes.value / 60).toFixed(1)} ч`)
+
+const displayedTotalDowntimes = computed(() =>
+  Math.round(animateProgress.value * totalDowntimes.value),
+)
+const displayedAvgMinutes = computed(() =>
+  Math.round(animateProgress.value * avgDurationMinutes.value),
+)
+const displayedTotalHoursLabel = computed(() =>
+  `${(animateProgress.value * totalMinutes.value / 60).toFixed(1)} ч`,
+)
+const displayedPercent = (key: DowntimeCategory) =>
+  Math.round(animateProgress.value * (breakdownPercents.value[key] ?? 0))
 
 const topReasonLabel = computed(() => {
   if (!filteredEvents.value.length) return '—'
@@ -213,17 +238,17 @@ const donutStyle = computed(() => {
       <article
         v-for="(_, i) in 4"
         :key="'m-' + i"
-        class="metric-card page-enter-item"
+        class="metric-card page-enter-item metric-card-animated"
         :style="{ '--enter-delay': 120 + i * 60 + 'ms' }"
       >
         <template v-if="i === 0">
           <div class="metric-label">Всего простоев</div>
-          <div class="metric-value">{{ totalDowntimes }}</div>
+          <div class="metric-value metric-value-count">{{ displayedTotalDowntimes }}</div>
           <div class="metric-caption">за выбранный период</div>
         </template>
         <template v-else-if="i === 1">
           <div class="metric-label">Средняя длительность</div>
-          <div class="metric-value">{{ avgDurationMinutes }}&nbsp;мин</div>
+          <div class="metric-value metric-value-count">{{ displayedAvgMinutes }}&nbsp;мин</div>
           <div class="metric-caption">по всем записям</div>
         </template>
         <template v-else-if="i === 2">
@@ -233,7 +258,7 @@ const donutStyle = computed(() => {
         </template>
         <template v-else>
           <div class="metric-label">Потеряно времени всего</div>
-          <div class="metric-value">{{ totalHoursLabel }}</div>
+          <div class="metric-value metric-value-count">{{ displayedTotalHoursLabel }}</div>
           <div class="metric-caption">в пересчёте на часы</div>
         </template>
       </article>
@@ -245,25 +270,32 @@ const donutStyle = computed(() => {
           <div class="type-label">Распределение причин</div>
           <div class="type-value" style="font-size: 0.9rem">Время простоя по типам</div>
         </div>
-        <div class="chart-wrapper">
+        <div
+          class="chart-wrapper"
+          :data-hover="hoveredCategory ?? ''"
+        >
           <div class="donut-chart dashboard-donut" :style="donutStyle">
             <div class="donut-inner">
-              <div class="donut-total">{{ totalHoursLabel }}</div>
+              <div class="donut-total">{{ displayedTotalHoursLabel }}</div>
               <div class="donut-label">Всего простоя</div>
             </div>
           </div>
           <ul class="legend-list">
             <li
-              v-for="(meta, key) in categoriesMeta"
+              v-for="(key, idx) in (Object.keys(categoriesMeta) as DowntimeCategory[])"
               :key="key"
-              class="legend-item"
+              class="legend-item legend-item-reveal"
+              :class="{ 'legend-item-active': hoveredCategory === key }"
+              :style="{ '--legend-delay': 0.5 + idx * 0.08 + 's' }"
+              @mouseenter="hoveredCategory = key"
+              @mouseleave="hoveredCategory = null"
             >
               <div class="legend-label">
-                <span class="legend-dot" :style="{ backgroundColor: meta.color }" />
-                {{ meta.label }}
+                <span class="legend-dot" :style="{ backgroundColor: categoriesMeta[key].color }" />
+                {{ categoriesMeta[key].label }}
               </div>
               <div class="legend-value">
-                {{ Math.round(breakdownPercents[key as DowntimeCategory]) }}%
+                {{ displayedPercent(key) }}%
               </div>
             </li>
           </ul>
@@ -401,11 +433,54 @@ const donutStyle = computed(() => {
 }
 
 .dashboard-donut {
-  transition: filter 0.3s ease;
+  transition: filter 0.3s ease, transform 0.25s ease, box-shadow 0.25s ease;
 }
 
 .dashboard-page:has(.date-chip-active) .dashboard-donut {
   filter: none;
+}
+
+.chart-wrapper[data-hover="breakdown"] .dashboard-donut {
+  box-shadow: 0 0 0 4px rgba(211, 60, 60, 0.35);
+  transform: scale(1.03);
+}
+.chart-wrapper[data-hover="rain"] .dashboard-donut {
+  box-shadow: 0 0 0 4px rgba(60, 145, 211, 0.35);
+  transform: scale(1.03);
+}
+.chart-wrapper[data-hover="fuel"] .dashboard-donut {
+  box-shadow: 0 0 0 4px rgba(211, 130, 60, 0.35);
+  transform: scale(1.03);
+}
+.chart-wrapper[data-hover="waiting"] .dashboard-donut {
+  box-shadow: 0 0 0 4px rgba(156, 163, 175, 0.4);
+  transform: scale(1.03);
+}
+
+.legend-item {
+  transition: background 0.2s ease, transform 0.2s ease;
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin: 0 -10px;
+  cursor: default;
+}
+.legend-item-active {
+  background: var(--row-hover-bg);
+  transform: scale(1.02);
+}
+.legend-item-reveal {
+  opacity: 0;
+  transform: translateY(8px);
+  animation: legendReveal 0.4s ease-out var(--legend-delay, 0.5s) forwards;
+}
+.legend-item-reveal.legend-item-active {
+  transform: scale(1.02) translateY(0);
+}
+@keyframes legendReveal {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .dashboard-table-row {
@@ -435,9 +510,17 @@ const donutStyle = computed(() => {
   gap: 6px;
 }
 
+.metric-card-animated .metric-value-count {
+  opacity: 0;
+  animation: metricReveal 0.15s ease-out var(--enter-delay, 0s) forwards;
+}
+@keyframes metricReveal {
+  to { opacity: 1; }
+}
+
 .metric-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-card);
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12);
 }
 
 .metric-label {
@@ -477,6 +560,10 @@ const donutStyle = computed(() => {
 
 .panel-chart {
   max-width: 360px;
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+.panel-chart:hover {
+  box-shadow: 0 8px 28px -6px rgba(0, 0, 0, 0.1);
 }
 
 .panel-header {

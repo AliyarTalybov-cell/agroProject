@@ -2,6 +2,11 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import type { ActiveDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
 import { appendEvent, loadActive, saveActive } from '@/lib/downtimeStorage'
+import {
+  appendOperation,
+  loadActiveOperation,
+  saveActiveOperation,
+} from '@/lib/operationStorage'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
 
 const EMPLOYEE_NAME = 'Механизатор #1'
@@ -9,18 +14,32 @@ const EMPLOYEE_NAME = 'Механизатор #1'
 const timerTick = ref(0)
 let timerInterval: ReturnType<typeof setInterval> | null = null
 
+/** Время начала работы (операции). Когда задано — крутится счётчик. Сбрасывается при начале простоя. */
+const workStartedAt = ref<string | null>(null)
+
 onMounted(() => {
+  const savedOp = loadActiveOperation()
+  if (savedOp && !active.value) {
+    workStartedAt.value = savedOp.startISO
+    if (savedOp.fieldId) currentFieldId.value = savedOp.fieldId
+  }
   timerInterval = setInterval(() => {
-    if (active.value) timerTick.value += 1
+    if (active.value || workStartedAt.value) timerTick.value += 1
   }, 1000)
 })
 onUnmounted(() => {
   if (timerInterval) clearInterval(timerInterval)
 })
 
+const timerStartISO = computed(() => {
+  if (active.value) return active.value.startISO
+  if (workStartedAt.value) return workStartedAt.value
+  return null
+})
+
 const elapsedSeconds = computed(() => {
-  if (!active.value) return 0
-  const start = new Date(active.value.startISO).getTime()
+  if (!timerStartISO.value) return 0
+  const start = new Date(timerStartISO.value).getTime()
   return Math.floor((Date.now() - start) / 1000) + timerTick.value
 })
 
@@ -40,6 +59,7 @@ type MechanicField = {
 
 const active = ref<ActiveDowntime | null>(loadActive())
 const isReasonsOpen = ref(false)
+const isOperationsOpen = ref(false)
 const isStartedModalOpen = ref(false)
 const isFinishedModalOpen = ref(false)
 const isAddFieldOpen = ref(false)
@@ -95,6 +115,7 @@ const queueTasks = computed(() => {
 })
 
 function startDowntime(reason: { label: string; category: DowntimeCategory }) {
+  workStartedAt.value = null
   const now = new Date()
   const field = currentField.value
   active.value = {
@@ -136,6 +157,40 @@ function stopDowntime() {
 function setCurrentField(id: string) {
   if (active.value?.fieldId && active.value.fieldId === id) return
   currentFieldId.value = id
+}
+
+function startOperation(field: MechanicField) {
+  setCurrentField(field.id)
+  const startISO = new Date().toISOString()
+  workStartedAt.value = startISO
+  saveActiveOperation({
+    startISO,
+    fieldId: field.id,
+    fieldName: field.name,
+    operation: field.operation,
+    employee: EMPLOYEE_NAME,
+  })
+  isOperationsOpen.value = false
+}
+
+function stopOperation() {
+  if (!workStartedAt.value) return
+  const now = new Date()
+  const start = new Date(workStartedAt.value)
+  const durationMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60000))
+  const field = currentField.value
+  appendOperation({
+    id: now.getTime(),
+    employee: EMPLOYEE_NAME,
+    fieldId: field?.id,
+    fieldName: field?.name,
+    operation: field?.operation,
+    startISO: workStartedAt.value,
+    endISO: now.toISOString(),
+    durationMinutes,
+  })
+  saveActiveOperation(null)
+  workStartedAt.value = null
 }
 
 function openAddField() {
@@ -181,7 +236,7 @@ function addField() {
       <main class="mechanic-main">
         <section class="mechanic-task-block page-enter-item" style="--enter-delay: 60ms">
           <div class="mechanic-task-label">Текущая задача</div>
-          <div class="mechanic-task-timer">{{ active ? timerLabel : '—' }}</div>
+          <div class="mechanic-task-timer">{{ timerStartISO ? timerLabel : '—' }}</div>
           <h2 class="mechanic-task-title">{{ taskTitle }}</h2>
           <div class="mechanic-task-progress-wrap">
             <div class="mechanic-task-progress-label">Прогресс выполнения</div>
@@ -191,14 +246,31 @@ function addField() {
             <div class="mechanic-task-progress-text">{{ progressPercent }}% ({{ progressDone }}/{{ progressTotal }} Га)</div>
           </div>
           <div class="mechanic-task-actions">
+            <template v-if="!active && !workStartedAt">
+              <button
+                class="btn-operation btn-operation-downtime"
+                type="button"
+                :disabled="!currentField"
+                @click="isReasonsOpen = true"
+              >
+                Начать простой
+              </button>
+              <button
+                class="btn-operation btn-operation-start"
+                type="button"
+                :disabled="!fields.length"
+                @click="isOperationsOpen = true"
+              >
+                Начать операцию
+              </button>
+            </template>
             <button
-              v-if="!active"
-              class="btn-operation btn-operation-start"
+              v-if="!active && workStartedAt"
+              class="btn-operation btn-operation-stop"
               type="button"
-              :disabled="!currentField"
-              @click="isReasonsOpen = true"
+              @click="stopOperation"
             >
-              Начать операцию
+              Остановить операцию
             </button>
             <button
               v-if="active"
@@ -206,7 +278,7 @@ function addField() {
               type="button"
               @click="stopDowntime"
             >
-              Завершить операцию
+              Завершить простой
             </button>
           </div>
         </section>
@@ -300,7 +372,7 @@ function addField() {
     <aside class="sheet" :class="{ 'sheet-open': isReasonsOpen }">
       <header class="sheet-header">
         <div>
-          <div class="sheet-label">Причина</div>
+          <div class="sheet-label">Простой</div>
           <div class="sheet-title">Выберите причину начала простоя</div>
         </div>
         <button class="sheet-close" type="button" @click="isReasonsOpen = false">
@@ -323,6 +395,40 @@ function addField() {
           </button>
         </li>
       </ul>
+    </aside>
+
+    <div
+      class="sheet-backdrop"
+      :class="{ 'sheet-backdrop-open': isOperationsOpen }"
+      @click="isOperationsOpen = false"
+    />
+    <aside class="sheet" :class="{ 'sheet-open': isOperationsOpen }">
+      <header class="sheet-header">
+        <div>
+          <div class="sheet-label">Операция</div>
+          <div class="sheet-title">Выберите операцию для работы</div>
+        </div>
+        <button class="sheet-close" type="button" @click="isOperationsOpen = false">
+          ✕
+        </button>
+      </header>
+      <ul class="sheet-list">
+        <li
+          v-for="field in fields"
+          :key="field.id"
+          class="sheet-item"
+        >
+          <button
+            class="sheet-button"
+            type="button"
+            @click="startOperation(field)"
+          >
+            <span class="sheet-button-title">{{ field.name }} — {{ field.operation }}</span>
+            <span class="sheet-button-desc">Начать работу по этому полю</span>
+          </button>
+        </li>
+      </ul>
+      <p v-if="!fields.length" class="sheet-empty">Добавьте поля в блоке «Мои поля сегодня», чтобы начать операцию.</p>
     </aside>
 
     <div
@@ -553,6 +659,22 @@ function addField() {
 .btn-operation:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.btn-operation-downtime {
+  background: transparent;
+  border: 2px solid var(--warning-orange);
+  color: var(--warning-orange);
+}
+
+[data-theme="dark"] .btn-operation-downtime {
+  color: var(--warning-orange);
+  border-color: var(--warning-orange);
+}
+
+.btn-operation-downtime:hover:not(:disabled) {
+  background: rgba(194, 65, 12, 0.1);
+  transform: translateY(-1px);
 }
 
 .btn-operation-start {
@@ -1133,6 +1255,13 @@ function addField() {
 
 .sheet-button-desc {
   font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.sheet-empty {
+  padding: var(--space-md) var(--space-lg);
+  margin: 0;
+  font-size: 0.9rem;
   color: var(--text-secondary);
 }
 

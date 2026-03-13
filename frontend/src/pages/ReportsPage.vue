@@ -1,17 +1,55 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onActivated } from 'vue'
 import type { StoredDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
 import { loadEvents } from '@/lib/downtimeStorage'
+import { loadOperations } from '@/lib/operationStorage'
 
 const events = ref<StoredDowntime[]>(loadEvents())
+const operations = ref(loadOperations())
+const showAllDowntimes = ref(false)
+const showAllOperations = ref(false)
+
+const ROW_LIMIT = 5
+const hoveredCategory = ref<DowntimeCategory | null>(null)
+const animateProgress = ref(0)
+onMounted(() => {
+  const duration = 700
+  const start = performance.now()
+  const tick = (now: number) => {
+    const elapsed = now - start
+    animateProgress.value = Math.min(1, elapsed / duration)
+    if (animateProgress.value < 1) requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+})
+
+onActivated(() => {
+  events.value = loadEvents()
+  operations.value = loadOperations()
+})
 
 const hasEvents = computed(() => events.value.length > 0)
 
 const sortedEvents = computed(() =>
   [...events.value].sort(
-    (a, b) => new Date(a.startISO).getTime() - new Date(b.startISO).getTime(),
+    (a, b) => new Date(b.startISO).getTime() - new Date(a.startISO).getTime(),
   ),
 )
+
+const sortedOperations = computed(() =>
+  [...operations.value].sort(
+    (a, b) => new Date(b.startISO).getTime() - new Date(a.startISO).getTime(),
+  ),
+)
+
+const visibleDowntimes = computed(() =>
+  showAllDowntimes.value ? sortedEvents.value : sortedEvents.value.slice(0, ROW_LIMIT),
+)
+const visibleOperations = computed(() =>
+  showAllOperations.value ? sortedOperations.value : sortedOperations.value.slice(0, ROW_LIMIT),
+)
+const hasMoreDowntimes = computed(() => sortedEvents.value.length > ROW_LIMIT)
+const hasMoreOperations = computed(() => sortedOperations.value.length > ROW_LIMIT)
 
 const totalMinutes = computed(() =>
   events.value.reduce((sum, e) => sum + e.durationMinutes, 0),
@@ -32,6 +70,7 @@ const categoriesMeta: Record<
   fuel: { label: 'Нет топлива', colorClass: 'legend-fuel' },
   waiting: { label: 'Ожидание задания', colorClass: 'legend-waiting' },
 }
+const categoryKeys = ['breakdown', 'rain', 'fuel', 'waiting'] as const
 
 const minutesByCategory = computed(() => {
   const base: Record<DowntimeCategory, number> = {
@@ -101,6 +140,16 @@ const topEmployees = computed(() => {
     .slice(0, 4)
 })
 
+const displayedTotalHoursLabel = computed(() => {
+  if (!totalMinutes.value) return '0 ч'
+  const hours = (animateProgress.value * totalMinutes.value) / 60
+  return `${hours.toFixed(1)} ч`
+})
+const displayedPercent = (key: DowntimeCategory) =>
+  Math.round(animateProgress.value * (percentsByCategory.value[key] ?? 0))
+const displayedMinutes = (key: DowntimeCategory) =>
+  Math.round(animateProgress.value * (minutesByCategory.value[key] ?? 0))
+
 function formatDuration(minutes: number): string {
   if (!minutes) return '0 мин'
   const h = Math.floor(minutes / 60)
@@ -161,53 +210,64 @@ function formatDate(iso: string): string {
           </p>
         </div>
 
-        <div v-else class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Сотрудник</th>
-                <th>Поле / операция</th>
-                <th>Причина</th>
-                <th>Дата</th>
-                <th>Время</th>
-                <th class="text-right">Длительность</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="event in sortedEvents" :key="event.id">
-                <td class="cell-employee">
-                  {{ event.employee }}
-                </td>
-                <td class="cell-field">
-                  <template v-if="event.fieldName || event.operation">
-                    <div v-if="event.fieldName" class="cell-field-main">
-                      {{ event.fieldName }}
-                    </div>
-                    <div v-if="event.operation" class="cell-field-sub">
-                      {{ event.operation }}
-                    </div>
-                  </template>
-                  <span v-else class="cell-field-empty">—</span>
-                </td>
-                <td class="cell-reason">
-                  <span
-                    class="reason-dot"
-                    :class="`reason-dot-${event.category}`"
-                  />
-                  <span>{{ event.reason }}</span>
-                </td>
-                <td class="cell-date">
-                  {{ formatDate(event.startISO) }}
-                </td>
-                <td class="cell-time">
-                  {{ formatClock(event.startISO) }}–{{ formatClock(event.endISO) }}
-                </td>
-                <td class="cell-duration text-right">
-                  {{ formatDuration(event.durationMinutes) }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-else>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Сотрудник</th>
+                  <th>Поле / операция</th>
+                  <th>Причина</th>
+                  <th>Дата</th>
+                  <th>Время</th>
+                  <th class="text-right">Длительность</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="event in visibleDowntimes" :key="event.id">
+                  <td class="cell-employee">
+                    {{ event.employee }}
+                  </td>
+                  <td class="cell-field">
+                    <template v-if="event.fieldName || event.operation">
+                      <div v-if="event.fieldName" class="cell-field-main">
+                        {{ event.fieldName }}
+                      </div>
+                      <div v-if="event.operation" class="cell-field-sub">
+                        {{ event.operation }}
+                      </div>
+                    </template>
+                    <span v-else class="cell-field-empty">—</span>
+                  </td>
+                  <td class="cell-reason">
+                    <span
+                      class="reason-dot"
+                      :class="`reason-dot-${event.category}`"
+                    />
+                    <span>{{ event.reason }}</span>
+                  </td>
+                  <td class="cell-date">
+                    {{ formatDate(event.startISO) }}
+                  </td>
+                  <td class="cell-time">
+                    {{ formatClock(event.startISO) }}–{{ formatClock(event.endISO) }}
+                  </td>
+                  <td class="cell-duration text-right">
+                    {{ formatDuration(event.durationMinutes) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <button
+            v-if="hasMoreDowntimes"
+            type="button"
+            class="show-all-btn"
+            @click="showAllDowntimes = !showAllDowntimes"
+          >
+            {{ showAllDowntimes ? 'Свернуть' : 'Показать все' }}
+            ({{ sortedEvents.length }})
+          </button>
         </div>
       </section>
 
@@ -220,11 +280,14 @@ function formatDate(iso: string): string {
         </div>
 
         <div v-if="hasEvents" class="chart-layout">
-          <div class="donut-wrapper">
-            <div class="donut-chart" :style="donutStyle">
+          <div
+            class="donut-wrapper chart-wrapper-interactive"
+            :data-hover="hoveredCategory ?? ''"
+          >
+            <div class="donut-chart reports-donut" :style="donutStyle">
               <div class="donut-inner">
                 <div class="donut-total">
-                  {{ totalHoursLabel }}
+                  {{ displayedTotalHoursLabel }}
                 </div>
                 <div class="donut-label">Всего простоя</div>
               </div>
@@ -234,25 +297,21 @@ function formatDate(iso: string): string {
           <div class="chart-side">
             <ul class="legend">
               <li
-                v-for="(meta, key) in categoriesMeta"
+                v-for="(key, idx) in categoryKeys"
                 :key="key"
-                class="legend-item"
+                class="legend-item legend-item-reveal"
+                :class="{ 'legend-item-active': hoveredCategory === key }"
+                :style="{ '--legend-delay': 0.35 + idx * 0.08 + 's' }"
+                @mouseenter="hoveredCategory = key"
+                @mouseleave="hoveredCategory = null"
               >
                 <div class="legend-label">
-                  <span class="legend-color" :class="meta.colorClass" />
-                  <span>{{ meta.label }}</span>
+                  <span class="legend-color" :class="categoriesMeta[key].colorClass" />
+                  <span>{{ categoriesMeta[key].label }}</span>
                 </div>
                 <span class="legend-value">
-                  {{
-                    Math.round(
-                      percentsByCategory[key as DowntimeCategory] ?? 0,
-                    )
-                  }}% ·
-                  {{
-                    formatDuration(
-                      minutesByCategory[key as DowntimeCategory] ?? 0,
-                    )
-                  }}
+                  {{ displayedPercent(key) }}% ·
+                  {{ formatDuration(displayedMinutes(key)) }}
                 </span>
               </li>
             </ul>
@@ -261,9 +320,10 @@ function formatDate(iso: string): string {
               <div class="type-label">Топ по времени простоя</div>
               <ul class="top-list">
                 <li
-                  v-for="[name, minutes] in topEmployees"
+                  v-for="([name, minutes], idx) in topEmployees"
                   :key="name"
-                  class="top-item"
+                  class="top-item top-item-reveal"
+                  :style="{ '--top-delay': 0.6 + idx * 0.06 + 's' }"
                 >
                   <span class="top-name">{{ name }}</span>
                   <span class="top-value">{{ formatDuration(minutes) }}</span>
@@ -277,6 +337,65 @@ function formatDate(iso: string): string {
           <p class="placeholder-text">
             Как только появятся данные о простоях, мы покажем распределение по причинам и сотрудникам.
           </p>
+        </div>
+      </section>
+
+      <section class="panel panel-table page-enter-item operations-panel" style="--enter-delay: 180ms">
+        <div class="panel-header">
+          <div>
+            <div class="type-label">Журнал</div>
+            <div class="panel-title">Операции</div>
+          </div>
+        </div>
+
+        <div v-if="!operations.length" class="empty-state">
+          <p class="placeholder-text">
+            Завершённые операции появятся здесь после нажатия «Остановить операцию» на экране оператора.
+          </p>
+        </div>
+
+        <div v-else>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Сотрудник</th>
+                  <th>Поле / операция</th>
+                  <th>Дата</th>
+                  <th>Время</th>
+                  <th class="text-right">Длительность</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="op in visibleOperations" :key="op.id">
+                  <td class="cell-employee">{{ op.employee }}</td>
+                  <td class="cell-field">
+                    <template v-if="op.fieldName || op.operation">
+                      <div v-if="op.fieldName" class="cell-field-main">{{ op.fieldName }}</div>
+                      <div v-if="op.operation" class="cell-field-sub">{{ op.operation }}</div>
+                    </template>
+                    <span v-else class="cell-field-empty">—</span>
+                  </td>
+                  <td class="cell-date">{{ formatDate(op.startISO) }}</td>
+                  <td class="cell-time">
+                    {{ formatClock(op.startISO) }}–{{ formatClock(op.endISO) }}
+                  </td>
+                  <td class="cell-duration text-right">
+                    {{ formatDuration(op.durationMinutes) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <button
+            v-if="hasMoreOperations"
+            type="button"
+            class="show-all-btn"
+            @click="showAllOperations = !showAllOperations"
+          >
+            {{ showAllOperations ? 'Свернуть' : 'Показать все' }}
+            ({{ sortedOperations.length }})
+          </button>
         </div>
       </section>
     </div>
@@ -425,6 +544,10 @@ tbody tr:hover td {
 .panel-chart {
   display: flex;
   flex-direction: column;
+  transition: box-shadow 0.25s ease;
+}
+.panel-chart:hover {
+  box-shadow: 0 8px 28px -6px rgba(0, 0, 0, 0.1);
 }
 
 .chart-layout {
@@ -449,6 +572,28 @@ tbody tr:hover td {
   opacity: 0;
   transform: scale(0.7);
   animation: donutReveal 0.6s ease-out 0.2s forwards;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.reports-donut {
+  position: relative;
+}
+
+.chart-wrapper-interactive[data-hover="breakdown"] .reports-donut {
+  box-shadow: 0 0 0 4px rgba(211, 60, 60, 0.35);
+  transform: scale(1.03);
+}
+.chart-wrapper-interactive[data-hover="rain"] .reports-donut {
+  box-shadow: 0 0 0 4px rgba(60, 145, 211, 0.35);
+  transform: scale(1.03);
+}
+.chart-wrapper-interactive[data-hover="fuel"] .reports-donut {
+  box-shadow: 0 0 0 4px rgba(211, 130, 60, 0.35);
+  transform: scale(1.03);
+}
+.chart-wrapper-interactive[data-hover="waiting"] .reports-donut {
+  box-shadow: 0 0 0 4px rgba(156, 163, 175, 0.4);
+  transform: scale(1.03);
 }
 
 @keyframes donutReveal {
@@ -501,6 +646,29 @@ tbody tr:hover td {
   align-items: center;
   justify-content: space-between;
   font-size: 0.85rem;
+  transition: background 0.2s ease, transform 0.2s ease;
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin: 0 -10px;
+  cursor: default;
+}
+.legend-item-active {
+  background: var(--row-hover-bg);
+  transform: scale(1.02);
+}
+.legend-item-reveal {
+  opacity: 0;
+  transform: translateY(8px);
+  animation: legendReveal 0.4s ease-out var(--legend-delay, 0.35s) forwards;
+}
+.legend-item-reveal.legend-item-active {
+  transform: scale(1.02) translateY(0);
+}
+@keyframes legendReveal {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .legend-label {
@@ -555,6 +723,23 @@ tbody tr:hover td {
   align-items: center;
   justify-content: space-between;
   font-size: 0.85rem;
+  transition: background 0.2s ease;
+  border-radius: 6px;
+  padding: 4px 0;
+}
+.top-item:hover {
+  background: var(--row-hover-bg);
+}
+.top-item-reveal {
+  opacity: 0;
+  transform: translateX(-8px);
+  animation: topReveal 0.35s ease-out var(--top-delay, 0.6s) forwards;
+}
+@keyframes topReveal {
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .top-name {
@@ -564,6 +749,27 @@ tbody tr:hover td {
 .top-value {
   font-variant-numeric: tabular-nums;
   font-weight: 500;
+}
+
+.show-all-btn {
+  margin-top: var(--space-md);
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--chip-bg);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.show-all-btn:hover {
+  background: var(--row-hover-bg);
+  border-color: var(--agri-primary);
+}
+
+.operations-panel {
+  grid-column: 1 / -1;
 }
 
 .empty-state {
