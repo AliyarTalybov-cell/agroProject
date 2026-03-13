@@ -228,68 +228,68 @@ const fieldsWithWeather = computed(() => {
       <h2 class="weather-section-title">Подробные показатели</h2>
       <div class="weather-indicators-grid">
         <div class="weather-indicator-card">
-          <div class="weather-indicator-icon" style="background:#e8eee9;color:var(--agri-primary);">
+          <div class="weather-indicator-icon weather-icon-wind">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2" /><path d="M9.6 4.6A2 2 0 1 1 11 8H2" /><path d="M12.6 19.4A2 2 0 1 0 14 16H2" /></svg>
           </div>
           <div>
             <div class="weather-indicator-label">Ветер</div>
-            <div class="weather-indicator-value">{{ weather.windSpeed != null ? weather.windSpeed : '—' }} <span style="font-size:0.875rem;font-weight:500;color:#6b7280;">м/с, {{ weather.windDirection || '—' }}</span></div>
+            <div class="weather-indicator-value">{{ weather.windSpeed != null ? weather.windSpeed : '—' }} <span class="weather-indicator-muted">м/с, {{ weather.windDirection || '—' }}</span></div>
             <div class="weather-indicator-sub">{{ windStrong ? 'Осторожно' : 'Безопасно для работ' }}</div>
           </div>
         </div>
         <div class="weather-indicator-card">
-          <div class="weather-indicator-icon" style="background:#dbeafe;color:#2563eb;"><!-- humidity --><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22a5 5 0 0 0 5-5c0-2-5-10-5-10S7 15 7 17a5 5 0 0 0 5 5z" /></svg></div>
+          <div class="weather-indicator-icon weather-icon-humidity"><!-- humidity --><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22a5 5 0 0 0 5-5c0-2-5-10-5-10S7 15 7 17a5 5 0 0 0 5 5z" /></svg></div>
           <div>
             <div class="weather-indicator-label">Влажность</div>
-            <div class="weather-indicator-value">{{ weather.humidity != null ? weather.humidity : '—' }}<span style="font-size:0.875rem;color:#6b7280;">%</span></div>
+            <div class="weather-indicator-value">{{ weather.humidity != null ? weather.humidity : '—' }}<span class="weather-indicator-muted">%</span></div>
             <div class="weather-indicator-sub">Оптимальная</div>
           </div>
         </div>
         <div class="weather-indicator-card">
-          <div class="weather-indicator-icon" style="background:#f3e8ff;color:#9333ea;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></svg></div>
+          <div class="weather-indicator-icon weather-icon-pressure"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></svg></div>
           <div>
             <div class="weather-indicator-label">Давление</div>
-            <div class="weather-indicator-value">{{ weather.pressure != null ? Math.round(weather.pressure * 0.75006) : '—' }}<span style="font-size:0.75rem;color:#6b7280;"> мм рт.ст.</span></div>
+            <div class="weather-indicator-value">{{ weather.pressure != null ? Math.round(weather.pressure * 0.75006) : '—' }}<span class="weather-indicator-muted"> мм рт.ст.</span></div>
             <div class="weather-indicator-sub">На ур. моря: {{ weather.pressure ?? '—' }} гПа</div>
           </div>
         </div>
         <div class="weather-indicator-card">
-          <div class="weather-indicator-icon" style="background:#ffedd5;color:#ea580c;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg></div>
+          <div class="weather-indicator-icon weather-icon-visibility"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg></div>
           <div>
             <div class="weather-indicator-label">Видимость</div>
-            <div class="weather-indicator-value">{{ weather.visibility != null ? weather.visibility / 1000 : '—' }}<span style="font-size:0.875rem;color:#6b7280;"> км</span></div>
+            <div class="weather-indicator-value">{{ weather.visibility != null ? weather.visibility / 1000 : '—' }}<span class="weather-indicator-muted"> км</span></div>
             <div class="weather-indicator-sub">Ясно, без тумана</div>
           </div>
         </div>
         <div class="weather-indicator-card">
-          <div class="weather-indicator-icon" style="background:#f3f4f6;color:#4b5563;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></svg></div>
+          <div class="weather-indicator-icon weather-icon-clouds"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></svg></div>
           <div>
             <div class="weather-indicator-label">Облачность</div>
-            <div class="weather-indicator-value">{{ weather.clouds != null ? weather.clouds : '—' }}<span style="font-size:0.875rem;color:#6b7280;">%</span></div>
-            <div class="weather-indicator-sub">Прогресс: <span style="display:inline-block;width:60px;height:6px;background:#e5e7eb;border-radius:999px;overflow:hidden;vertical-align:middle;"><span :style="{ width: (weather.clouds ?? 0) + '%' }" style="display:block;height:100%;background:#9ca3af;border-radius:999px;"></span></span></div>
+            <div class="weather-indicator-value">{{ weather.clouds != null ? weather.clouds : '—' }}<span class="weather-indicator-muted">%</span></div>
+            <div class="weather-indicator-sub">Прогресс: <span class="weather-progress"><span class="weather-progress-fill" :style="{ width: (weather.clouds ?? 0) + '%' }"></span></span></div>
           </div>
         </div>
         <div class="weather-indicator-card">
-          <div class="weather-indicator-icon" style="background:#ecfeff;color:#0891b2;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" /><path d="M16 14v6" /><path d="M8 14v6" /><path d="M12 16v6" /></svg></div>
+          <div class="weather-indicator-icon weather-icon-precip"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" /><path d="M16 14v6" /><path d="M8 14v6" /><path d="M12 16v6" /></svg></div>
           <div>
             <div class="weather-indicator-label">Вер. осадков</div>
-            <div class="weather-indicator-value">{{ weather.clouds != null ? 100 - weather.clouds : '—' }}<span style="font-size:0.875rem;color:#6b7280;">%</span></div>
-            <div class="weather-indicator-sub">Прогресс: <span style="display:inline-block;width:60px;height:6px;background:#e5e7eb;border-radius:999px;overflow:hidden;vertical-align:middle;"><span :style="{ width: (100 - (weather.clouds ?? 0)) + '%' }" style="display:block;height:100%;background:#22d3ee;border-radius:999px;"></span></span></div>
+            <div class="weather-indicator-value">{{ weather.clouds != null ? 100 - weather.clouds : '—' }}<span class="weather-indicator-muted">%</span></div>
+            <div class="weather-indicator-sub">Прогресс: <span class="weather-progress"><span class="weather-progress-fill weather-progress-fill-cyan" :style="{ width: (100 - (weather.clouds ?? 0)) + '%' }"></span></span></div>
           </div>
         </div>
         <div class="weather-indicator-card">
-          <div class="weather-indicator-icon" style="background:#fef9c3;color:#ca8a04;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" /></svg></div>
+          <div class="weather-indicator-icon weather-icon-uv"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" /></svg></div>
           <div>
             <div class="weather-indicator-label">УФ-Индекс</div>
-            <div class="weather-indicator-value">2 <span style="font-size:0.75rem;background:#dcfce7;color:#166534;padding:2px 8px;border-radius:6px;font-weight:600;">Низкий</span></div>
+            <div class="weather-indicator-value">2 <span class="weather-badge weather-badge-low">Низкий</span></div>
             <div class="weather-indicator-sub">Защита не требуется</div>
           </div>
         </div>
         <div class="weather-indicator-card">
-          <div class="weather-indicator-icon" style="background:#ffe4e6;color:#e11d48;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v8" /><path d="m4.93 10.93 1.41 1.41" /><path d="M2 18h2" /><path d="M20 18h2" /><path d="m19.07 10.93-1.41 1.41" /><path d="M22 22H2" /><path d="m8 6 4-4 4 4" /><path d="M16 18a4 4 0 0 0-8 0" /></svg></div>
+          <div class="weather-indicator-icon weather-icon-sun"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v8" /><path d="m4.93 10.93 1.41 1.41" /><path d="M2 18h2" /><path d="M20 18h2" /><path d="m19.07 10.93-1.41 1.41" /><path d="M22 22H2" /><path d="m8 6 4-4 4 4" /><path d="M16 18a4 4 0 0 0-8 0" /></svg></div>
           <div>
             <div class="weather-indicator-label">Солнце</div>
-            <div class="weather-indicator-value" style="font-size:0.875rem;"><span>Восход: {{ weather.sunrise || '—' }}</span><br><span>Закат: {{ weather.sunset || '—' }}</span></div>
+            <div class="weather-indicator-value weather-indicator-value-sm"><span>Восход: {{ weather.sunrise || '—' }}</span><br><span>Закат: {{ weather.sunset || '—' }}</span></div>
             <div class="weather-indicator-sub">День: ~12ч</div>
           </div>
         </div>
