@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 
@@ -7,6 +7,18 @@ const route = useRoute()
 const isAuthLayout = computed(() => route.name === 'login')
 const pageTitle = computed(() => (route.meta?.title as string) || 'Обзор')
 const { theme, toggle } = useTheme()
+
+const mobileMenuOpen = ref(false)
+function toggleMobileMenu() {
+  mobileMenuOpen.value = !mobileMenuOpen.value
+}
+function closeMobileMenu() {
+  mobileMenuOpen.value = false
+}
+watch(route, closeMobileMenu)
+watch(mobileMenuOpen, (open) => {
+  document.body.style.overflow = open ? 'hidden' : ''
+})
 </script>
 
 <template>
@@ -14,7 +26,8 @@ const { theme, toggle } = useTheme()
     <RouterView />
   </div>
 
-  <div v-else class="app-layout">
+  <div v-else class="app-layout" :class="{ 'mobile-menu-open': mobileMenuOpen }">
+    <div class="sidebar-overlay" aria-hidden="true" @click="closeMobileMenu"></div>
     <aside class="sidebar">
       <div class="sidebar-brand">
         <span class="sidebar-brand-icon" aria-hidden="true">
@@ -101,6 +114,9 @@ const { theme, toggle } = useTheme()
 
     <main class="main-content">
       <header class="app-topbar">
+        <button type="button" class="topbar-menu-btn" aria-label="Меню" @click="toggleMobileMenu">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+        </button>
         <h1 class="app-topbar-title">{{ pageTitle }}</h1>
         <div class="app-topbar-right">
           <button type="button" class="topbar-icon-btn" aria-label="Переключить тему" @click="toggle">

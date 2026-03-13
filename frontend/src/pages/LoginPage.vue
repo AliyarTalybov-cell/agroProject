@@ -19,9 +19,9 @@ function submit() {
 </script>
 
 <template>
-  <div style="min-height: 100vh; display: grid; place-items: center; padding: 24px">
-    <div class="card" style="max-width: 420px; width: 100%">
-      <h1 class="page-title" style="margin-bottom: 12px">Вход в систему</h1>
+  <div class="login-layout">
+    <div class="login-card card">
+      <h1 class="page-title">Вход в систему</h1>
       <div style="display: grid; gap: 10px">
         <label style="display: grid; gap: 6px">
           <span style="color: var(--muted); font-size: 13px">Идентификатор оператора</span>
@@ -50,4 +50,25 @@ function submit() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.login-layout {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.login-card {
+  max-width: 420px;
+  width: 100%;
+}
+.login-card .page-title {
+  margin-bottom: 12px;
+}
+@media (max-width: 480px) {
+  .login-layout {
+    padding: 16px;
+  }
+}
+</style>
 
