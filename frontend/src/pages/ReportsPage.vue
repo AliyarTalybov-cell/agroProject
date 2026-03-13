@@ -74,10 +74,7 @@ const donutStyle = computed(() => {
   const w = percentsByCategory.value.waiting
 
   if (!(b + r + f + w)) {
-    return {
-      background:
-        'radial-gradient(circle at 50% 50%, rgba(10, 18, 8, 0.9), rgba(10, 18, 8, 1))',
-    }
+    return { background: 'var(--donut-inner-bg)' }
   }
 
   const s1 = b
@@ -86,9 +83,9 @@ const donutStyle = computed(() => {
 
   return {
     background: `conic-gradient(
-      #d33c3c 0 ${s1}%,
+      var(--danger-red) 0 ${s1}%,
       #3c91d3 ${s1}% ${s2}%,
-      #d3823c ${s2}% ${s3}%,
+      var(--warning-orange) ${s2}% ${s3}%,
       #9ca3af ${s3}% 100%
     )`,
   }
@@ -348,7 +345,7 @@ table {
 th,
 td {
   padding: 0.75rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--border-color);
   font-size: 0.85rem;
 }
 
@@ -365,7 +362,7 @@ tbody tr:last-child td {
 }
 
 tbody tr:hover td {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--row-hover-bg);
 }
 
 .cell-employee {
@@ -410,7 +407,7 @@ tbody tr:hover td {
 }
 
 .reason-dot-breakdown {
-  background: #d33c3c;
+  background: var(--danger-red);
 }
 
 .reason-dot-rain {
@@ -418,7 +415,7 @@ tbody tr:hover td {
 }
 
 .reason-dot-fuel {
-  background: #d3823c;
+  background: var(--warning-orange);
 }
 
 .reason-dot-waiting {
@@ -448,16 +445,24 @@ tbody tr:hover td {
   height: 200px;
   border-radius: 50%;
   position: relative;
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.4),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  box-shadow: var(--donut-ring-shadow);
+  opacity: 0;
+  transform: scale(0.7);
+  animation: donutReveal 0.6s ease-out 0.2s forwards;
+}
+
+@keyframes donutReveal {
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .donut-inner {
   position: absolute;
   inset: 32px;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 0, #162611, #050a04);
+  background: var(--donut-inner-bg);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -511,7 +516,7 @@ tbody tr:hover td {
 }
 
 .legend-breakdown {
-  background: #d33c3c;
+  background: var(--danger-red);
 }
 
 .legend-rain {
@@ -519,7 +524,7 @@ tbody tr:hover td {
 }
 
 .legend-fuel {
-  background: #d3823c;
+  background: var(--warning-orange);
 }
 
 .legend-waiting {
@@ -532,7 +537,7 @@ tbody tr:hover td {
 }
 
 .top-employees {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--border-color);
   padding-top: var(--space-md);
 }
 

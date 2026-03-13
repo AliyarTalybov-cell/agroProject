@@ -197,47 +197,56 @@ const donutStyle = computed(() => {
 </script>
 
 <template>
-  <section class="dashboard-page">
-    <header class="header-area">
+  <section class="dashboard-page dashboard-enter">
+    <header class="header-area dashboard-enter-item">
       <div>
         <div class="type-label" style="margin-bottom: 8px">Аналитика простоев</div>
         <h1 class="page-title">Дашборд простоев техники</h1>
       </div>
     </header>
 
-    <WeatherWidgetCompact />
+    <div class="dashboard-enter-item" style="--enter-delay: 80ms">
+      <WeatherWidgetCompact />
+    </div>
 
     <div class="metrics-row">
-      <article class="metric-card">
-        <div class="metric-label">Всего простоев</div>
-        <div class="metric-value">{{ totalDowntimes }}</div>
-        <div class="metric-caption">за выбранный период</div>
-      </article>
-      <article class="metric-card">
-        <div class="metric-label">Средняя длительность</div>
-        <div class="metric-value">{{ avgDurationMinutes }}&nbsp;мин</div>
-        <div class="metric-caption">по всем записям</div>
-      </article>
-      <article class="metric-card">
-        <div class="metric-label">Самая частая причина</div>
-        <div class="metric-value metric-value-sm">{{ topReasonLabel }}</div>
-        <div class="metric-caption">по сумме времени простоя</div>
-      </article>
-      <article class="metric-card">
-        <div class="metric-label">Потеряно времени всего</div>
-        <div class="metric-value">{{ totalHoursLabel }}</div>
-        <div class="metric-caption">в пересчёте на часы</div>
+      <article
+        v-for="(_, i) in 4"
+        :key="'m-' + i"
+        class="metric-card dashboard-enter-item"
+        :style="{ '--enter-delay': 120 + i * 60 + 'ms' }"
+      >
+        <template v-if="i === 0">
+          <div class="metric-label">Всего простоев</div>
+          <div class="metric-value">{{ totalDowntimes }}</div>
+          <div class="metric-caption">за выбранный период</div>
+        </template>
+        <template v-else-if="i === 1">
+          <div class="metric-label">Средняя длительность</div>
+          <div class="metric-value">{{ avgDurationMinutes }}&nbsp;мин</div>
+          <div class="metric-caption">по всем записям</div>
+        </template>
+        <template v-else-if="i === 2">
+          <div class="metric-label">Самая частая причина</div>
+          <div class="metric-value metric-value-sm">{{ topReasonLabel }}</div>
+          <div class="metric-caption">по сумме времени простоя</div>
+        </template>
+        <template v-else>
+          <div class="metric-label">Потеряно времени всего</div>
+          <div class="metric-value">{{ totalHoursLabel }}</div>
+          <div class="metric-caption">в пересчёте на часы</div>
+        </template>
       </article>
     </div>
 
-    <div class="dashboard-grid">
-      <aside class="panel panel-chart">
+    <div class="dashboard-grid dashboard-enter-item" style="--enter-delay: 420ms">
+      <aside class="panel panel-chart dashboard-data-block">
         <div class="panel-header">
           <div class="type-label">Распределение причин</div>
           <div class="type-value" style="font-size: 0.9rem">Время простоя по типам</div>
         </div>
         <div class="chart-wrapper">
-          <div class="donut-chart" :style="donutStyle">
+          <div class="donut-chart dashboard-donut" :style="donutStyle">
             <div class="donut-inner">
               <div class="donut-total">{{ totalHoursLabel }}</div>
               <div class="donut-label">Всего простоя</div>
@@ -261,7 +270,7 @@ const donutStyle = computed(() => {
         </div>
       </aside>
 
-      <section class="panel panel-table">
+      <section class="panel panel-table dashboard-data-block">
         <header class="table-filters">
           <div class="filters-left">
             <div class="type-label" style="margin-bottom: 8px">Фильтры</div>
@@ -336,7 +345,11 @@ const donutStyle = computed(() => {
                   Нет записей для выбранных фильтров
                 </td>
               </tr>
-              <tr v-for="event in filteredEvents" :key="event.id">
+              <tr
+                v-for="event in filteredEvents"
+                :key="event.id"
+                class="dashboard-table-row"
+              >
                 <td class="col-employee">
                   <div class="employee-name">{{ event.employee }}</div>
                 </td>
@@ -382,10 +395,50 @@ const donutStyle = computed(() => {
   gap: var(--space-xl);
 }
 
+/* Анимация появления при входе на страницу */
+.dashboard-enter-item {
+  opacity: 0;
+  transform: translateY(12px);
+  animation: dashboardItemEnter 0.5s ease forwards;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+@keyframes dashboardItemEnter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Плавное изменение при смене фильтров/данных */
+.dashboard-data-block {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.dashboard-donut {
+  transition: filter 0.3s ease;
+}
+
+.dashboard-page:has(.date-chip-active) .dashboard-donut {
+  filter: none;
+}
+
+.dashboard-table-row {
+  transition: background 0.2s ease, opacity 0.25s ease;
+}
+
+.dashboard-table-row:hover td {
+  background: var(--row-hover-bg);
+}
+
 .metrics-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-md);
+}
+
+.metric-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .metric-card {
@@ -395,6 +448,11 @@ const donutStyle = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card);
 }
 
 .metric-label {
@@ -452,7 +510,17 @@ const donutStyle = computed(() => {
   height: 200px;
   border-radius: 50%;
   position: relative;
-  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 0 0 2px var(--border-color);
+  opacity: 0;
+  transform: scale(0.7);
+  animation: donutReveal 0.6s ease-out 0.15s forwards;
+}
+
+@keyframes donutReveal {
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .donut-inner {
@@ -556,7 +624,7 @@ const donutStyle = computed(() => {
 .date-chip-active {
   background: var(--accent-green);
   border-color: var(--accent-green);
-  color: #000;
+  color: var(--text-primary);
 }
 
 .filters-right {
@@ -574,7 +642,7 @@ const donutStyle = computed(() => {
 
 .field-filter select {
   min-width: 180px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--chip-bg);
   border-radius: 999px;
   border: 1px solid var(--border-color);
   padding: 6px 10px;
@@ -604,7 +672,7 @@ th {
 }
 
 tbody tr:hover td {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--row-hover-bg);
 }
 
 .col-employee {
@@ -627,7 +695,7 @@ tbody tr:hover td {
   gap: 8px;
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--chip-bg);
   border: 1px solid var(--border-color);
   font-size: 0.8rem;
 }

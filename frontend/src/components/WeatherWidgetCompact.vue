@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchWeather, getWeatherIconUrl, type WeatherData } from '@/lib/weatherApi'
+import { useWeatherCity } from '@/composables/useWeatherCity'
 
 const router = useRouter()
+const { cityValue, city, country } = useWeatherCity()
 const weather = ref<WeatherData | null>(null)
 const loading = ref(true)
 const error = ref(false)
@@ -11,7 +13,7 @@ const error = ref(false)
 async function load() {
   loading.value = true
   error.value = false
-  const data = await fetchWeather('Kursk', 'ru')
+  const data = await fetchWeather(city(), country())
   weather.value = data
   loading.value = false
   if (!data) error.value = true
@@ -20,6 +22,8 @@ async function load() {
 onMounted(() => {
   load()
 })
+
+watch(cityValue, () => load())
 
 function goToWeather() {
   router.push('/weather')
@@ -38,13 +42,31 @@ const tempClass = () => {
   if (t < -15 || t > 35) return 'weather-extreme'
   return ''
 }
+
+const weatherSkyClass = () => {
+  const c = (weather.value?.condition ?? '').toLowerCase()
+  if (c === 'clear') return 'weather-sky--clear'
+  if (c === 'clouds') return 'weather-sky--clouds'
+  if (c === 'rain' || c === 'drizzle' || c === 'thunderstorm') return 'weather-sky--rain'
+  if (c === 'snow') return 'weather-sky--snow'
+  if (c === 'mist' || c === 'fog' || c === 'haze' || c === 'smoke') return 'weather-sky--fog'
+  return 'weather-sky--clear'
+}
 </script>
 
 <template>
   <div class="weather-widget-compact" aria-live="polite">
-    <div v-if="loading" class="weather-compact-loading">Загрузка погоды…</div>
+    <div v-if="loading" class="weather-compact-loading weather-compact-pulse">Загрузка погоды…</div>
     <div v-else-if="error" class="weather-compact-error">Не удалось загрузить погоду</div>
-    <div v-else class="weather-compact-content">
+    <div v-else class="weather-compact-content weather-compact-in">
+      <div class="weather-compact-sky weather-sky" :class="weatherSkyClass()" aria-hidden="true">
+        <div class="weather-sky__sun-disk" />
+        <div class="weather-sky__rays" />
+        <div class="weather-sky__clouds"><span class="weather-sky__cloud" /><span class="weather-sky__cloud" /><span class="weather-sky__cloud" /></div>
+        <div class="weather-sky__rain"><span v-for="i in 12" :key="i" class="weather-sky__drop" :style="{ '--i': i }" /></div>
+        <div class="weather-sky__snow"><span v-for="i in 8" :key="i" class="weather-sky__flake" :style="{ '--i': i }" /></div>
+        <div class="weather-sky__fog" />
+      </div>
       <span class="weather-compact-city">{{ weather?.cityName }}</span>
       <span class="weather-compact-temp" :class="tempClass()">{{ weather?.temp ?? '—' }}°C</span>
       <img
@@ -75,7 +97,50 @@ const tempClass = () => {
   border-radius: 12px;
   padding: var(--space-lg);
   margin-bottom: var(--space-xl);
-  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-card);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.weather-compact-sky.weather-sky {
+  width: 100%;
+  min-height: 72px;
+  border-radius: 10px;
+  margin-bottom: var(--space-md);
+  flex-shrink: 0;
+}
+
+.weather-widget-compact:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.12);
+}
+
+.weather-compact-pulse {
+  animation: compactPulse 1.2s ease-in-out infinite;
+}
+
+.weather-compact-in {
+  animation: compactFadeIn 0.4s ease forwards;
+}
+
+@keyframes compactPulse {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes compactFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .weather-compact-loading,

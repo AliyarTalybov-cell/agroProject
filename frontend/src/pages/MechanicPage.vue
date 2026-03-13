@@ -1,9 +1,36 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import type { ActiveDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
 import { appendEvent, loadActive, saveActive } from '@/lib/downtimeStorage'
+import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
 
 const EMPLOYEE_NAME = 'Механизатор #1'
+
+const timerTick = ref(0)
+let timerInterval: ReturnType<typeof setInterval> | null = null
+
+onMounted(() => {
+  timerInterval = setInterval(() => {
+    if (active.value) timerTick.value += 1
+  }, 1000)
+})
+onUnmounted(() => {
+  if (timerInterval) clearInterval(timerInterval)
+})
+
+const elapsedSeconds = computed(() => {
+  if (!active.value) return 0
+  const start = new Date(active.value.startISO).getTime()
+  return Math.floor((Date.now() - start) / 1000) + timerTick.value
+})
+
+const timerLabel = computed(() => {
+  const s = elapsedSeconds.value
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+})
 
 type MechanicField = {
   id: string
@@ -54,6 +81,18 @@ const circleFieldLabel = computed(() => active.value?.fieldName ?? currentField.
 const circleTaskLabel = computed(
   () => active.value?.operation ?? currentField.value?.operation ?? 'Операция не указана',
 )
+
+const taskTitle = computed(() => `${circleFieldLabel.value} — ${circleTaskLabel.value}`)
+const progressPercent = 65
+const progressDone = 32
+const progressTotal = 50
+
+const equipmentStatus = { fuelPercent: 45, engineTemp: 85, engineOk: true, operatingHours: 1240 }
+const queueTasks = computed(() => {
+  const list = fields.value.filter((f) => f.id !== currentField.value?.id).slice(0, 4)
+  const areas = [120, 85, 200, 60]
+  return list.map((f, i) => ({ id: f.id, name: f.name, operation: f.operation, area: areas[i] ?? 0 }))
+})
 
 function startDowntime(reason: { label: string; category: DowntimeCategory }) {
   const now = new Date()
@@ -140,17 +179,95 @@ function addField() {
       </header>
 
       <main class="mechanic-main">
-        <div class="mechanic-circle">
-          <div class="circle-meta">Текущая операция</div>
-          <div class="circle-field">
-            {{ circleFieldLabel }}
+        <section class="mechanic-task-block">
+          <div class="mechanic-task-label">Текущая задача</div>
+          <div class="mechanic-task-timer">{{ active ? timerLabel : '—' }}</div>
+          <h2 class="mechanic-task-title">{{ taskTitle }}</h2>
+          <div class="mechanic-task-progress-wrap">
+            <div class="mechanic-task-progress-label">Прогресс выполнения</div>
+            <div class="mechanic-task-progress-bar">
+              <div class="mechanic-task-progress-fill" :style="{ width: progressPercent + '%' }" />
+            </div>
+            <div class="mechanic-task-progress-text">{{ progressPercent }}% ({{ progressDone }}/{{ progressTotal }} Га)</div>
           </div>
-          <div class="circle-task">
-            {{ circleTaskLabel }}
+          <div class="mechanic-task-actions">
+            <button
+              v-if="!active"
+              class="btn-operation btn-operation-start"
+              type="button"
+              :disabled="!currentField"
+              @click="isReasonsOpen = true"
+            >
+              Начать операцию
+            </button>
+            <button
+              v-if="active"
+              class="btn-operation btn-operation-stop"
+              type="button"
+              @click="stopDowntime"
+            >
+              Завершить операцию
+            </button>
           </div>
-        </div>
+        </section>
 
-        <section class="mechanic-fields">
+        <section class="mechanic-cards">
+          <div class="mechanic-card mechanic-card-equipment">
+            <div class="mechanic-card-header">
+              <div class="mechanic-card-title">Статус техники (John Deere 8R)</div>
+              <span class="mechanic-card-badge">Тестовые данные</span>
+            </div>
+            <div class="mechanic-equipment-row">
+              <span class="mechanic-equipment-label">Топливо</span>
+              <span class="mechanic-equipment-value">{{ equipmentStatus.fuelPercent }}%</span>
+            </div>
+            <div class="mechanic-progress-bar mechanic-progress-bar-yellow">
+              <div class="mechanic-progress-fill" :style="{ width: equipmentStatus.fuelPercent + '%' }" />
+            </div>
+            <div class="mechanic-equipment-row">
+              <span class="mechanic-equipment-label">Температура ДВС</span>
+              <span class="mechanic-equipment-value">{{ equipmentStatus.engineTemp }}°C</span>
+            </div>
+            <div class="mechanic-progress-bar mechanic-progress-bar-green">
+              <div class="mechanic-progress-fill" :style="{ width: 85 + '%' }" />
+            </div>
+            <div class="mechanic-equipment-ok" v-if="equipmentStatus.engineOk">В норме</div>
+            <div class="mechanic-equipment-row">
+              <span class="mechanic-equipment-label">Наработка (моточасы)</span>
+              <span class="mechanic-equipment-value">{{ equipmentStatus.operatingHours }} ч</span>
+            </div>
+          </div>
+
+          <div class="mechanic-card mechanic-card-queue">
+            <div class="mechanic-card-header">
+              <div class="mechanic-card-title">Очередь задач</div>
+              <button type="button" class="mechanic-card-link">Все поля</button>
+            </div>
+            <div class="mechanic-queue-list">
+              <button
+                v-for="t in queueTasks"
+                :key="t.id"
+                class="mechanic-queue-item"
+                type="button"
+                @click="setCurrentField(t.id)"
+              >
+                <span class="mechanic-queue-name">{{ t.name }}</span>
+                <span class="mechanic-queue-op">{{ t.operation }} · {{ t.area }} Га</span>
+              </button>
+            </div>
+            <button class="mechanic-queue-add" type="button" @click="openAddField">+ Добавить поле</button>
+          </div>
+
+          <div class="mechanic-card mechanic-card-weather">
+            <div class="mechanic-card-title">Метеоусловия</div>
+            <WeatherWidgetCompact />
+            <div class="mechanic-weather-permit">
+              Погодные условия оптимальны для пахоты. Влажность почвы в норме.
+            </div>
+          </div>
+        </section>
+
+        <section class="mechanic-fields mechanic-fields-compact">
           <div class="mechanic-fields-header">
             <div class="type-label">Мои поля сегодня</div>
             <div class="mechanic-fields-hint">Выберите, с каким полем вы сейчас работаете</div>
@@ -173,25 +290,6 @@ function addField() {
           </div>
         </section>
       </main>
-
-      <footer class="mechanic-actions">
-        <button
-          v-if="!active"
-          class="btn-main"
-          type="button"
-          @click="isReasonsOpen = true"
-        >
-          Начать простой
-        </button>
-        <button
-          v-else
-          class="btn-stop"
-          type="button"
-          @click="stopDowntime"
-        >
-          Завершить простой
-        </button>
-      </footer>
     </div>
 
     <div
@@ -203,7 +301,7 @@ function addField() {
       <header class="sheet-header">
         <div>
           <div class="sheet-label">Причина</div>
-          <div class="sheet-title">Выберите причину простоя</div>
+          <div class="sheet-title">Выберите причину начала простоя</div>
         </div>
         <button class="sheet-close" type="button" @click="isReasonsOpen = false">
           ✕
@@ -310,13 +408,15 @@ function addField() {
   display: flex;
   align-items: stretch;
   justify-content: center;
-  background: radial-gradient(circle at 50% 0, #2a4235 0, transparent 68%), #0f1614;
+  background: var(--bg-base);
+  background-image: var(--bg-body-image);
   color: var(--text-primary);
 }
 
 .mechanic-shell {
   flex: 1;
-  max-width: 480px;
+  max-width: 1000px;
+  width: 100%;
   padding: var(--space-lg) var(--space-md);
   display: flex;
   flex-direction: column;
@@ -367,40 +467,323 @@ function addField() {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  justify-content: center;
   gap: var(--space-xl);
 }
 
-.mechanic-circle {
-  width: min(70vw, 320px);
-  height: min(70vw, 320px);
-  border-radius: 50%;
+.mechanic-task-block {
+  background: var(--bg-panel);
   border: 1px solid var(--border-color);
-  background: radial-gradient(circle at 30% 0, rgba(104, 173, 51, 0.16), transparent 60%),
-    rgba(20, 35, 15, 0.9);
+  border-radius: 12px;
+  padding: var(--space-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.mechanic-task-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.mechanic-task-timer {
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.mechanic-task-title {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin: 0 0 var(--space-md);
+  color: var(--text-primary);
+}
+
+.mechanic-task-progress-wrap {
+  margin-bottom: var(--space-md);
+}
+
+.mechanic-task-progress-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.mechanic-task-progress-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.mechanic-task-progress-fill {
+  height: 100%;
+  background: var(--accent-green);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.mechanic-task-progress-text {
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.mechanic-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.btn-operation {
+  padding: 12px 20px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.btn-operation:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-operation-start {
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+  color: #fff;
+}
+
+[data-theme="dark"] .btn-operation-start {
+  color: var(--text-primary);
+}
+
+.btn-operation-start:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px -2px rgba(104, 173, 51, 0.4);
+}
+
+.btn-operation-stop {
+  background: transparent;
+  border-color: var(--danger-red);
+  color: var(--danger-red);
+}
+
+.btn-operation-stop:hover {
+  transform: translateY(-1px);
+  background: rgba(211, 60, 60, 0.08);
+}
+
+.mechanic-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.mechanic-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: var(--space-md);
   display: flex;
   flex-direction: column;
+  gap: var(--space-sm);
+  box-shadow: var(--shadow-card);
+}
+
+.mechanic-card-weather {
+  background: var(--mechanic-weather-card-bg);
+  border-color: var(--mechanic-weather-card-border);
+}
+
+.mechanic-card-weather .mechanic-card-title {
+  color: var(--mechanic-weather-card-text);
+}
+
+.mechanic-card-weather :deep(.weather-widget-compact) {
+  background: transparent;
+  border-color: var(--mechanic-weather-card-border);
+  margin-bottom: 0;
+}
+
+.mechanic-card-weather :deep(.weather-compact-city),
+.mechanic-card-weather :deep(.weather-compact-temp) {
+  color: var(--mechanic-weather-card-text);
+}
+
+.mechanic-card-weather :deep(.weather-compact-desc),
+.mechanic-card-weather :deep(.weather-compact-feels),
+.mechanic-card-weather :deep(.weather-compact-meta span) {
+  color: var(--mechanic-weather-card-text-muted);
+}
+
+.mechanic-card-weather :deep(.type-action) {
+  color: var(--accent-green);
+}
+
+.mechanic-card-weather :deep(.type-action:hover) {
+  color: var(--accent-green-hover);
+}
+
+.mechanic-card-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mechanic-card-badge {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  background: var(--chip-bg);
+  border-radius: 6px;
+}
+
+[data-theme="light"] .mechanic-card-badge {
+  color: #374151;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.mechanic-card-header {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
+  gap: var(--space-sm);
+}
+
+.mechanic-card-link {
+  background: none;
+  border: none;
+  color: var(--accent-green);
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+
+[data-theme="light"] .mechanic-card-link {
+  color: #1f402a;
+  font-weight: 600;
+}
+
+.mechanic-equipment-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.mechanic-equipment-label {
+  color: var(--text-secondary);
+}
+
+.mechanic-equipment-value {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mechanic-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  overflow: hidden;
+}
+
+.mechanic-progress-bar-green .mechanic-progress-fill {
+  background: var(--accent-green);
+}
+
+.mechanic-progress-bar-yellow .mechanic-progress-fill {
+  background: var(--warning-orange);
+}
+
+.mechanic-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.mechanic-equipment-ok {
+  font-size: 0.8rem;
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.mechanic-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.mechanic-queue-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--chip-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.15s ease;
+}
+
+.mechanic-queue-item:hover {
+  border-color: var(--accent-green);
+  transform: translateY(-1px);
+}
+
+.mechanic-queue-name {
+  font-weight: 600;
+}
+
+.mechanic-queue-op {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.mechanic-queue-add {
+  margin-top: 4px;
+  padding: 8px 0;
+  background: none;
+  border: none;
+  color: var(--accent-green);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+[data-theme="light"] .mechanic-queue-add {
+  color: #1f402a;
+  font-weight: 600;
+}
+
+.mechanic-weather-permit {
+  margin-top: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--mechanic-weather-permit-bg);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  color: var(--mechanic-weather-card-text);
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
 
-.circle-meta {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-}
-
-.circle-field {
-  font-size: 2.4rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-}
-
-.circle-task {
-  font-size: 1.1rem;
-  color: var(--text-secondary);
+.mechanic-fields-compact {
+  margin-top: 0;
 }
 
 .mechanic-fields {
@@ -431,7 +814,7 @@ function addField() {
   padding: 8px 12px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--chip-bg);
   color: var(--text-secondary);
   font-size: 0.8rem;
   display: inline-flex;
@@ -442,7 +825,13 @@ function addField() {
     background 0.2s ease,
     color 0.2s ease,
     border-color 0.2s ease,
-    transform 0.1s ease;
+    transform 0.15s ease,
+    box-shadow 0.2s ease;
+}
+
+.field-chip:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-green);
 }
 
 .field-chip-name {
@@ -454,16 +843,32 @@ function addField() {
   color: var(--text-secondary);
 }
 
+.field-chip-active .field-chip-op {
+  color: inherit;
+  opacity: 0.9;
+}
+
 .field-chip-active {
   border-color: var(--accent-green);
-  background: rgba(104, 173, 51, 0.18);
-  color: var(--text-primary);
-  transform: translateY(-1px);
+  background: var(--accent-green);
+  color: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px -2px rgba(104, 173, 51, 0.4);
+}
+
+[data-theme="dark"] .field-chip-active {
+  color: #000;
 }
 
 .field-chip-add {
   border-style: dashed;
-  opacity: 0.8;
+  opacity: 0.9;
+  color: var(--accent-green);
+}
+
+[data-theme="light"] .field-chip-add {
+  color: #1f402a;
+  font-weight: 600;
 }
 
 .mechanic-actions {
@@ -488,22 +893,35 @@ function addField() {
   background: var(--accent-green);
   border-color: var(--accent-green);
   color: #000;
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+.btn-main:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px -2px rgba(104, 173, 51, 0.4);
 }
 
 .btn-stop {
   background: transparent;
   border-color: var(--danger-red);
   color: var(--danger-red);
+  transition: transform 0.15s ease, background 0.2s ease;
+}
+
+.btn-stop:hover {
+  transform: translateY(-1px);
+  background: rgba(211, 60, 60, 0.08);
 }
 
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--modal-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 40;
+  animation: mechanicFadeIn 0.2s ease;
 }
 
 .modal {
@@ -512,7 +930,18 @@ function addField() {
   border-radius: 16px;
   border: 1px solid var(--border-color);
   padding: var(--space-lg);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-card), 0 20px 40px rgba(0, 0, 0, 0.2);
+  animation: mechanicModalIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes mechanicFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes mechanicModalIn {
+  from { opacity: 0; transform: scale(0.96) translateY(-10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 .modal-badge {
@@ -565,7 +994,7 @@ function addField() {
   padding: 8px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--chip-bg);
   color: var(--text-primary);
   font-size: 0.85rem;
 }
@@ -605,7 +1034,7 @@ function addField() {
 .sheet-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--modal-backdrop);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.25s ease;
@@ -622,7 +1051,7 @@ function addField() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(20, 35, 15, 0.98);
+  background: var(--bg-panel);
   border-top: 1px solid var(--border-color);
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
@@ -630,6 +1059,7 @@ function addField() {
   transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   padding: var(--space-md) var(--space-lg) calc(var(--space-lg) + env(safe-area-inset-bottom, 0));
   z-index: 30;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.15);
 }
 
 .sheet-open {
@@ -677,7 +1107,7 @@ function addField() {
 }
 
 .sheet-item {
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.14);
+  border-bottom: 1px dashed var(--border-color);
 }
 
 .sheet-item:last-child {
@@ -704,6 +1134,12 @@ function addField() {
 .sheet-button-desc {
   font-size: 0.8rem;
   color: var(--text-secondary);
+}
+
+@media (max-width: 900px) {
+  .mechanic-cards {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (min-width: 768px) {
