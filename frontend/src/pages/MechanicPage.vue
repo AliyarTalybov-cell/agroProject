@@ -7,7 +7,16 @@ import {
   loadActiveOperation,
   saveActiveOperation,
 } from '@/lib/operationStorage'
+import { loadDowntimeReasons, loadWorkOperations, isSupabaseConfigured } from '@/lib/reasonsAndOperations'
+import type { DowntimeReasonRow, WorkOperationRow } from '@/lib/reasonsAndOperations'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
+
+const DEFAULT_REASONS: Array<{ label: string; description: string; category: DowntimeCategory }> = [
+  { label: 'Поломка техники', description: 'Неисправность, требующая остановки работы', category: 'breakdown' },
+  { label: 'Дождь / погода', description: 'Осадки или условия, не позволяющие работать', category: 'rain' },
+  { label: 'Нет топлива', description: 'Ожидание заправки или подвоза ГСМ', category: 'fuel' },
+  { label: 'Ожидание задания', description: 'Нет подтверждённого задания от агронома', category: 'waiting' },
+]
 
 const EMPLOYEE_NAME = 'Механизатор #1'
 
@@ -17,19 +26,6 @@ let timerInterval: ReturnType<typeof setInterval> | null = null
 /** Время начала работы (операции). Когда задано — крутится счётчик. Сбрасывается при начале простоя. */
 const workStartedAt = ref<string | null>(null)
 
-onMounted(() => {
-  const savedOp = loadActiveOperation()
-  if (savedOp && !active.value) {
-    workStartedAt.value = savedOp.startISO
-    if (savedOp.fieldId) currentFieldId.value = savedOp.fieldId
-  }
-  timerInterval = setInterval(() => {
-    if (active.value || workStartedAt.value) timerTick.value += 1
-  }, 1000)
-})
-onUnmounted(() => {
-  if (timerInterval) clearInterval(timerInterval)
-})
 
 const timerStartISO = computed(() => {
   if (active.value) return active.value.startISO
@@ -76,12 +72,37 @@ const fields = ref<MechanicField[]>([
 
 const currentFieldId = ref<string | null>(active.value?.fieldId ?? fields.value[0]?.id ?? null)
 
-const reasons: Array<{ label: string; description: string; category: DowntimeCategory }> = [
-  { label: 'Поломка техники', description: 'Неисправность, требующая остановки работы', category: 'breakdown' },
-  { label: 'Дождь / погода', description: 'Осадки или условия, не позволяющие работать', category: 'rain' },
-  { label: 'Нет топлива', description: 'Ожидание заправки или подвоза ГСМ', category: 'fuel' },
-  { label: 'Ожидание задания', description: 'Нет подтверждённого задания от агронома', category: 'waiting' },
-]
+const reasons = ref<Array<{ label: string; description: string; category: DowntimeCategory }>>([...DEFAULT_REASONS])
+const workOperationsList = ref<WorkOperationRow[]>([])
+
+onMounted(async () => {
+  const savedOp = loadActiveOperation()
+  if (savedOp && !active.value) {
+    workStartedAt.value = savedOp.startISO
+    if (savedOp.fieldId) currentFieldId.value = savedOp.fieldId
+  }
+  timerInterval = setInterval(() => {
+    if (active.value || workStartedAt.value) timerTick.value += 1
+  }, 1000)
+  if (isSupabaseConfigured()) {
+    try {
+      const fromDb = await loadDowntimeReasons()
+      if (fromDb.length) {
+        reasons.value = fromDb.map((r: DowntimeReasonRow) => ({
+          label: r.label,
+          description: r.description ?? '',
+          category: r.category as DowntimeCategory,
+        }))
+      }
+      workOperationsList.value = await loadWorkOperations()
+    } catch {
+      // оставляем дефолтные причины и пустой список операций
+    }
+  }
+})
+onUnmounted(() => {
+  if (timerInterval) clearInterval(timerInterval)
+})
 
 const currentField = computed<MechanicField | null>(() => {
   if (active.value?.fieldId) {
@@ -93,7 +114,7 @@ const currentField = computed<MechanicField | null>(() => {
 
 const statusText = computed(() => {
   if (!active.value) return 'Работаем'
-  const reason = reasons.find((r) => r.category === active.value?.category)
+  const reason = reasons.value.find((r) => r.category === active.value?.category)
   return `Простой • ${reason?.label ?? active.value.reason}`
 })
 
@@ -168,6 +189,20 @@ function startOperation(field: MechanicField) {
     fieldId: field.id,
     fieldName: field.name,
     operation: field.operation,
+    employee: EMPLOYEE_NAME,
+  })
+  isOperationsOpen.value = false
+}
+
+function startOperationByName(op: WorkOperationRow) {
+  const field = currentField.value
+  const startISO = new Date().toISOString()
+  workStartedAt.value = startISO
+  saveActiveOperation({
+    startISO,
+    fieldId: field?.id,
+    fieldName: field?.name,
+    operation: op.name,
     employee: EMPLOYEE_NAME,
   })
   isOperationsOpen.value = false
@@ -258,7 +293,7 @@ function addField() {
               <button
                 class="btn-operation btn-operation-start"
                 type="button"
-                :disabled="!fields.length"
+                :disabled="!workOperationsList.length && !fields.length"
                 @click="isOperationsOpen = true"
               >
                 Начать операцию
@@ -414,21 +449,27 @@ function addField() {
       </header>
       <ul class="sheet-list">
         <li
-          v-for="field in fields"
-          :key="field.id"
+          v-for="op in workOperationsList"
+          :key="op.id"
           class="sheet-item"
         >
           <button
             class="sheet-button"
             type="button"
-            @click="startOperation(field)"
+            @click="startOperationByName(op)"
           >
+            <span class="sheet-button-title">{{ op.name }}</span>
+            <span class="sheet-button-desc">Начать операцию (поле: {{ currentField?.name ?? 'не выбрано' }})</span>
+          </button>
+        </li>
+        <li v-for="field in (workOperationsList.length ? [] : fields)" :key="'f-' + field.id" class="sheet-item">
+          <button class="sheet-button" type="button" @click="startOperation(field)">
             <span class="sheet-button-title">{{ field.name }} — {{ field.operation }}</span>
             <span class="sheet-button-desc">Начать работу по этому полю</span>
           </button>
         </li>
       </ul>
-      <p v-if="!fields.length" class="sheet-empty">Добавьте поля в блоке «Мои поля сегодня», чтобы начать операцию.</p>
+      <p v-if="!workOperationsList.length && !fields.length" class="sheet-empty">Добавьте операции на странице «Поля» (блок «Справочники») или поля в «Мои поля сегодня».</p>
     </aside>
 
     <div

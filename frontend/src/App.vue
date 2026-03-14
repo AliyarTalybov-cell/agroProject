@@ -1,12 +1,30 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
+import { useAuth } from '@/stores/auth'
 
 const route = useRoute()
+const router = useRouter()
+const auth = useAuth()
 const isAuthLayout = computed(() => route.name === 'login')
 const pageTitle = computed(() => (route.meta?.title as string) || 'Обзор')
 const { theme, toggle } = useTheme()
+
+const userDisplay = computed(() => {
+  if (auth.user.value?.email) return auth.user.value.email
+  return 'Пользователь'
+})
+const userInitials = computed(() => {
+  const email = auth.user.value?.email ?? ''
+  const part = email.split('@')[0]
+  if (part.length >= 2) return part.slice(0, 2).toUpperCase()
+  return part.slice(0, 1).toUpperCase() || '?'
+})
+async function handleLogout() {
+  await auth.logout()
+  router.push('/login')
+}
 
 const mobileMenuOpen = ref(false)
 function toggleMobileMenu() {
@@ -125,10 +143,10 @@ watch(mobileMenuOpen, (open) => {
           </button>
           <div class="topbar-user">
             <div class="topbar-user-meta">
-              <span class="topbar-user-name">Алексей С.</span>
-              <span class="topbar-user-role">Главный агроном</span>
+              <span class="topbar-user-name">{{ userDisplay }}</span>
+              <button type="button" class="topbar-logout" @click="handleLogout">Выйти</button>
             </div>
-            <div class="topbar-user-avatar">АС</div>
+            <div class="topbar-user-avatar">{{ userInitials }}</div>
           </div>
         </div>
       </header>

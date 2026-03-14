@@ -51,3 +51,52 @@ if (isSupabaseConfigured() && supabase) {
 ```
 
 Дальше можно постепенно переводить данные с localStorage на Supabase (отчёты, простои, операции).
+
+## 6. Регистрация и вход (без подтверждения почты)
+
+В приложении включены регистрация и вход по email и паролю через Supabase Auth.
+
+Чтобы новые пользователи могли входить сразу после регистрации **без подтверждения по email**:
+
+1. В дашборде Supabase открой **Authentication** → **Providers** → **Email**.
+2. Выключи опцию **Confirm email** (подтверждение по почте).
+3. Сохрани изменения.
+
+После этого при регистрации пользователь сразу считается авторизованным.
+
+## 7. Справочники: причины простоя и операции
+
+В `supabase/schema.sql` добавлены таблицы `downtime_reasons` и `work_operations` (с полями `created_by` и `created_at` для лога). На странице **Поля** внизу появится блок «Справочники для экрана оператора»: там можно добавлять причины простоя и операции; на экране оператора при «Начать простой» и «Начать операцию» будут подставляться эти данные из БД.
+
+**Если видишь ошибку «Could not find the table 'public.downtime_reasons' in the schema cache»** — таблицы ещё не созданы. В Supabase открой **SQL Editor** → **New query**, вставь и выполни (**Run**) этот блок:
+
+```sql
+-- Справочник причин простоя (для экрана оператора) + лог кто добавил
+create table if not exists public.downtime_reasons (
+  id uuid primary key default gen_random_uuid(),
+  label text not null,
+  description text,
+  category text not null check (category in ('breakdown', 'rain', 'fuel', 'waiting')),
+  created_at timestamptz default now(),
+  created_by text
+);
+
+-- Справочник операций для работы (для экрана оператора) + лог кто добавил
+create table if not exists public.work_operations (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz default now(),
+  created_by text
+);
+
+alter table public.downtime_reasons enable row level security;
+alter table public.work_operations enable row level security;
+
+create policy "Allow all for downtime_reasons" on public.downtime_reasons
+  for all using (true) with check (true);
+
+create policy "Allow all for work_operations" on public.work_operations
+  for all using (true) with check (true);
+```
+
+После успешного выполнения обнови страницу «Поля» — блок справочников должен загрузиться без ошибки.

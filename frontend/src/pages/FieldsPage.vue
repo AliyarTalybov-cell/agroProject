@@ -1,8 +1,26 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuth } from '@/stores/auth'
+import {
+  isSupabaseConfigured,
+  loadDowntimeReasons,
+  addDowntimeReason,
+  loadWorkOperations,
+  addWorkOperation,
+  type DowntimeReasonRow,
+  type WorkOperationRow,
+  type DowntimeCategory,
+} from '@/lib/reasonsAndOperations'
 
 type CropKey = 'all' | 'wheat' | 'corn' | 'soy' | 'sunflower'
+
+const CATEGORY_LABELS: Record<DowntimeCategory, string> = {
+  breakdown: 'Поломка',
+  rain: 'Дождь / погода',
+  fuel: 'Нет топлива',
+  waiting: 'Ожидание задания',
+}
 
 type Field = {
   id: string
@@ -172,6 +190,74 @@ const polygonDefs: Array<{ id: string; d: string }> = [
 ]
 
 const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f.id)))
+
+// Справочники: причины простоя и операции (из БД)
+const auth = useAuth()
+const downtimeReasons = ref<DowntimeReasonRow[]>([])
+const workOperations = ref<WorkOperationRow[]>([])
+const refsLoading = ref(false)
+const newReasonLabel = ref('')
+const newReasonDesc = ref('')
+const newReasonCategory = ref<DowntimeCategory>('breakdown')
+const newOperationName = ref('')
+const refsError = ref<string | null>(null)
+
+function refsErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') return (e as { message: string }).message
+  const s = String(e)
+  if (s === '[object Object]') return 'Произошла ошибка при обращении к базе данных.'
+  return s
+}
+
+async function loadRefs() {
+  if (!isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    downtimeReasons.value = await loadDowntimeReasons()
+    workOperations.value = await loadWorkOperations()
+  } catch (e) {
+    refsError.value = refsErrorMessage(e)
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function addReason() {
+  const label = newReasonLabel.value.trim()
+  if (!label) return
+  refsError.value = null
+  try {
+    const createdBy = auth.user.value?.email ?? null
+    const row = await addDowntimeReason(label, newReasonDesc.value.trim(), newReasonCategory.value, createdBy)
+    downtimeReasons.value = [...downtimeReasons.value, row]
+    newReasonLabel.value = ''
+    newReasonDesc.value = ''
+  } catch (e) {
+    refsError.value = refsErrorMessage(e)
+  }
+}
+
+async function addOperation() {
+  const name = newOperationName.value.trim()
+  if (!name) return
+  refsError.value = null
+  try {
+    const createdBy = auth.user.value?.email ?? null
+    const row = await addWorkOperation(name, createdBy)
+    workOperations.value = [...workOperations.value, row]
+    newOperationName.value = ''
+  } catch (e) {
+    refsError.value = refsErrorMessage(e)
+  }
+}
+
+function formatRefDate(iso: string) {
+  return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+onMounted(loadRefs)
 </script>
 
 <template>
@@ -390,6 +476,80 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
             </div>
           </template>
         </aside>
+      </div>
+    </div>
+
+    <div v-if="isSupabaseConfigured()" class="refs-section page-enter-item">
+      <div class="refs-card card">
+        <h2 class="refs-title">Справочники для экрана оператора</h2>
+        <p class="refs-desc">Причины простоя и операции подставляются на экране «Экран оператора» при нажатии «Начать простой» и «Начать операцию». Кто добавил — записывается в базу.</p>
+        <div v-if="refsError" class="refs-error">{{ refsError }}</div>
+
+        <div class="refs-block">
+          <h3 class="refs-block-title">Причины простоя</h3>
+          <div class="refs-add-row">
+            <input v-model="newReasonLabel" type="text" placeholder="Название (например: Поломка гидравлики)" class="refs-input" />
+            <input v-model="newReasonDesc" type="text" placeholder="Описание (необязательно)" class="refs-input refs-input--wide" />
+            <select v-model="newReasonCategory" class="refs-select">
+              <option v-for="(label, key) in CATEGORY_LABELS" :key="key" :value="key">{{ label }}</option>
+            </select>
+            <button type="button" class="refs-btn" :disabled="refsLoading || !newReasonLabel.trim()" @click="addReason">Добавить</button>
+          </div>
+          <div class="refs-table-wrap">
+            <table class="refs-table">
+              <thead>
+                <tr>
+                  <th>Название</th>
+                  <th>Описание</th>
+                  <th>Категория</th>
+                  <th>Кто добавил</th>
+                  <th>Когда</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in downtimeReasons" :key="r.id">
+                  <td>{{ r.label }}</td>
+                  <td class="refs-cell-muted">{{ r.description || '—' }}</td>
+                  <td>{{ CATEGORY_LABELS[r.category] }}</td>
+                  <td class="refs-cell-muted">{{ r.created_by || '—' }}</td>
+                  <td class="refs-cell-muted">{{ formatRefDate(r.created_at) }}</td>
+                </tr>
+                <tr v-if="!downtimeReasons.length && !refsLoading">
+                  <td colspan="5" class="refs-empty">Пока нет записей. Добавьте причину выше.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="refs-block">
+          <h3 class="refs-block-title">Операции для работы</h3>
+          <div class="refs-add-row">
+            <input v-model="newOperationName" type="text" placeholder="Название (например: Пахота, Посев)" class="refs-input refs-input--wide" />
+            <button type="button" class="refs-btn" :disabled="refsLoading || !newOperationName.trim()" @click="addOperation">Добавить</button>
+          </div>
+          <div class="refs-table-wrap">
+            <table class="refs-table">
+              <thead>
+                <tr>
+                  <th>Название</th>
+                  <th>Кто добавил</th>
+                  <th>Когда</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="op in workOperations" :key="op.id">
+                  <td>{{ op.name }}</td>
+                  <td class="refs-cell-muted">{{ op.created_by || '—' }}</td>
+                  <td class="refs-cell-muted">{{ formatRefDate(op.created_at) }}</td>
+                </tr>
+                <tr v-if="!workOperations.length && !refsLoading">
+                  <td colspan="3" class="refs-empty">Пока нет записей. Добавьте операцию выше.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -801,6 +961,110 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
 .field-polygon.is-selected-group {
   opacity: 1;
   stroke-width: 2;
+}
+
+.refs-section {
+  margin-top: var(--space-xl);
+}
+.refs-card {
+  padding: var(--space-lg);
+}
+.refs-title {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.refs-desc {
+  margin: 0 0 var(--space-lg);
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+.refs-error {
+  margin-bottom: var(--space-md);
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(185, 84, 80, 0.15);
+  color: var(--danger-red);
+  font-size: 0.9rem;
+}
+.refs-block {
+  margin-bottom: var(--space-xl);
+}
+.refs-block:last-child {
+  margin-bottom: 0;
+}
+.refs-block-title {
+  margin: 0 0 var(--space-md);
+  font-size: 1rem;
+  font-weight: 600;
+}
+.refs-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+  margin-bottom: var(--space-md);
+}
+.refs-input {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  min-width: 160px;
+}
+.refs-input--wide {
+  flex: 1;
+  min-width: 200px;
+}
+.refs-select {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+}
+.refs-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent-green);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.refs-btn:hover:not(:disabled) {
+  background: var(--accent-green-hover);
+}
+.refs-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.refs-table-wrap {
+  overflow-x: auto;
+}
+.refs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.refs-table th,
+.refs-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+.refs-table th {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.refs-cell-muted {
+  color: var(--text-secondary);
+}
+.refs-empty {
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 @media (max-width: 1024px) {

@@ -1,52 +1,97 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { useAuth } from '@/stores/auth'
 
 const router = useRouter()
+const route = useRoute()
+const auth = useAuth()
 
-const operatorId = ref('AGRO-01')
-const passcode = ref('')
+const mode = ref<'login' | 'register'>('login')
+const email = ref('')
+const password = ref('')
 const error = ref<string | null>(null)
+const loading = ref(false)
 
-function submit() {
+const title = computed(() => (mode.value === 'login' ? 'Вход в систему' : 'Регистрация'))
+const submitLabel = computed(() => (mode.value === 'login' ? 'Войти' : 'Зарегистрироваться'))
+const switchPrompt = computed(() =>
+  mode.value === 'login' ? 'Нет аккаунта? Зарегистрируйтесь' : 'Уже есть аккаунт? Войдите',
+)
+
+function switchMode() {
+  mode.value = mode.value === 'login' ? 'register' : 'login'
   error.value = null
-  if (!operatorId.value.trim() || !passcode.value.trim()) {
-    error.value = 'Введите идентификатор и код доступа'
+}
+
+async function submit() {
+  error.value = null
+  const trimmedEmail = email.value.trim()
+  const trimmedPassword = password.value.trim()
+  if (!trimmedEmail || !trimmedPassword) {
+    error.value = 'Введите логин (email) и пароль'
     return
   }
-  router.push('/dashboard')
+  if (trimmedPassword.length < 6) {
+    error.value = 'Пароль не менее 6 символов'
+    return
+  }
+  loading.value = true
+  try {
+    if (mode.value === 'login') {
+      await auth.login(trimmedEmail, trimmedPassword)
+    } else {
+      await auth.register(trimmedEmail, trimmedPassword)
+    }
+    const redirect = (route.query.redirect as string) || '/dashboard'
+    router.push(redirect)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg.toLowerCase().includes('email not confirmed')) {
+      error.value =
+        'Почта не подтверждена. В Supabase: Authentication → Users → найдите себя → Confirm. Либо Authentication → Providers → Email → выключите «Confirm email», чтобы больше не требовать подтверждение.'
+    } else {
+      error.value = msg || 'Ошибка входа'
+    }
+  } finally {
+    loading.value = false
+  }
 }
 </script>
 
 <template>
   <div class="login-layout">
     <div class="login-card card">
-      <h1 class="page-title">Вход в систему</h1>
-      <div style="display: grid; gap: 10px">
-        <label style="display: grid; gap: 6px">
-          <span style="color: var(--muted); font-size: 13px">Идентификатор оператора</span>
-          <input v-model="operatorId" type="text" style="padding: 10px; border: 1px solid var(--border); border-radius: 10px" />
-        </label>
-        <label style="display: grid; gap: 6px">
-          <span style="color: var(--muted); font-size: 13px">Код доступа</span>
+      <h1 class="page-title">{{ title }}</h1>
+      <form class="login-form" @submit.prevent="submit">
+        <label class="login-field">
+          <span class="login-label">Логин (email)</span>
           <input
-            v-model="passcode"
-            type="password"
-            placeholder="Введите код"
-            style="padding: 10px; border: 1px solid var(--border); border-radius: 10px"
+            v-model="email"
+            type="email"
+            autocomplete="email"
+            placeholder="example@mail.ru"
+            class="login-input"
           />
         </label>
-        <div v-if="error" style="color: #9a3b3b; font-size: 13px">
-          {{ error }}
-        </div>
-        <button
-          type="button"
-          @click="submit"
-          style="padding: 10px 12px; background: var(--brand); color: white; border: 0; border-radius: 10px; cursor: pointer"
-        >
-          Войти
+        <label class="login-field">
+          <span class="login-label">Пароль</span>
+          <input
+            v-model="password"
+            type="password"
+            autocomplete="password"
+            placeholder="Не менее 6 символов"
+            class="login-input"
+          />
+        </label>
+        <div v-if="error" class="login-error">{{ error }}</div>
+        <button type="submit" class="login-submit" :disabled="loading">
+          {{ loading ? 'Проверка...' : submitLabel }}
         </button>
-      </div>
+      </form>
+      <button type="button" class="login-switch" @click="switchMode">
+        {{ switchPrompt }}
+      </button>
     </div>
   </div>
 </template>
@@ -63,7 +108,67 @@ function submit() {
   width: 100%;
 }
 .login-card .page-title {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+}
+.login-form {
+  display: grid;
+  gap: 14px;
+}
+.login-field {
+  display: grid;
+  gap: 6px;
+}
+.login-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+.login-input {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  font-size: 1rem;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+}
+.login-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+.login-error {
+  color: var(--danger-red);
+  font-size: 0.9rem;
+}
+.login-submit {
+  padding: 12px 16px;
+  background: var(--accent-green);
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.login-submit:hover:not(:disabled) {
+  background: var(--accent-green-hover);
+}
+.login-submit:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.login-switch {
+  margin-top: 20px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-green);
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.login-switch:hover {
+  color: var(--accent-green-hover);
 }
 @media (max-width: 480px) {
   .login-layout {
@@ -71,4 +176,3 @@ function submit() {
   }
 }
 </style>
-

@@ -37,3 +37,30 @@ create policy "Allow all for downtimes" on public.downtimes
 
 create policy "Allow all for operations" on public.operations
   for all using (true) with check (true);
+
+-- Справочник причин простоя (для экрана оператора) + лог кто добавил
+create table if not exists public.downtime_reasons (
+  id uuid primary key default gen_random_uuid(),
+  label text not null,
+  description text,
+  category text not null check (category in ('breakdown', 'rain', 'fuel', 'waiting')),
+  created_at timestamptz default now(),
+  created_by text
+);
+
+-- Справочник операций для работы (для экрана оператора) + лог кто добавил
+create table if not exists public.work_operations (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz default now(),
+  created_by text
+);
+
+alter table public.downtime_reasons enable row level security;
+alter table public.work_operations enable row level security;
+
+create policy "Allow all for downtime_reasons" on public.downtime_reasons
+  for all using (true) with check (true);
+
+create policy "Allow all for work_operations" on public.work_operations
+  for all using (true) with check (true);
