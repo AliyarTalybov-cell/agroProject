@@ -6,8 +6,10 @@ import {
   isSupabaseConfigured,
   loadDowntimeReasons,
   addDowntimeReason,
+  deleteDowntimeReason,
   loadWorkOperations,
   addWorkOperation,
+  deleteWorkOperation,
   type DowntimeReasonRow,
   type WorkOperationRow,
   type DowntimeCategory,
@@ -248,6 +250,26 @@ async function addOperation() {
     const row = await addWorkOperation(name, createdBy)
     workOperations.value = [...workOperations.value, row]
     newOperationName.value = ''
+  } catch (e) {
+    refsError.value = refsErrorMessage(e)
+  }
+}
+
+async function deleteReason(id: string) {
+  refsError.value = null
+  try {
+    await deleteDowntimeReason(id)
+    downtimeReasons.value = downtimeReasons.value.filter((r) => r.id !== id)
+  } catch (e) {
+    refsError.value = refsErrorMessage(e)
+  }
+}
+
+async function deleteOperation(id: string) {
+  refsError.value = null
+  try {
+    await deleteWorkOperation(id)
+    workOperations.value = workOperations.value.filter((op) => op.id !== id)
   } catch (e) {
     refsError.value = refsErrorMessage(e)
   }
@@ -504,6 +526,7 @@ onMounted(loadRefs)
                   <th>Категория</th>
                   <th>Кто добавил</th>
                   <th>Когда</th>
+                  <th class="refs-th-actions">Действия</th>
                 </tr>
               </thead>
               <tbody>
@@ -513,9 +536,12 @@ onMounted(loadRefs)
                   <td>{{ CATEGORY_LABELS[r.category] }}</td>
                   <td class="refs-cell-muted">{{ r.created_by || '—' }}</td>
                   <td class="refs-cell-muted">{{ formatRefDate(r.created_at) }}</td>
+                  <td class="refs-cell-actions">
+                    <button type="button" class="refs-btn refs-btn--danger" :disabled="refsLoading" @click="deleteReason(r.id)">Удалить</button>
+                  </td>
                 </tr>
                 <tr v-if="!downtimeReasons.length && !refsLoading">
-                  <td colspan="5" class="refs-empty">Пока нет записей. Добавьте причину выше.</td>
+                  <td colspan="6" class="refs-empty">Пока нет записей. Добавьте причину выше.</td>
                 </tr>
               </tbody>
             </table>
@@ -535,6 +561,7 @@ onMounted(loadRefs)
                   <th>Название</th>
                   <th>Кто добавил</th>
                   <th>Когда</th>
+                  <th class="refs-th-actions">Действия</th>
                 </tr>
               </thead>
               <tbody>
@@ -542,9 +569,12 @@ onMounted(loadRefs)
                   <td>{{ op.name }}</td>
                   <td class="refs-cell-muted">{{ op.created_by || '—' }}</td>
                   <td class="refs-cell-muted">{{ formatRefDate(op.created_at) }}</td>
+                  <td class="refs-cell-actions">
+                    <button type="button" class="refs-btn refs-btn--danger" :disabled="refsLoading" @click="deleteOperation(op.id)">Удалить</button>
+                  </td>
                 </tr>
                 <tr v-if="!workOperations.length && !refsLoading">
-                  <td colspan="3" class="refs-empty">Пока нет записей. Добавьте операцию выше.</td>
+                  <td colspan="4" class="refs-empty">Пока нет записей. Добавьте операцию выше.</td>
                 </tr>
               </tbody>
             </table>
@@ -1040,6 +1070,20 @@ onMounted(loadRefs)
 .refs-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+.refs-btn--danger {
+  background: #c0392b;
+  color: #fff;
+}
+.refs-btn--danger:hover:not(:disabled) {
+  background: #a93226;
+}
+.refs-th-actions {
+  width: 100px;
+  text-align: right;
+}
+.refs-cell-actions {
+  text-align: right;
 }
 .refs-table-wrap {
   overflow-x: auto;

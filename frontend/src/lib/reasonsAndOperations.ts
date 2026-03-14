@@ -44,6 +44,12 @@ export async function addDowntimeReason(
   return data as DowntimeReasonRow
 }
 
+export async function deleteDowntimeReason(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from('downtime_reasons').delete().eq('id', id)
+  if (error) throw error
+}
+
 export async function loadWorkOperations(): Promise<WorkOperationRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
@@ -63,6 +69,12 @@ export async function addWorkOperation(name: string, createdBy: string | null): 
     .single()
   if (error) throw error
   return data as WorkOperationRow
+}
+
+export async function deleteWorkOperation(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from('work_operations').delete().eq('id', id)
+  if (error) throw error
 }
 
 export { isSupabaseConfigured }

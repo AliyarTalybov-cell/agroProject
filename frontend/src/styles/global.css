@@ -1,4 +1,4 @@
-/* ——— Светлая тема по умолчанию (design-4bb98c85: AgriDash) ——— */
+/* ——— Светлая тема по умолчанию (design-4bb98c85: Агро-контроль) ——— */
 :root {
   color-scheme: light;
   --agri-bg: #f0f4f1;
@@ -525,7 +525,7 @@ a {
   margin-bottom: var(--space-xl);
 }
 
-/* ——— Погода: как в design-4bb98c85 (AgriDash) ——— */
+/* ——— Погода: как в design-4bb98c85 (Агро-контроль) ——— */
 .weather-hero {
   position: relative;
   background: var(--weather-hero-bg);
