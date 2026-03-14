@@ -540,7 +540,7 @@ function statusClass(s: Status) {
         <div class="task-modal task-modal--detail" role="dialog" aria-labelledby="task-detail-title">
           <button type="button" class="task-modal-close" aria-label="Закрыть" @click="closeTask">×</button>
           <div class="task-detail-badges">
-            <span class="task-pill task-pill-status" :class="statusClass(selectedTask.status)">{{ statusColumns.find((c) => c.key === selectedTask.status)?.title }}</span>
+            <span class="task-pill task-pill-status" :class="selectedTask ? statusClass(selectedTask.status) : ''">{{ statusColumns.find((c) => c.key === selectedTask?.status)?.title }}</span>
             <span class="task-pill" :class="priorityClass(selectedTask.priority)">
               {{ selectedTask.priority === 'high' ? 'Высокий приоритет' : selectedTask.priority === 'medium' ? 'Средний' : 'Низкий' }}
             </span>
@@ -560,7 +560,7 @@ function statusClass(s: Status) {
                 <select
                   :value="selectedTask.status"
                   class="task-detail-status-select"
-                  @change="(e) => updateTaskStatus(selectedTask.id, (e.target as HTMLSelectElement).value as Status)"
+                  @change="(e) => selectedTask && updateTaskStatus(selectedTask.id, (e.target as HTMLSelectElement).value as Status)"
                 >
                   <option v-for="col in statusColumns" :key="col.key" :value="col.key">{{ col.title }}</option>
                 </select>
