@@ -60,6 +60,7 @@ type Field = {
   name: string
   area: number
   cadastralNumber: string
+  address: string
   locationDescription: string
   landType: string
   sowingYear: number
@@ -94,6 +95,7 @@ function fieldRowToField(row: FieldRow, profileMap: Map<string, ProfileRow>, cro
     name: row.name,
     area: Number(row.area),
     cadastralNumber: row.cadastral_number ?? '',
+    address: (row as { address?: string | null }).address ?? '',
     locationDescription: row.location_description ?? '',
     landType: row.land_type,
     sowingYear: row.sowing_year ?? 0,
@@ -131,11 +133,11 @@ async function loadFieldsData() {
 }
 
 const DEMO_FIELDS: Field[] = [
-  { id: 'field-12', number: 12, name: 'Пшеница', area: 42.5, cadastralNumber: '50:20:0010321:14', locationDescription: 'Северный участок, от дороги до лесополосы', landType: 'Пашня', sowingYear: 2024, responsibleId: null, responsiblePerson: 'Иванов А.С.', cropKey: 'wheat', cropName: 'Пшеница', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
-  { id: 'field-2', number: 2, name: 'Участок "Северный"', area: 120, cadastralNumber: '', locationDescription: 'Западная граница хозяйства', landType: 'Пашня', sowingYear: 2024, responsibleId: null, responsiblePerson: 'Петрова М.В.', cropKey: 'sunflower', cropName: 'Подсолнечник', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
-  { id: 'field-3', number: 3, name: 'Заречное 1', area: 35.8, cadastralNumber: '50:20:0010321:88', locationDescription: 'За рекой, южный склон', landType: 'Пашня', sowingYear: 2024, responsibleId: null, responsiblePerson: 'Сидоров В.И.', cropKey: 'soy', cropName: 'Соя', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
-  { id: 'field-4', number: 4, name: 'Поле 4 (Пары)', area: 80, cadastralNumber: '50:20:0010321:05', locationDescription: 'Центральный массив', landType: 'Залежь', sowingYear: 0, responsibleId: null, responsiblePerson: '', cropKey: 'none', cropName: 'Нет культуры', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
-  { id: 'field-5', number: 5, name: 'Луг 1', area: 15, cadastralNumber: '50:20:0010321:99', locationDescription: 'Пойменный луг', landType: 'Сенокос', sowingYear: 0, responsibleId: null, responsiblePerson: '', cropKey: 'meadow', cropName: 'Многолетние травы', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
+  { id: 'field-12', number: 12, name: 'Пшеница', area: 42.5, cadastralNumber: '50:20:0010321:14', address: '', locationDescription: 'Северный участок, от дороги до лесополосы', landType: 'Пашня', sowingYear: 2024, responsibleId: null, responsiblePerson: 'Иванов А.С.', cropKey: 'wheat', cropName: 'Пшеница', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
+  { id: 'field-2', number: 2, name: 'Участок "Северный"', area: 120, cadastralNumber: '', address: '', locationDescription: 'Западная граница хозяйства', landType: 'Пашня', sowingYear: 2024, responsibleId: null, responsiblePerson: 'Петрова М.В.', cropKey: 'sunflower', cropName: 'Подсолнечник', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
+  { id: 'field-3', number: 3, name: 'Заречное 1', area: 35.8, cadastralNumber: '50:20:0010321:88', address: '', locationDescription: 'За рекой, южный склон', landType: 'Пашня', sowingYear: 2024, responsibleId: null, responsiblePerson: 'Сидоров В.И.', cropKey: 'soy', cropName: 'Соя', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
+  { id: 'field-4', number: 4, name: 'Поле 4 (Пары)', area: 80, cadastralNumber: '50:20:0010321:05', address: '', locationDescription: 'Центральный массив', landType: 'Залежь', sowingYear: 0, responsibleId: null, responsiblePerson: '', cropKey: 'none', cropName: 'Нет культуры', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
+  { id: 'field-5', number: 5, name: 'Луг 1', area: 15, cadastralNumber: '50:20:0010321:99', address: '', locationDescription: 'Пойменный луг', landType: 'Сенокос', sowingYear: 0, responsibleId: null, responsiblePerson: '', cropKey: 'meadow', cropName: 'Многолетние травы', schemeFileUrl: '', stage: '—', readinessPercent: 0, forecastYield: '—', harvestDate: '—', imageUrl: '', soilType: '—', moisture: '—', lastOperation: '—' },
 ]
 
 const cropFilter = ref<CropKey>('all')
@@ -191,6 +193,10 @@ function selectField(id: string) {
   selectedFieldId.value = id
 }
 
+function goToFieldDetails(id: string) {
+  router.push({ name: 'field-details', params: { id } })
+}
+
 function toggleMultiSelect(id: string) {
   const idx = multiSelectedIds.value.indexOf(id)
   if (idx === -1) {
@@ -215,6 +221,7 @@ const editingFieldId = ref<string | null>(null)
 const deleteConfirmFieldId = ref<string | null>(null)
 const newFieldName = ref('')
 const newFieldCadastral = ref('')
+const newFieldAddress = ref('')
 const newFieldArea = ref<number | ''>('')
 const newFieldLandType = ref('Пашня')
 const newFieldCropKey = ref('wheat')
@@ -253,10 +260,20 @@ const landTypeOptions = computed(() =>
 )
 const cropOptions = computed(() => (crops.value.length > 0 ? crops.value : CROP_OPTIONS_FALLBACK))
 
-function openAddField() {
+async function openAddField() {
+  if (isSupabaseConfigured()) {
+    try {
+      const [landTypesList, cropsList] = await Promise.all([loadLandTypes(), loadCrops()])
+      landTypes.value = landTypesList
+      crops.value = cropsList
+    } catch (e) {
+      fieldFormError.value = refsErrorMessage(e)
+    }
+  }
   editingFieldId.value = null
   newFieldName.value = ''
   newFieldCadastral.value = ''
+  newFieldAddress.value = ''
   newFieldArea.value = ''
   newFieldLandType.value = landTypeOptions.value[0]?.name ?? 'Пашня'
   newFieldCropKey.value = cropOptions.value[0]?.key ?? 'wheat'
@@ -274,10 +291,20 @@ function openAddField() {
   isAddFieldOpen.value = true
 }
 
-function openEditField(f: Field) {
+async function openEditField(f: Field) {
+  if (isSupabaseConfigured()) {
+    try {
+      const [landTypesList, cropsList] = await Promise.all([loadLandTypes(), loadCrops()])
+      landTypes.value = landTypesList
+      crops.value = cropsList
+    } catch (e) {
+      fieldFormError.value = refsErrorMessage(e)
+    }
+  }
   editingFieldId.value = f.id
   newFieldName.value = f.name
   newFieldCadastral.value = f.cadastralNumber
+  newFieldAddress.value = f.address
   newFieldArea.value = f.area
   newFieldLandType.value = f.landType
   newFieldCropKey.value = f.cropKey
@@ -442,6 +469,7 @@ async function addField() {
           name,
           area: Number.isNaN(area) ? 0 : area,
           cadastral_number: newFieldCadastral.value.trim() || null,
+          address: newFieldAddress.value.trim() || null,
           location_description: newFieldLocationDesc.value.trim() || null,
           land_type: newFieldLandType.value,
           sowing_year: newFieldSowingYear.value,
@@ -460,6 +488,7 @@ async function addField() {
         f.name = name
         f.area = Number.isNaN(area) ? 0 : area
         f.cadastralNumber = newFieldCadastral.value.trim()
+        f.address = newFieldAddress.value.trim()
         f.locationDescription = newFieldLocationDesc.value.trim()
         f.landType = newFieldLandType.value
         f.sowingYear = newFieldSowingYear.value
@@ -482,6 +511,7 @@ async function addField() {
         name,
         area: Number.isNaN(area) ? 0 : area,
         cadastral_number: newFieldCadastral.value.trim() || null,
+        address: newFieldAddress.value.trim() || null,
         location_description: newFieldLocationDesc.value.trim() || null,
         land_type: newFieldLandType.value,
         sowing_year: newFieldSowingYear.value,
@@ -506,6 +536,7 @@ async function addField() {
         name,
         area: Number.isNaN(area) ? 0 : area,
         cadastralNumber: newFieldCadastral.value.trim(),
+        address: newFieldAddress.value.trim(),
         locationDescription: newFieldLocationDesc.value.trim(),
         landType: newFieldLandType.value,
         sowingYear: newFieldSowingYear.value,
@@ -938,7 +969,7 @@ onMounted(async () => {
                 v-for="f in paginatedFields"
                 :key="f.id"
                 class="fields-tr"
-                @click="selectField(f.id)"
+                @click="goToFieldDetails(f.id)"
               >
                 <td class="fields-td-name">
                   <div class="fields-name-main">{{ f.name }}</div>
@@ -1341,6 +1372,17 @@ onMounted(async () => {
                   />
                   <span class="modal-input-suffix">га</span>
                 </div>
+              </label>
+            </div>
+            <div class="modal-form-section">
+              <label class="modal-field modal-field--full">
+                <span class="modal-label">Адрес <span class="modal-label-opt">(опц.)</span></span>
+                <input
+                  v-model="newFieldAddress"
+                  type="text"
+                  class="modal-input"
+                  placeholder="Например: Московская обл., Раменский р-н, д. Вялки"
+                />
               </label>
             </div>
             <div class="modal-form-section modal-form-section--grid modal-form-section--grid-4">

@@ -159,6 +159,7 @@ create table if not exists public.fields (
   name text not null,
   area numeric not null check (area >= 0),
   cadastral_number text,
+  address text,
   location_description text,
   land_type text not null,
   sowing_year int check (sowing_year is null or (sowing_year >= 2000 and sowing_year <= 2100)),
@@ -169,6 +170,19 @@ create table if not exists public.fields (
   updated_at timestamptz default now()
 );
 
+-- Фото и медиафайлы полей (состояние посевов, спутниковые снимки)
+create table if not exists public.field_photos (
+  id uuid primary key default gen_random_uuid(),
+  field_id uuid not null references public.fields(id) on delete cascade,
+  file_url text not null,
+  title text,
+  description text,
+  created_at timestamptz default now()
+);
+
+alter table public.field_photos enable row level security;
+create policy "Allow all for field_photos" on public.field_photos for all using (true) with check (true);
+
 -- Файлы схем храним в Supabase Storage. В Dashboard: Storage → New bucket → имя "field-schemes", Public = true.
 -- Тогда загрузка через supabase.storage.from('field-schemes').upload(path, file) и публичный URL для scheme_file_url.
 
@@ -177,8 +191,9 @@ alter table public.fields enable row level security;
 create policy "Allow all for fields" on public.fields
   for all using (true) with check (true);
 
--- Если таблица fields уже была создана без scheme_file_url, выполни:
+-- Если таблица fields уже была создана без scheme_file_url / address, выполни:
 -- alter table public.fields add column if not exists scheme_file_url text;
+-- alter table public.fields add column if not exists address text;
 
 -- Если таблица fields уже была с CHECK на land_type/crop_key, выполни (снять ограничения):
 -- alter table public.fields drop constraint if exists fields_land_type_check;
