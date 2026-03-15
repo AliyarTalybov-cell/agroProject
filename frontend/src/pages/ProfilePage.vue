@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useAuth } from '@/stores/auth'
 import type { ProfileRow } from '@/lib/tasksSupabase'
-import { isSupabaseConfigured, loadProfileById, upsertMyProfile } from '@/lib/tasksSupabase'
+import { isSupabaseConfigured, ensureProfileRow, loadProfileById, upsertMyProfile } from '@/lib/tasksSupabase'
+
+const PROFILE_STORAGE_KEY = 'agro:profile'
 
 const POSITIONS = [
   'Главный агроном',
@@ -78,6 +80,56 @@ function applyProfileToForm(p: ProfileRow) {
   profileForm.value.additionalInfo = p.additional_info ?? ''
 }
 
+function applyFormFromLocalStorage(userId: string) {
+  try {
+    const raw = localStorage.getItem(PROFILE_STORAGE_KEY)
+    if (!raw) return false
+    const data = JSON.parse(raw) as { userId?: string; firstName?: string; lastName?: string; patronymic?: string; email?: string; phone?: string; position?: string; additionalInfo?: string }
+    if (data.userId !== userId) return false
+    if (data.firstName != null) profileForm.value.firstName = String(data.firstName)
+    if (data.lastName != null) profileForm.value.lastName = String(data.lastName)
+    if (data.patronymic != null) profileForm.value.patronymic = String(data.patronymic)
+    if (data.email != null) profileForm.value.email = String(data.email)
+    if (data.phone != null) profileForm.value.phone = String(data.phone)
+    if (data.position != null) profileForm.value.position = String(data.position)
+    if (data.additionalInfo != null) profileForm.value.additionalInfo = String(data.additionalInfo)
+    const fullName = [profileForm.value.firstName, profileForm.value.lastName, profileForm.value.patronymic].filter(Boolean).join(' ')
+    myProfile.value = { display_name: fullName || null, role: auth.user.value?.user_metadata?.role ?? null }
+    return true
+  } catch {
+    return false
+  }
+}
+
+function saveFormToLocalStorage(userId: string) {
+  try {
+    localStorage.setItem(
+      PROFILE_STORAGE_KEY,
+      JSON.stringify({
+        userId,
+        firstName: profileForm.value.firstName,
+        lastName: profileForm.value.lastName,
+        patronymic: profileForm.value.patronymic,
+        email: profileForm.value.email,
+        phone: profileForm.value.phone,
+        position: profileForm.value.position,
+        additionalInfo: profileForm.value.additionalInfo,
+      }),
+    )
+  } catch {
+    /* ignore */
+  }
+}
+
+function profileHasData(p: ProfileRow): boolean {
+  return Boolean(
+    (p.display_name && p.display_name.trim()) ||
+    (p.phone && p.phone.trim()) ||
+    (p.position && p.position.trim()) ||
+    (p.additional_info && p.additional_info.trim()),
+  )
+}
+
 async function loadProfile() {
   const user = auth.user.value
   if (!user) return
@@ -88,14 +140,58 @@ async function loadProfile() {
   }
   if (isSupabaseConfigured()) {
     try {
-      const p = await loadProfileById(user.id)
+      let p = await loadProfileById(user.id)
+      if (!p) {
+        const fullName = (user.user_metadata?.full_name as string) || ''
+        const role = (user.user_metadata?.role as string) || null
+        await ensureProfileRow(user.id, user.email ?? '', fullName.trim() || null, role)
+        p = await loadProfileById(user.id)
+      }
       if (p) {
-        applyProfileToForm(p)
-        auth.profileCache.value = p
+        const cacheWithData = cache && cache.id === user.id && profileHasData(cache)
+        const dbHasData = profileHasData(p)
+        if (dbHasData) {
+          applyProfileToForm(p)
+          auth.profileCache.value = p
+          saveFormToLocalStorage(user.id)
+        } else if (cacheWithData) {
+          /* БД вернула пустые поля (например старая схема) — оставляем данные из кэша */
+        } else if (applyFormFromLocalStorage(user.id)) {
+          const fromStorage: ProfileRow = {
+            id: user.id,
+            email: profileForm.value.email,
+            display_name: [profileForm.value.firstName, profileForm.value.lastName, profileForm.value.patronymic].filter(Boolean).join(' ') || null,
+            role: user.user_metadata?.role ?? null,
+            phone: profileForm.value.phone || null,
+            position: profileForm.value.position || null,
+            additional_info: profileForm.value.additionalInfo || null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }
+          auth.profileCache.value = fromStorage
+        } else {
+          applyProfileToForm(p)
+          auth.profileCache.value = p
+        }
         return
       }
     } catch {
-      /* при ошибке сети/БД оставляем данные из кэша или user_metadata */
+      /* при ошибке сети/БД пробуем localStorage, затем user_metadata */
+    }
+    if (applyFormFromLocalStorage(user.id)) {
+      const fromStorage: ProfileRow = {
+        id: user.id,
+        email: profileForm.value.email,
+        display_name: [profileForm.value.firstName, profileForm.value.lastName, profileForm.value.patronymic].filter(Boolean).join(' ') || null,
+        role: user.user_metadata?.role ?? null,
+        phone: profileForm.value.phone || null,
+        position: profileForm.value.position || null,
+        additional_info: profileForm.value.additionalInfo || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+      auth.profileCache.value = fromStorage
+      return
     }
     if (!cache || cache.id !== user.id) {
       const fullName = (user.user_metadata?.full_name as string) || ''
@@ -109,6 +205,7 @@ async function loadProfile() {
     }
     return
   }
+  if (applyFormFromLocalStorage(user.id)) return
   if (!cache || cache.id !== user.id) {
     const fullName = (user.user_metadata?.full_name as string) || ''
     const parts = fullName.trim().split(/\s+/)
@@ -123,6 +220,13 @@ async function loadProfile() {
 
 onMounted(loadProfile)
 watch(() => auth.user.value?.id, (id) => { if (id) loadProfile() })
+
+onBeforeUnmount(() => {
+  const user = auth.user.value
+  if (user && (profileForm.value.firstName || profileForm.value.lastName || profileForm.value.phone || profileForm.value.position || profileForm.value.additionalInfo)) {
+    saveFormToLocalStorage(user.id)
+  }
+})
 
 const saving = ref(false)
 const saveMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -173,9 +277,22 @@ async function confirmSaveProfile() {
           additionalInfo: profileForm.value.additionalInfo || null,
         },
       )
-      await loadProfile()
+      const now = new Date().toISOString()
+      const savedRow: ProfileRow = {
+        id: auth.user.value.id,
+        email: profileForm.value.email,
+        display_name: fullName || null,
+        role: auth.user.value.user_metadata?.role ?? null,
+        phone: profileForm.value.phone?.trim() || null,
+        position: profileForm.value.position?.trim() || null,
+        additional_info: profileForm.value.additionalInfo?.trim() || null,
+        created_at: now,
+        updated_at: now,
+      }
+      auth.profileCache.value = savedRow
     }
     myProfile.value = myProfile.value ? { ...myProfile.value, display_name: fullName || null } : { display_name: fullName || null, role: null }
+    saveFormToLocalStorage(auth.user.value.id)
     setSaveMessage('success', 'Изменения успешно сохранены.')
   } catch (err) {
     const text = err instanceof Error ? err.message : 'Не удалось сохранить изменения.'
@@ -223,6 +340,7 @@ async function changePassword() {
 </script>
 
 <template>
+  <div class="profile-page-wrapper">
   <section class="profile-page page-enter-item">
     <header class="profile-header">
       <h1 class="profile-page-title">Настройки профиля</h1>
@@ -439,9 +557,15 @@ async function changePassword() {
       </div>
     </div>
   </div>
+  </div>
 </template>
 
 <style scoped>
+.profile-page-wrapper {
+  /* Один корневой элемент для Vue Transition — иначе переходы между страницами ломаются */
+  min-height: 0;
+}
+
 .profile-page {
   padding: 0 var(--space-lg);
   padding-bottom: var(--space-xl);
