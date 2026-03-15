@@ -8,6 +8,9 @@ export type ProfileRow = {
   email: string
   display_name: string | null
   role: string | null
+  phone: string | null
+  position: string | null
+  additional_info: string | null
   created_at: string
   updated_at: string
 }
@@ -55,10 +58,21 @@ export async function loadProfiles(): Promise<ProfileRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, email, display_name, role, created_at, updated_at')
+    .select('id, email, display_name, role, phone, position, additional_info, created_at, updated_at')
     .order('email')
   if (error) throw error
   return (data ?? []) as ProfileRow[]
+}
+
+export async function loadProfileById(userId: string): Promise<ProfileRow | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, email, display_name, role, phone, position, additional_info, created_at, updated_at')
+    .eq('id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return data as ProfileRow | null
 }
 
 export async function upsertMyProfile(
@@ -66,6 +80,7 @@ export async function upsertMyProfile(
   email: string,
   displayName: string | null,
   role: string | null,
+  opts?: { phone?: string | null; position?: string | null; additionalInfo?: string | null },
 ): Promise<void> {
   if (!supabase) return
   const name = displayName?.trim() || null
@@ -75,6 +90,9 @@ export async function upsertMyProfile(
       email,
       display_name: name,
       role,
+      phone: opts?.phone?.trim() || null,
+      position: opts?.position?.trim() || null,
+      additional_info: opts?.additionalInfo?.trim() || null,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'id' },

@@ -157,11 +157,13 @@ watch(mobileMenuOpen, (open) => {
             <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
           </button>
           <div class="topbar-user">
-            <div class="topbar-user-meta">
-              <span class="topbar-user-name">{{ userDisplay }}</span>
-              <button type="button" class="topbar-logout" @click="handleLogout">Выйти</button>
-            </div>
-            <div class="topbar-user-avatar">{{ userInitials }}</div>
+            <RouterLink to="/profile" class="topbar-user-link" aria-label="Настройки профиля">
+              <div class="topbar-user-avatar">{{ userInitials }}</div>
+              <div class="topbar-user-meta">
+                <span class="topbar-user-name">{{ userDisplay }}</span>
+              </div>
+            </RouterLink>
+            <button type="button" class="topbar-logout" @click="handleLogout">Выйти</button>
           </div>
         </div>
       </header>

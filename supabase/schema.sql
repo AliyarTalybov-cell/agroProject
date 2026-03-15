@@ -73,9 +73,17 @@ create table if not exists public.profiles (
   email text not null,
   display_name text,
   role text check (role in ('worker', 'manager')),
+  phone text,
+  position text,
+  additional_info text,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+
+-- Если таблица profiles уже была создана без новых полей, выполни в SQL Editor:
+-- alter table public.profiles add column if not exists phone text;
+-- alter table public.profiles add column if not exists position text;
+-- alter table public.profiles add column if not exists additional_info text;
 
 -- Задачи (исполнитель = assignee_id; руководитель видит все, работник — только свои)
 create table if not exists public.tasks (

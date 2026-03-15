@@ -10,6 +10,7 @@ import TaskManagementPage from '@/pages/TaskManagementPage.vue'
 import MechanicPage from '@/pages/MechanicPage.vue'
 import WeatherPage from '@/pages/WeatherPage.vue'
 import EquipmentPage from '@/pages/EquipmentPage.vue'
+import ProfilePage from '@/pages/ProfilePage.vue'
 import { getAuthUser } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
@@ -25,6 +26,7 @@ export const routes = [
   { path: '/task-management', name: 'task-management', component: TaskManagementPage, meta: { title: 'Задачи' } },
   { path: '/mechanic', name: 'mechanic', component: MechanicPage, meta: { title: 'Экран оператора' } },
   { path: '/reports', name: 'reports', component: ReportsPage, meta: { title: 'Аналитика' } },
+  { path: '/profile', name: 'profile', component: ProfilePage, meta: { title: 'Настройки профиля' } },
 ] as const
 
 export const router = createRouter({

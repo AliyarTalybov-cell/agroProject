@@ -222,6 +222,22 @@ a {
   min-height: 36px;
 }
 
+.topbar-user-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 8px;
+  padding: 4px 8px 4px 0;
+  margin: -4px 0 -4px -8px;
+  transition: background 0.2s;
+}
+
+.topbar-user-link:hover {
+  background: var(--row-hover-bg);
+}
+
 .topbar-user-avatar {
   width: 36px;
   height: 36px;
