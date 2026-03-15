@@ -96,6 +96,32 @@ export async function loadTasksFromSupabase(
   return (data ?? []) as TaskRow[]
 }
 
+export type LoadTasksFilterOpts = {
+  assigneeId?: string
+  status?: TaskStatus
+  limit?: number
+}
+
+/** Загрузка задач с фильтрами для поиска по номеру (бекенд). */
+export async function loadTasksFiltered(
+  onlyMine: boolean,
+  userId: string,
+  opts: LoadTasksFilterOpts = {},
+): Promise<TaskRow[]> {
+  if (!supabase) return []
+  let q = supabase
+    .from('tasks')
+    .select('id, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at')
+    .order('created_at', { ascending: false })
+  if (onlyMine) q = q.eq('assignee_id', userId)
+  if (opts.assigneeId) q = q.eq('assignee_id', opts.assigneeId)
+  if (opts.status) q = q.eq('status', opts.status)
+  const limit = Math.min(Math.max(opts.limit ?? 500, 1), 500)
+  const { data, error } = await q.limit(limit)
+  if (error) throw error
+  return (data ?? []) as TaskRow[]
+}
+
 export function tasksWithAssignees(rows: TaskRow[], profiles: ProfileRow[]): Task[] {
   const profileMap = new Map(profiles.map((p) => [p.id, p]))
   return rows.map((r) => {

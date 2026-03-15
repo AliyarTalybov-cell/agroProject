@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onActivated } from 'vue'
+import { computed, ref, watch, onMounted, onActivated } from 'vue'
+import { jsPDF } from 'jspdf'
+import html2canvas from 'html2canvas'
 import { useAuth } from '@/stores/auth'
 import {
   isSupabaseConfigured,
   loadProfiles,
   upsertMyProfile,
   loadTasksFromSupabase,
+  loadTasksFiltered,
   tasksWithAssignees,
   createTask as createTaskApi,
   updateTask as updateTaskApi,
@@ -14,7 +17,7 @@ import {
 import type { Task as TaskType, ProfileRow } from '@/lib/tasksSupabase'
 
 type ViewMode = 'kanban' | 'list'
-type FilterKey = 'all' | 'mine' | 'overdue' | 'by_field' | 'by_employee'
+type FilterKey = 'all' | 'mine'
 type Priority = 'high' | 'medium' | 'low'
 type Status = 'todo' | 'in_progress' | 'review' | 'done'
 
@@ -28,9 +31,24 @@ type Task = TaskType
 
 const auth = useAuth()
 const viewMode = ref<ViewMode>('kanban')
+function dateToYyyyMmDd(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+const today = dateToYyyyMmDd(new Date())
+const weekAgo = dateToYyyyMmDd(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+
 const activeFilter = ref<FilterKey>('all')
 const filterEmployeeId = ref<string>('')
 const filterStatus = ref<Status | ''>('')
+const filterDateFrom = ref<string>(weekAgo)
+const filterDateTo = ref<string>(today)
+const searchTaskNumber = ref('')
+let searchByNumberTimeout: ReturnType<typeof setTimeout> | null = null
+const currentPage = ref(1)
+const pageSize = ref(10)
 const showCreateModal = ref(false)
 const editingTaskId = ref<string | null>(null)
 const selectedTaskId = ref<string | null>(null)
@@ -107,9 +125,6 @@ const workTypes = ['Опрыскивание', 'Осмотр', 'Техника',
 const filters: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'Все задачи' },
   { key: 'mine', label: 'На мне' },
-  { key: 'overdue', label: 'Просроченные' },
-  { key: 'by_field', label: 'По полям' },
-  { key: 'by_employee', label: 'По сотрудникам' },
 ]
 
 const statusColumns: { key: Status; title: string }[] = [
@@ -132,11 +147,17 @@ const form = ref({
   description: '',
 })
 
+function parseDueDate(dueDate: string): Date | null {
+  if (!dueDate || dueDate === '—') return null
+  const m = dueDate.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/)
+  if (!m) return null
+  const [, day, month, year] = m
+  const d = new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10))
+  return isNaN(d.getTime()) ? null : d
+}
+
 const filteredTasks = computed(() => {
   let list = tasks.value
-  if (activeFilter.value === 'overdue') {
-    list = list.filter((t) => t.description === 'Просрочено')
-  }
   if (activeFilter.value === 'mine' && auth.user.value) {
     const myId = auth.user.value.id
     list = list.filter((t) => (t.assignee as { id?: string }).id === myId)
@@ -147,7 +168,30 @@ const filteredTasks = computed(() => {
   if (filterStatus.value) {
     list = list.filter((t) => t.status === filterStatus.value)
   }
+  const from = filterDateFrom.value ? new Date(filterDateFrom.value) : null
+  const to = filterDateTo.value ? new Date(filterDateTo.value) : null
+  if (from || to) {
+    list = list.filter((t) => {
+      const d = parseDueDate(t.dueDate)
+      if (!d) return true
+      if (from && d < new Date(from.getFullYear(), from.getMonth(), from.getDate())) return false
+      if (to) {
+        const toEnd = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1)
+        if (d >= toEnd) return false
+      }
+      return true
+    })
+  }
   return list
+})
+
+const totalFiltered = computed(() => filteredTasks.value.length)
+const totalPages = computed(() => Math.max(1, Math.ceil(totalFiltered.value / pageSize.value)))
+
+const paginatedTasks = computed(() => {
+  const list = filteredTasks.value
+  const start = (currentPage.value - 1) * pageSize.value
+  return list.slice(start, start + pageSize.value)
 })
 
 const tasksByStatus = computed(() => {
@@ -157,8 +201,108 @@ const tasksByStatus = computed(() => {
     review: [],
     done: [],
   }
-  filteredTasks.value.forEach((t) => byStatus[t.status].push(t))
+  paginatedTasks.value.forEach((t) => byStatus[t.status].push(t))
   return byStatus
+})
+
+const taskNumbers = computed(() => {
+  const list = paginatedTasks.value
+  const start = (currentPage.value - 1) * pageSize.value
+  const map: Record<string, number> = {}
+  list.forEach((t, i) => { map[t.id] = start + i + 1 })
+  return map
+})
+function getTaskNumber(taskId: string): number {
+  const numStr = searchTaskNumber.value.trim()
+  const n = parseInt(numStr, 10)
+  if (numStr && !isNaN(n) && n >= 1 && filteredTasks.value.length === 1 && filteredTasks.value[0].id === taskId) {
+    return n
+  }
+  return taskNumbers.value[taskId] ?? 0
+}
+
+watch(
+  () => [filterDateFrom.value, filterDateTo.value, filterEmployeeId.value, filterStatus.value, activeFilter.value],
+  () => {
+    currentPage.value = 1
+    const numStr = searchTaskNumber.value.trim()
+    if (numStr && parseInt(numStr, 10) >= 1) searchTaskByNumber()
+  },
+)
+watch(searchTaskNumber, () => { currentPage.value = 1 })
+watch(totalPages, (pages) => {
+  if (currentPage.value > pages) currentPage.value = Math.max(1, pages)
+})
+
+async function searchTaskByNumber() {
+  const numSearch = searchTaskNumber.value.trim()
+  if (!numSearch || !auth.user.value || !isSupabaseConfigured()) return
+  const num = parseInt(numSearch, 10)
+  if (isNaN(num) || num < 1) {
+    tasks.value = []
+    return
+  }
+  tasksLoading.value = true
+  try {
+    const profileList = await loadProfiles()
+    const onlyMine = auth.userRole.value === 'worker'
+    const rows = await loadTasksFiltered(onlyMine, auth.user.value.id, {
+      assigneeId: filterEmployeeId.value || undefined,
+      status: filterStatus.value || undefined,
+      limit: 500,
+    })
+    let list = tasksWithAssignees(rows, profileList)
+    if (activeFilter.value === 'mine' && auth.user.value) {
+      const myId = auth.user.value.id
+      list = list.filter((t) => (t.assignee as { id?: string }).id === myId)
+    }
+    const from = filterDateFrom.value ? new Date(filterDateFrom.value) : null
+    const to = filterDateTo.value ? new Date(filterDateTo.value) : null
+    if (from || to) {
+      list = list.filter((t) => {
+        const d = parseDueDate(t.dueDate)
+        if (!d) return true
+        if (from && d < new Date(from.getFullYear(), from.getMonth(), from.getDate())) return false
+        if (to) {
+          const toEnd = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1)
+          if (d >= toEnd) return false
+        }
+        return true
+      })
+    }
+    const task = list[num - 1] ?? null
+    tasks.value = task ? [task] : []
+  } catch {
+    tasks.value = []
+  } finally {
+    tasksLoading.value = false
+  }
+}
+
+function onSearchTaskNumberChange() {
+  const val = searchTaskNumber.value.trim()
+  if (!val) {
+    loadData()
+    return
+  }
+  const num = parseInt(val, 10)
+  if (!isNaN(num) && num >= 1) searchTaskByNumber()
+  else tasks.value = []
+}
+
+watch(searchTaskNumber, (val) => {
+  if (searchByNumberTimeout) clearTimeout(searchByNumberTimeout)
+  const trimmed = val.trim()
+  if (!trimmed) {
+    loadData()
+    return
+  }
+  const num = parseInt(trimmed, 10)
+  if (isNaN(num) || num < 1) {
+    tasks.value = []
+    return
+  }
+  searchByNumberTimeout = setTimeout(() => searchTaskByNumber(), 400)
 })
 
 const countByStatus = (status: Status) => tasksByStatus.value[status].length
@@ -330,6 +474,113 @@ function onDrop(e: DragEvent, newStatus: Status) {
   if (taskId) updateTaskStatus(taskId, newStatus)
 }
 
+function statusTitle(s: Status): string {
+  return statusColumns.find((c) => c.key === s)?.title ?? s
+}
+function priorityLabel(p: Priority): string {
+  return { high: 'Высокий', medium: 'Средний', low: 'Низкий' }[p]
+}
+
+const CSV_SEP = '\t'
+
+function escapeCsvCell(val: string): string {
+  const s = String(val ?? '').replace(/\r?\n/g, ' ').replace(/"/g, '""')
+  return s.includes(CSV_SEP) || s.includes('"') || s.includes('\r') ? `"${s}"` : s
+}
+
+function exportToExcel() {
+  const list = filteredTasks.value
+  if (!list.length) return
+  const headers = ['№', 'Название', 'Исполнитель', 'Приоритет', 'Поле', 'Срок', 'Статус', 'Тип работы', 'Описание']
+  const rows = list.map((t, i) => [
+    String(i + 1),
+    t.title,
+    t.assignee.name,
+    priorityLabel(t.priority),
+    t.field,
+    t.dueDate,
+    statusTitle(t.status),
+    t.workType ?? '',
+    (t.description ?? '').replace(/\r?\n/g, ' '),
+  ])
+  const line = (arr: string[]) => arr.map(escapeCsvCell).join(CSV_SEP)
+  const csv = '\uFEFF' + [line(headers), ...rows.map((r) => line(r))].join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `задачи_${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function escapeHtml(s: string): string {
+  const div = document.createElement('div')
+  div.textContent = s
+  return div.innerHTML
+}
+
+async function exportToPdf() {
+  const list = filteredTasks.value
+  if (!list.length) return
+  const headers = ['№', 'Название', 'Исполнитель', 'Приоритет', 'Поле', 'Срок', 'Статус', 'Тип работы', 'Описание']
+  const rows = list.map((t, i) => [
+    String(i + 1),
+    escapeHtml(t.title),
+    escapeHtml(t.assignee.name),
+    escapeHtml(priorityLabel(t.priority)),
+    escapeHtml(t.field),
+    escapeHtml(t.dueDate),
+    escapeHtml(statusTitle(t.status)),
+    escapeHtml(t.workType ?? ''),
+    escapeHtml((t.description ?? '').slice(0, 80)),
+  ])
+  const tableRows = rows
+    .map(
+      (r) =>
+        `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`,
+    )
+    .join('')
+  const headerCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')
+  const html = `
+    <div class="pdf-export-table-wrap" style="position:fixed;left:-9999px;top:0;width:1100px;font-family:Arial,sans-serif;font-size:12px;background:#fff;">
+      <h2 style="margin:0 0 12px 0;font-size:16px;">Список задач</h2>
+      <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;">
+        <thead><tr style="background:#225533;color:#fff;">${headerCells}</tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  `
+  const wrap = document.createElement('div')
+  wrap.innerHTML = html.trim()
+  const el = wrap.firstElementChild as HTMLElement
+  document.body.appendChild(el)
+  try {
+    const canvas = await html2canvas(el, { scale: 2, useCORS: true, logging: false })
+    document.body.removeChild(el)
+    const imgData = canvas.toDataURL('image/png')
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+    const pageW = doc.internal.pageSize.getWidth()
+    const pageH = doc.internal.pageSize.getHeight()
+    const margin = 10
+    const maxW = pageW - margin * 2
+    const maxH = pageH - margin * 2
+    let w = maxW
+    let h = (canvas.height / canvas.width) * w
+    if (h > maxH) {
+      h = maxH
+      w = (canvas.width / canvas.height) * h
+    }
+    doc.addImage(imgData, 'PNG', margin, margin, w, h)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener,noreferrer')
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  } catch {
+    document.body.removeChild(el)
+  }
+}
+
 function priorityClass(p: Priority) {
   return { high: 'priority-high', medium: 'priority-medium', low: 'priority-low' }[p]
 }
@@ -347,52 +598,65 @@ function statusClass(s: Status) {
   <section class="task-management-page page-enter-item">
     <header class="task-header">
       <div class="task-header-left">
-        <div class="task-filter-tabs">
-          <button
-            v-for="f in filters"
-            :key="f.key"
-            type="button"
-            class="task-filter-tab"
-            :class="{ 'task-filter-tab--active': activeFilter === f.key }"
-            @click="activeFilter = f.key"
+        <div class="task-filter-row">
+          <div class="task-filter-tabs">
+            <button
+              v-for="f in filters"
+              :key="f.key"
+              type="button"
+              class="task-filter-tab"
+              :class="{ 'task-filter-tab--active': activeFilter === f.key }"
+              @click="activeFilter = f.key"
+            >
+              {{ f.label }}
+            </button>
+          </div>
+          <select
+            v-if="isManager"
+            v-model="filterEmployeeId"
+            class="task-filter-pill task-filter-pill--select"
+            title="Сотрудник"
+            :disabled="!assignees.length"
           >
-            {{ f.label }}
-          </button>
-        </div>
-        <div class="task-filter-selects">
-          <label v-if="isManager" class="task-filter-select-wrap">
-            <span class="task-filter-select-label">Сотрудник</span>
-            <select
-              v-model="filterEmployeeId"
-              class="task-filter-select"
-              :disabled="!assignees.length"
+            <option value="">Все сотрудники</option>
+            <option
+              v-for="a in assignees"
+              :key="a.id"
+              :value="a.id"
             >
-              <option value="">Все сотрудники</option>
-              <option
-                v-for="a in assignees"
-                :key="a.id"
-                :value="a.id"
-              >
-                {{ a.name }}
-              </option>
-            </select>
-          </label>
-          <label class="task-filter-select-wrap">
-            <span class="task-filter-select-label">Статус</span>
-            <select
-              v-model="filterStatus"
-              class="task-filter-select"
+              {{ a.name }}
+            </option>
+          </select>
+          <select
+            v-model="filterStatus"
+            class="task-filter-pill task-filter-pill--select"
+            title="Статус"
+          >
+            <option value="">Все статусы</option>
+            <option
+              v-for="col in statusColumns"
+              :key="col.key"
+              :value="col.key"
             >
-              <option value="">Все статусы</option>
-              <option
-                v-for="col in statusColumns"
-                :key="col.key"
-                :value="col.key"
-              >
-                {{ col.title }}
-              </option>
-            </select>
-          </label>
+              {{ col.title }}
+            </option>
+          </select>
+          <div class="task-filter-dates">
+            <span class="task-filter-date-label">С</span>
+            <input
+              v-model="filterDateFrom"
+              type="date"
+              class="task-filter-pill task-filter-pill--date"
+              title="Дата с"
+            />
+            <span class="task-filter-date-label">По</span>
+            <input
+              v-model="filterDateTo"
+              type="date"
+              class="task-filter-pill task-filter-pill--date"
+              title="Дата по"
+            />
+          </div>
         </div>
         <div class="task-view-toggle">
           <button
@@ -429,13 +693,52 @@ function statusClass(s: Status) {
           </button>
         </div>
       </div>
-      <button type="button" class="task-btn-create" @click="openCreate">
-        <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
-        Создать задачу
-      </button>
+      <div class="task-header-actions">
+        <div class="task-search-wrap">
+          <span class="task-search-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          </span>
+          <input
+            v-model.trim="searchTaskNumber"
+            type="text"
+            inputmode="numeric"
+            class="task-search-input"
+            placeholder="Поиск по номеру"
+          />
+        </div>
+        <div class="task-export-btns">
+          <button
+            type="button"
+            class="task-btn-export"
+            :disabled="!filteredTasks.length"
+            title="Экспорт в PDF (предпросмотр)"
+            @click="exportToPdf"
+          >
+            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>
+            PDF
+          </button>
+          <button
+            type="button"
+            class="task-btn-export"
+            :disabled="!filteredTasks.length"
+            title="Экспорт в Excel"
+            @click="exportToExcel"
+          >
+            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/></svg>
+            Excel
+          </button>
+        </div>
+        <button type="button" class="task-btn-create" @click="openCreate">
+          <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
+          Создать задачу
+        </button>
+      </div>
     </header>
 
-    <p v-if="tasksLoading" class="task-loading-hint">Загрузка задач…</p>
+    <div v-if="tasksLoading" class="task-loading" role="status" aria-live="polite">
+      <div class="task-loading-spinner" aria-hidden="true"></div>
+      <p class="task-loading-text">Загрузка задач<span class="task-loading-dots" aria-hidden="true">...</span></p>
+    </div>
     <!-- Kanban -->
     <div v-show="viewMode === 'kanban' && !tasksLoading" class="task-kanban">
       <div
@@ -464,6 +767,7 @@ function statusClass(s: Status) {
             @dragend="onDragEnd"
           >
             <div class="task-card-head">
+              <span class="task-card-num">№ {{ getTaskNumber(task.id) }}</span>
               <span class="task-card-title">{{ task.title }}</span>
               <span class="task-card-avatar">{{ task.assignee.initials }}</span>
             </div>
@@ -503,6 +807,7 @@ function statusClass(s: Status) {
         <table class="task-list-table">
           <thead>
             <tr>
+              <th class="task-list-cell-num">№</th>
               <th>Название задачи</th>
               <th>Исполнитель</th>
               <th>Приоритет</th>
@@ -513,11 +818,12 @@ function statusClass(s: Status) {
           </thead>
           <tbody>
             <tr
-              v-for="task in filteredTasks"
+              v-for="(task, index) in paginatedTasks"
               :key="task.id"
               class="task-list-row"
               @click="openTask(task.id)"
             >
+              <td class="task-list-cell-num">{{ getTaskNumber(task.id) }}</td>
               <td class="task-list-cell-title">{{ task.title }}</td>
               <td class="task-list-cell-assignee">
                 <span class="task-list-avatar">{{ task.assignee.initials }}</span>
@@ -546,6 +852,72 @@ function statusClass(s: Status) {
           </tbody>
         </table>
       </div>
+      <div v-if="totalFiltered > 0" class="task-pagination">
+        <span class="task-pagination-info">
+          Страница {{ currentPage }} из {{ totalPages }} (всего {{ totalFiltered }})
+        </span>
+        <div class="task-pagination-controls">
+          <button
+            type="button"
+            class="task-pagination-btn"
+            :disabled="currentPage <= 1"
+            @click="currentPage = currentPage - 1"
+          >
+            Назад
+          </button>
+          <button
+            type="button"
+            class="task-pagination-btn"
+            :disabled="currentPage >= totalPages"
+            @click="currentPage = currentPage + 1"
+          >
+            Вперёд
+          </button>
+        </div>
+        <label class="task-pagination-size">
+          <span class="task-filter-select-label">На странице</span>
+          <select v-model.number="pageSize" class="task-filter-select task-pagination-select">
+            <option :value="5">5</option>
+            <option :value="10">10</option>
+            <option :value="20">20</option>
+            <option :value="50">50</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <!-- Pagination for Kanban (same block, show when kanban visible) -->
+    <div v-show="viewMode === 'kanban' && !tasksLoading && totalFiltered > 0" class="task-pagination task-pagination--kanban">
+      <span class="task-pagination-info">
+        Страница {{ currentPage }} из {{ totalPages }} (всего {{ totalFiltered }})
+      </span>
+      <div class="task-pagination-controls">
+        <button
+          type="button"
+          class="task-pagination-btn"
+          :disabled="currentPage <= 1"
+          @click="currentPage = currentPage - 1"
+        >
+          Назад
+        </button>
+        <button
+          type="button"
+          class="task-pagination-btn"
+          :disabled="currentPage >= totalPages"
+          @click="currentPage = currentPage + 1"
+        >
+          Вперёд
+        </button>
+      </div>
+      <label class="task-pagination-size">
+        <span class="task-filter-select-label">На странице</span>
+        <select v-model.number="pageSize" class="task-filter-select task-pagination-select">
+          <option :value="5">5</option>
+          <option :value="10">10</option>
+          <option :value="20">20</option>
+          <option :value="50">50</option>
+        </select>
+      </label>
     </div>
 
     <!-- Modal: New Task -->
@@ -624,6 +996,10 @@ function statusClass(s: Status) {
           <h2 id="task-detail-title" class="task-detail-title">{{ selectedTask.title }}</h2>
           <dl class="task-detail-list">
             <div class="task-detail-item">
+              <dt class="task-detail-label">Номер задачи</dt>
+              <dd class="task-detail-value">№ {{ getTaskNumber(selectedTask.id) || '—' }}</dd>
+            </div>
+            <div class="task-detail-item">
               <dt class="task-detail-label">Исполнитель</dt>
               <dd class="task-detail-value">
                 <span class="task-detail-avatar">{{ selectedTask.assignee.initials }}</span>
@@ -676,9 +1052,47 @@ function statusClass(s: Status) {
   gap: var(--space-xl);
 }
 
-.task-loading-hint {
+.task-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-lg);
+  min-height: 280px;
+  padding: var(--space-xl);
+}
+
+.task-loading-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent-green);
+  border-radius: 50%;
+  animation: task-loading-spin 0.85s ease-in-out infinite;
+}
+
+.task-loading-text {
+  margin: 0;
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.task-loading-dots {
+  opacity: 0.7;
+  animation: task-loading-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes task-loading-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes task-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .task-form-static-assignee {
@@ -715,17 +1129,109 @@ function statusClass(s: Status) {
   flex-shrink: 0;
 }
 
-.task-filter-selects {
+.task-filter-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-sm);
 }
 
-.task-filter-select-wrap {
+.task-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.task-filter-tab,
+.task-filter-pill {
+  height: var(--task-control-h);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--task-control-fs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.task-filter-tab {
+  cursor: pointer;
+}
+
+.task-filter-pill {
+  min-width: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.task-filter-pill--select {
+  min-width: 140px;
+}
+
+.task-filter-dates {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: var(--space-sm);
+  padding-left: var(--space-sm);
+  border-left: 1px solid var(--border-color);
+}
+
+.task-filter-date-label {
+  font-size: var(--task-control-fs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.task-filter-pill--date {
+  min-width: 130px;
+}
+
+.task-filter-pill:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.task-filter-tab:hover:not(.task-filter-tab--active),
+.task-filter-pill:hover:not(:disabled) {
+  background: var(--sidebar-hover-bg);
+  color: var(--text-primary);
+}
+
+/* Поиск по номеру — отдельный блок справа */
+.task-search-wrap {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: var(--task-control-h);
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+
+.task-search-icon {
+  display: flex;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.task-search-input {
+  width: 140px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--task-control-fs);
+  font-family: inherit;
+  outline: none;
+}
+
+.task-search-input::placeholder {
+  color: var(--text-secondary);
 }
 
 .task-filter-select-label {
@@ -735,9 +1241,10 @@ function statusClass(s: Status) {
   white-space: nowrap;
 }
 
+/* Для пагинации (выпадающий список «На странице») */
 .task-filter-select {
   height: var(--task-control-h);
-  min-width: 140px;
+  min-width: 70px;
   padding: 0 12px;
   border-radius: var(--task-control-radius);
   border: 1px solid var(--border-color);
@@ -751,27 +1258,6 @@ function statusClass(s: Status) {
 .task-filter-select:disabled {
   opacity: 0.7;
   cursor: not-allowed;
-}
-
-.task-filter-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-}
-
-.task-filter-tab {
-  height: var(--task-control-h);
-  display: inline-flex;
-  align-items: center;
-  padding: 0 14px;
-  border-radius: var(--task-control-radius);
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--task-control-fs);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
 .task-filter-tab--active {
@@ -841,6 +1327,100 @@ function statusClass(s: Status) {
 
 .task-btn-create:hover {
   background: var(--accent-green-hover);
+}
+
+.task-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-export-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.task-btn-export {
+  height: var(--task-control-h);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-radius: var(--task-control-radius);
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: var(--task-control-fs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.task-btn-export:hover:not(:disabled) {
+  background: var(--sidebar-hover-bg);
+  color: var(--text-primary);
+}
+
+.task-btn-export:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.task-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
+  padding: var(--space-md) 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.task-pagination--kanban {
+  margin-top: var(--space-md);
+}
+
+.task-pagination-info {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.task-pagination-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.task-pagination-btn {
+  height: var(--task-control-h);
+  padding: 0 14px;
+  border-radius: var(--task-control-radius);
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: var(--task-control-fs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.task-pagination-btn:hover:not(:disabled) {
+  background: var(--sidebar-hover-bg);
+  border-color: var(--text-secondary);
+}
+
+.task-pagination-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.task-pagination-size {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-pagination-select {
+  min-width: 70px;
 }
 
 /* Kanban */
@@ -916,6 +1496,13 @@ function statusClass(s: Status) {
   align-items: flex-start;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+.task-card-num {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
 .task-card-title {
@@ -1098,6 +1685,12 @@ function statusClass(s: Status) {
   background: var(--row-hover-bg);
 }
 
+.task-list-cell-num {
+  width: 2.5rem;
+  text-align: center;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
 .task-list-cell-title {
   font-weight: 500;
 }
@@ -1726,6 +2319,19 @@ function statusClass(s: Status) {
   color: var(--text-primary);
 }
 
+[data-theme='dark'] .task-filter-pill {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+[data-theme='dark'] .task-filter-pill:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .task-search-wrap {
+  background: rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
 [data-theme='dark'] .task-view-toggle {
   background: rgba(0, 0, 0, 0.2);
   border-color: var(--border-color);
@@ -1815,26 +2421,211 @@ function statusClass(s: Status) {
   }
 }
 
+@media (max-width: 900px) {
+  .task-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-md);
+  }
+
+  .task-header-left {
+    flex-direction: column;
+    gap: var(--space-md);
+  }
+
+  .task-header-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .task-search-wrap {
+    flex: 1;
+    min-width: 160px;
+  }
+
+  .task-search-input {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
 @media (max-width: 768px) {
+  .task-management-page {
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+
   .task-kanban {
     grid-template-columns: 1fr;
+    gap: var(--space-md);
+    min-height: 320px;
   }
 
   .task-form-row--two {
     grid-template-columns: 1fr;
   }
 
-  .task-header {
+  .task-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-sm);
+  }
+
+  .task-filter-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-sm);
+  }
+
+  .task-filter-tab {
+    justify-content: center;
+  }
+
+  .task-filter-dates {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+    padding-top: var(--space-xs);
+    border-top: 1px solid var(--border-color);
+    margin-top: var(--space-xs);
+  }
+
+  .task-filter-pill--select,
+  .task-filter-pill--date {
+    min-width: 0;
+    width: 100%;
+    flex: 1;
+  }
+
+  .task-view-toggle {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .task-view-btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .task-header-actions {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .task-header-left {
+  .task-search-wrap {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .task-export-btns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-sm);
+  }
+
+  .task-btn-export {
+    justify-content: center;
+  }
+
+  .task-btn-create {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .task-pagination {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-sm);
+    padding: var(--space-md) 0;
+  }
+
+  .task-pagination-controls {
+    justify-content: center;
+  }
+
+  .task-pagination-info {
+    text-align: center;
+  }
+
+  .task-pagination-size {
+    justify-content: center;
+  }
+
+  .task-list-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+  }
+
+  .task-list-table {
+    min-width: 560px;
+  }
+
+  .task-card {
+    min-height: 44px;
+    padding: var(--space-md);
+  }
+
+  .task-modal {
+    max-width: 100%;
+    margin: var(--space-md);
+    max-height: calc(100vh - 2 * var(--space-md));
+    overflow-y: auto;
+  }
+
+  .task-modal--detail,
+  .task-modal--create {
+    max-height: calc(100vh - 2 * var(--space-md));
+  }
+}
+
+@media (max-width: 480px) {
+  .task-filter-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .task-export-btns {
+    grid-template-columns: 1fr;
+  }
+
+  .task-loading {
+    min-height: 200px;
+    padding: var(--space-lg);
+  }
+
+  .task-column-title {
+    font-size: 0.8125rem;
+  }
+
+  .task-card-title {
+    font-size: 0.875rem;
+  }
+
+  .task-modal {
+    margin: var(--space-sm);
+    max-height: calc(100vh - 2 * var(--space-sm));
+  }
+
+  .task-modal--detail,
+  .task-modal--create {
+    max-height: calc(100vh - 2 * var(--space-sm));
+  }
+
+  .task-form-actions {
     flex-direction: column;
   }
 
-  .task-filter-tabs {
-    justify-content: stretch;
+  .task-form-actions .task-form-cancel,
+  .task-form-actions .task-form-submit {
+    width: 100%;
+  }
+
+  .task-detail-actions {
+    flex-direction: column;
+  }
+
+  .task-detail-actions .task-detail-btn {
+    width: 100%;
   }
 }
 </style>
