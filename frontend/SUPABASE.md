@@ -32,6 +32,21 @@ VITE_SUPABASE_ANON_KEY=твой_anon_ключ
 
 3. Перезапусти dev-сервер (`npm run dev`).
 
+## 4.1. Деплой на Vercel (и другие хостинги)
+
+На локальной машине переменные лежат в `.env.local`, но **этот файл не попадает в git** и не загружается на Vercel. Поэтому на продакшене Supabase не подключается, пока не задать переменные в настройках хостинга.
+
+**Vercel:**
+
+1. Открой проект в [vercel.com](https://vercel.com) → **Settings** → **Environment Variables**.
+2. Добавь две переменные (те же значения, что в `.env.local`):
+   - **Name:** `VITE_SUPABASE_URL` → **Value:** `https://твой-проект.supabase.co`
+   - **Name:** `VITE_SUPABASE_ANON_KEY` → **Value:** твой anon-ключ (`eyJ...`)
+3. Выбери окружения **Production**, **Preview**, **Development** (или только нужные).
+4. Сохрани и сделай **Redeploy** последнего деплоя (Deployments → ⋮ → Redeploy), чтобы сборка прошла уже с новыми переменными.
+
+После редеплоя приложение на Vercel будет использовать Supabase так же, как на localhost.
+
 ## 5. Использование в коде
 
 Клиент уже подключён в `src/lib/supabase.ts`:
