@@ -82,21 +82,25 @@ export async function upsertMyProfile(
   role: string | null,
   opts?: { phone?: string | null; position?: string | null; additionalInfo?: string | null },
 ): Promise<void> {
-  if (!supabase) return
+  if (!supabase) throw new Error('Supabase не настроен')
   const name = displayName?.trim() || null
-  await supabase.from('profiles').upsert(
+  const phone = opts?.phone != null ? String(opts.phone).trim() || null : null
+  const position = opts?.position != null ? String(opts.position).trim() || null : null
+  const additionalInfo = opts?.additionalInfo != null ? String(opts.additionalInfo).trim() || null : null
+  const { error } = await supabase.from('profiles').upsert(
     {
       id: userId,
       email,
       display_name: name,
       role,
-      phone: opts?.phone?.trim() || null,
-      position: opts?.position?.trim() || null,
-      additional_info: opts?.additionalInfo?.trim() || null,
+      phone,
+      position,
+      additional_info: additionalInfo,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'id' },
   )
+  if (error) throw error
 }
 
 export async function loadTasksFromSupabase(

@@ -1,9 +1,12 @@
 import { ref, computed } from 'vue'
 import type { User } from '@supabase/supabase-js'
+import type { ProfileRow } from '@/lib/tasksSupabase'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 
 const user = ref<User | null>(null)
 const loading = ref(true)
+/** Кэш профиля текущего пользователя (ФИО, телефон, должность и т.д.), чтобы не сбрасывать форму при переходах */
+const profileCache = ref<ProfileRow | null>(null)
 
 export function useAuth() {
   const isLoggedIn = computed(() => Boolean(user.value))
@@ -52,6 +55,18 @@ export function useAuth() {
     if (!supabase) return
     await supabase.auth.signOut()
     user.value = null
+    profileCache.value = null
+  }
+
+  /** Смена пароля: проверка текущего и установка нового */
+  async function updatePassword(currentPassword: string, newPassword: string) {
+    if (!supabase) throw new Error('Supabase не настроен')
+    const email = user.value?.email
+    if (!email) throw new Error('Пользователь не найден')
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password: currentPassword })
+    if (signInError) throw new Error('Неверный текущий пароль')
+    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+    if (updateError) throw updateError
   }
 
   const userRole = computed<'worker' | 'manager'>(() => {
@@ -65,11 +80,13 @@ export function useAuth() {
     isLoggedIn,
     isAuthConfigured: isSupabaseConfigured,
     userRole,
+    profileCache,
     init,
     startAuthListener,
     login,
     register,
     logout,
+    updatePassword,
   }
 }
 
