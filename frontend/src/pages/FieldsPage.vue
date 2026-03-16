@@ -62,6 +62,8 @@ type Field = {
   cadastralNumber: string
   address: string
   locationDescription: string
+  extraInfo: string
+  geolocation: string
   landType: string
   sowingYear: number
   responsibleId: string | null
@@ -96,6 +98,8 @@ function fieldRowToField(row: FieldRow, profileMap: Map<string, ProfileRow>, cro
     area: Number(row.area),
     cadastralNumber: row.cadastral_number ?? '',
     address: (row as { address?: string | null }).address ?? '',
+    extraInfo: (row as { extra_info?: string | null }).extra_info ?? '',
+    geolocation: (row as { geolocation?: string | null }).geolocation ?? '',
     locationDescription: row.location_description ?? '',
     landType: row.land_type,
     sowingYear: row.sowing_year ?? 0,
@@ -222,6 +226,8 @@ const deleteConfirmFieldId = ref<string | null>(null)
 const newFieldName = ref('')
 const newFieldCadastral = ref('')
 const newFieldAddress = ref('')
+const newFieldGeo = ref('')
+const newFieldExtra = ref('')
 const newFieldArea = ref<number | ''>('')
 const newFieldLandType = ref('Пашня')
 const newFieldCropKey = ref('wheat')
@@ -274,6 +280,8 @@ async function openAddField() {
   newFieldName.value = ''
   newFieldCadastral.value = ''
   newFieldAddress.value = ''
+  newFieldGeo.value = ''
+  newFieldExtra.value = ''
   newFieldArea.value = ''
   newFieldLandType.value = landTypeOptions.value[0]?.name ?? 'Пашня'
   newFieldCropKey.value = cropOptions.value[0]?.key ?? 'wheat'
@@ -305,6 +313,8 @@ async function openEditField(f: Field) {
   newFieldName.value = f.name
   newFieldCadastral.value = f.cadastralNumber
   newFieldAddress.value = f.address
+  newFieldGeo.value = f.geolocation
+  newFieldExtra.value = f.extraInfo
   newFieldArea.value = f.area
   newFieldLandType.value = f.landType
   newFieldCropKey.value = f.cropKey
@@ -471,6 +481,8 @@ async function addField() {
           cadastral_number: newFieldCadastral.value.trim() || null,
           address: newFieldAddress.value.trim() || null,
           location_description: newFieldLocationDesc.value.trim() || null,
+          extra_info: newFieldExtra.value.trim() || null,
+          geolocation: newFieldGeo.value.trim() || null,
           land_type: newFieldLandType.value,
           sowing_year: newFieldSowingYear.value,
           responsible_id: newFieldResponsibleId.value.trim() || null,
@@ -490,6 +502,8 @@ async function addField() {
         f.cadastralNumber = newFieldCadastral.value.trim()
         f.address = newFieldAddress.value.trim()
         f.locationDescription = newFieldLocationDesc.value.trim()
+        f.extraInfo = newFieldExtra.value.trim()
+        f.geolocation = newFieldGeo.value.trim()
         f.landType = newFieldLandType.value
         f.sowingYear = newFieldSowingYear.value
         f.responsibleId = newFieldResponsibleId.value || null
@@ -513,6 +527,8 @@ async function addField() {
         cadastral_number: newFieldCadastral.value.trim() || null,
         address: newFieldAddress.value.trim() || null,
         location_description: newFieldLocationDesc.value.trim() || null,
+        extra_info: newFieldExtra.value.trim() || null,
+        geolocation: newFieldGeo.value.trim() || null,
         land_type: newFieldLandType.value,
         sowing_year: newFieldSowingYear.value,
         responsible_id: newFieldResponsibleId.value.trim() || null,
@@ -538,6 +554,8 @@ async function addField() {
         cadastralNumber: newFieldCadastral.value.trim(),
         address: newFieldAddress.value.trim(),
         locationDescription: newFieldLocationDesc.value.trim(),
+        extraInfo: newFieldExtra.value.trim(),
+        geolocation: newFieldGeo.value.trim(),
         landType: newFieldLandType.value,
         sowingYear: newFieldSowingYear.value,
         responsibleId: newFieldResponsibleId.value || null,
@@ -1418,6 +1436,26 @@ onMounted(async () => {
                   class="modal-textarea"
                   rows="3"
                   placeholder="Опишите границы текстом (например: От дороги до ручья, прямоугольник 500×200 м...)"
+                />
+              </label>
+            </div>
+            <div class="modal-form-section modal-form-section--grid">
+              <label class="modal-field">
+                <span class="modal-label">Геолокация <span class="modal-label-opt">(опц.)</span></span>
+                <input
+                  v-model="newFieldGeo"
+                  type="text"
+                  class="modal-input"
+                  placeholder="Например: 55.7558, 37.6173"
+                />
+              </label>
+              <label class="modal-field modal-field--full">
+                <span class="modal-label">Доп. информация <span class="modal-label-opt">(опц.)</span></span>
+                <textarea
+                  v-model="newFieldExtra"
+                  class="modal-textarea"
+                  rows="3"
+                  placeholder="Любые дополнительные заметки о поле"
                 />
               </label>
             </div>
