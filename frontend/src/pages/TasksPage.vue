@@ -58,6 +58,9 @@ const profiles = ref<ProfileRow[]>([])
 
 const isTaskModalOpen = ref(false)
 const editingTaskId = ref<string | null>(null)
+const taskSaveLoading = ref(false)
+const showDeleteConfirm = ref(false)
+const deleteInProgress = ref(false)
 
 const taskTitle = ref('')
 const taskDescription = ref('')
@@ -507,6 +510,7 @@ async function onSubmitTask() {
 
   if (!isSupabaseConfigured()) return
 
+  taskSaveLoading.value = true
   try {
     const id = editingTaskId.value
     const date = taskDate.value || selectedDate.value
@@ -537,6 +541,8 @@ async function onSubmitTask() {
     isTaskModalOpen.value = false
   } catch (e) {
     console.error(e)
+  } finally {
+    taskSaveLoading.value = false
   }
 }
 
@@ -560,10 +566,26 @@ async function deleteTask(id: string) {
   }
 }
 
-async function deleteTaskAndCloseModal() {
+function openDeleteConfirm() {
+  showDeleteConfirm.value = true
+}
+
+function closeDeleteConfirm() {
+  if (!deleteInProgress.value) showDeleteConfirm.value = false
+}
+
+async function confirmDeleteTask() {
   if (!editingTaskId.value) return
-  await deleteTask(editingTaskId.value)
-  closeTaskModal()
+  deleteInProgress.value = true
+  try {
+    await deleteTask(editingTaskId.value)
+    showDeleteConfirm.value = false
+    closeTaskModal()
+  } catch (e) {
+    console.error(e)
+  } finally {
+    deleteInProgress.value = false
+  }
 }
 </script>
 
@@ -855,7 +877,8 @@ async function deleteTaskAndCloseModal() {
           </button>
         </div>
 
-        <form class="modal-form modal-form--design" @submit.prevent="onSubmitTask">
+        <form class="modal-form modal-form--design" @submit.prevent="onSubmitTask" :aria-busy="taskSaveLoading">
+          <fieldset class="modal-form-fieldset" :disabled="taskSaveLoading">
           <div class="modal-body">
             <label class="modal-field modal-field--design">
               <span class="modal-label modal-label--design">Название задачи</span>
@@ -1045,7 +1068,7 @@ async function deleteTaskAndCloseModal() {
 
           <!-- Подвал по макету: bg-gray-50, border-t, Удалить слева, Отмена + Сохранить справа -->
           <div class="modal-actions modal-actions--design">
-            <button v-if="editingTaskId" type="button" class="modal-btn-danger modal-btn-danger--design" @click="deleteTaskAndCloseModal">
+            <button v-if="editingTaskId" type="button" class="modal-btn-danger modal-btn-danger--design" :disabled="taskSaveLoading" @click="openDeleteConfirm">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
                 <line x1="10" x2="10" y1="11" y2="17" />
@@ -1054,14 +1077,43 @@ async function deleteTaskAndCloseModal() {
               Удалить задачу
             </button>
             <div class="modal-actions-right">
-              <button type="button" class="modal-btn-ghost modal-btn-ghost--design" @click="closeTaskModal">Отмена</button>
-              <button type="submit" class="modal-btn modal-btn--design">
-                {{ editingTaskId ? 'Сохранить изменения' : 'Создать задачу' }}
+              <button type="button" class="modal-btn-ghost modal-btn-ghost--design" :disabled="taskSaveLoading" @click="closeTaskModal">Отмена</button>
+              <button type="submit" class="modal-btn modal-btn--design" :disabled="taskSaveLoading">
+                <span v-if="taskSaveLoading" class="modal-btn-loading">
+                  <span class="modal-btn-spinner" aria-hidden="true" />
+                  Сохранение…
+                </span>
+                <span v-else>{{ editingTaskId ? 'Сохранить изменения' : 'Создать задачу' }}</span>
               </button>
             </div>
           </div>
+          </fieldset>
         </form>
         <input ref="fileInputRef" type="file" class="modal-file-input-hidden" accept="image/*,.pdf,.doc,.docx" @change="onFileSelect" />
+      </div>
+    </div>
+
+    <!-- Подтверждение удаления задачи -->
+    <div
+      v-if="showDeleteConfirm"
+      class="modal-backdrop modal-backdrop--confirm"
+      @click="closeDeleteConfirm"
+    >
+      <div class="modal modal-confirm" @click.stop>
+        <h3 class="modal-confirm-title">Удалить задачу?</h3>
+        <p class="modal-confirm-text">Задача будет удалена без возможности восстановления.</p>
+        <div class="modal-confirm-actions">
+          <button type="button" class="modal-btn-ghost modal-btn-ghost--design" :disabled="deleteInProgress" @click="closeDeleteConfirm">
+            Отмена
+          </button>
+          <button type="button" class="modal-btn modal-btn--design modal-btn--danger" :disabled="deleteInProgress" @click="confirmDeleteTask">
+            <span v-if="deleteInProgress" class="modal-btn-loading">
+              <span class="modal-btn-spinner" aria-hidden="true" />
+              Удаление…
+            </span>
+            <span v-else>Удалить</span>
+          </button>
+        </div>
       </div>
     </div>
   </section>
@@ -3022,5 +3074,81 @@ async function deleteTaskAndCloseModal() {
 .modal-btn-ghost:hover {
   background: var(--bg-panel);
   color: var(--text-primary);
+}
+
+.modal-form-fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.modal-form-fieldset:disabled {
+  opacity: 0.9;
+}
+
+.modal-btn-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.modal-btn-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: modal-btn-spin 0.7s linear infinite;
+}
+
+@keyframes modal-btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.modal-backdrop--confirm {
+  z-index: 1001;
+}
+
+.modal-confirm {
+  width: 100%;
+  max-width: 360px;
+  padding: 24px;
+  background: var(--bg-panel);
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+}
+
+.modal-confirm-title {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.modal-confirm-text {
+  margin: 0 0 20px;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.modal-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.modal-btn--danger {
+  background: #dc2626;
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.35);
+}
+
+.modal-btn--danger:hover:not(:disabled) {
+  background: #b91c1c;
 }
 </style>
