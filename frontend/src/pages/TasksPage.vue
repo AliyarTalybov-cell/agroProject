@@ -984,7 +984,7 @@ async function confirmDeleteTask() {
                       class="modal-assignee-option"
                       @click="addAssignee(p.id)"
                     >
-                      {{ profileLabel(p) }}{{ p.id === auth.user?.id ? ' (Вы)' : '' }}
+                      {{ profileLabel(p) }}{{ p.id === auth.user.value?.id ? ' (Вы)' : '' }}
                     </button>
                     <p
                       v-if="assigneeOptions.length === 0"
