@@ -27,7 +27,11 @@ export function useAuth() {
   function startAuthListener() {
     if (!supabase) return
     supabase.auth.onAuthStateChange((_event, session) => {
-      user.value = session?.user ?? null
+      const nextUser = session?.user ?? null
+      if (nextUser?.id !== user.value?.id) {
+        profileCache.value = null
+      }
+      user.value = nextUser
     })
   }
 

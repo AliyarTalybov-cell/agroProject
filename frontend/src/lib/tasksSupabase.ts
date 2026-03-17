@@ -129,20 +129,43 @@ export async function upsertMyProfile(
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
   const name = displayName?.trim() || null
-  const phone = opts?.phone != null ? String(opts.phone).trim() || null : null
-  const position = opts?.position != null ? String(opts.position).trim() || null : null
-  const additionalInfo = opts?.additionalInfo != null ? String(opts.additionalInfo).trim() || null : null
+  const updatedAt = new Date().toISOString()
   try {
+    if (opts) {
+      const phone = opts.phone != null ? String(opts.phone).trim() || null : null
+      const position = opts.position != null ? String(opts.position).trim() || null : null
+      const additionalInfo = opts.additionalInfo != null ? String(opts.additionalInfo).trim() || null : null
+      const { error } = await supabase.from('profiles').upsert(
+        {
+          id: userId,
+          email,
+          display_name: name,
+          role,
+          phone,
+          position,
+          additional_info: additionalInfo,
+          updated_at: updatedAt,
+        },
+        { onConflict: 'id' },
+      )
+      if (error) throw error
+      return
+    }
+    const { data: existing } = await supabase
+      .from('profiles')
+      .select('phone, position, additional_info')
+      .eq('id', userId)
+      .maybeSingle()
     const { error } = await supabase.from('profiles').upsert(
       {
         id: userId,
         email,
         display_name: name,
         role,
-        phone,
-        position,
-        additional_info: additionalInfo,
-        updated_at: new Date().toISOString(),
+        phone: (existing as { phone?: string | null } | null)?.phone ?? null,
+        position: (existing as { position?: string | null } | null)?.position ?? null,
+        additional_info: (existing as { additional_info?: string | null } | null)?.additional_info ?? null,
+        updated_at: updatedAt,
       },
       { onConflict: 'id' },
     )
