@@ -7,7 +7,6 @@ import CalendarPopover from '@/components/CalendarPopover.vue'
 import {
   isSupabaseConfigured,
   loadProfiles,
-  upsertMyProfile,
   loadTasksFromSupabase,
   loadTasksFiltered,
   tasksWithAssignees,
@@ -100,12 +99,6 @@ async function loadData() {
   tasksLoading.value = true
   try {
     const user = auth.user.value
-    await upsertMyProfile(
-      user.id,
-      user.email ?? '',
-      (user.user_metadata?.full_name as string) ?? null,
-      (user.user_metadata?.role as string) ?? null,
-    )
     const profileList = await loadProfiles()
     profiles.value = profileList
     const onlyMine = auth.userRole.value === 'worker'
