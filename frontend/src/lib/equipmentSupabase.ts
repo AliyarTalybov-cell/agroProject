@@ -11,6 +11,7 @@ export type EquipmentRow = {
   year: number | null
   purpose_crop: string | null
   condition: EquipmentCondition
+  responsible_id: string | null
   notes: string | null
   created_at: string
   updated_at: string
@@ -22,7 +23,7 @@ export async function loadEquipment(): Promise<EquipmentRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from(EQUIPMENT_TABLE)
-    .select('id, brand, license_plate, model, equipment_type, year, purpose_crop, condition, notes, created_at, updated_at')
+    .select('id, brand, license_plate, model, equipment_type, year, purpose_crop, condition, responsible_id, notes, created_at, updated_at')
     .order('created_at', { ascending: false })
   if (error) throw error
   return (data ?? []) as EquipmentRow[]
@@ -36,6 +37,7 @@ export async function insertEquipment(payload: {
   year?: number | null
   purpose_crop?: string | null
   condition?: EquipmentCondition
+  responsible_id?: string | null
   notes?: string | null
 }): Promise<EquipmentRow> {
   if (!supabase) throw new Error('Supabase не настроен')
@@ -50,6 +52,7 @@ export async function insertEquipment(payload: {
       year: payload.year ?? null,
       purpose_crop: payload.purpose_crop?.trim() || null,
       condition: payload.condition ?? 'operational',
+      responsible_id: payload.responsible_id ?? null,
       notes: payload.notes?.trim() || null,
       updated_at: now,
     })
@@ -69,6 +72,7 @@ export async function updateEquipment(
     year: number | null
     purpose_crop: string | null
     condition: EquipmentCondition
+    responsible_id: string | null
     notes: string | null
   }>,
 ): Promise<void> {

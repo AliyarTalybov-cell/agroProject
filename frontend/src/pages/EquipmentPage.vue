@@ -11,6 +11,7 @@ import {
   type EquipmentRow,
   type EquipmentCondition,
 } from '@/lib/equipmentSupabase'
+import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 
 const EQUIPMENT_TYPES = [
   { value: '', label: 'Выберите тип' },
@@ -34,6 +35,7 @@ const saving = ref(false)
 const searchQuery = ref('')
 const currentPage = ref(1)
 const editingId = ref<string | null>(null)
+const profiles = ref<ProfileRow[]>([])
 
 const form = ref({
   brand: '',
@@ -43,20 +45,25 @@ const form = ref({
   year: null as number | null,
   purpose_crop: '',
   condition: 'operational' as EquipmentCondition,
+  responsible_id: '' as string | null,
   notes: '',
 })
 
 async function fetchList() {
   if (!isSupabaseConfigured()) {
     list.value = []
+    profiles.value = []
     loading.value = false
     return
   }
   loading.value = true
   try {
-    list.value = await loadEquipment()
+    const [rows, profileRows] = await Promise.all([loadEquipment(), loadProfiles()])
+    list.value = rows
+    profiles.value = profileRows
   } catch {
     list.value = []
+    profiles.value = []
   } finally {
     loading.value = false
   }
@@ -96,6 +103,19 @@ const paginatedList = computed(() => {
   return filteredList.value.slice(start, start + PAGE_SIZE)
 })
 
+const responsibleOptions = computed(() =>
+  profiles.value.map((p) => ({
+    id: p.id,
+    label: p.display_name?.trim() || p.email,
+  })),
+)
+
+function responsibleLabel(id: string | null): string {
+  if (!id) return 'Не назначен'
+  const p = profiles.value.find((x) => x.id === id)
+  return p?.display_name?.trim() || p?.email || 'Неизвестно'
+}
+
 const paginationStart = computed(() => (currentPage.value - 1) * PAGE_SIZE + 1)
 const paginationEnd = computed(() =>
   Math.min(currentPage.value * PAGE_SIZE, totalCount.value),
@@ -124,6 +144,7 @@ function clearForm() {
     year: null,
     purpose_crop: '',
     condition: 'operational',
+    responsible_id: '',
     notes: '',
   }
   editingId.value = null
@@ -139,6 +160,7 @@ function startEdit(row: EquipmentRow) {
     year: row.year,
     purpose_crop: row.purpose_crop ?? '',
     condition: row.condition,
+    responsible_id: row.responsible_id ?? '',
     notes: row.notes ?? '',
   }
 }
@@ -159,6 +181,7 @@ async function saveEquipment() {
         year: form.value.year ?? null,
         purpose_crop: form.value.purpose_crop.trim() || null,
         condition: form.value.condition,
+        responsible_id: form.value.responsible_id || null,
         notes: form.value.notes.trim() || null,
       })
     } else {
@@ -170,6 +193,7 @@ async function saveEquipment() {
         year: form.value.year ?? null,
         purpose_crop: form.value.purpose_crop.trim() || null,
         condition: form.value.condition,
+        responsible_id: form.value.responsible_id || null,
         notes: form.value.notes.trim() || null,
       })
     }
@@ -371,6 +395,23 @@ async function exportToPdf() {
           />
         </div>
         <div class="equipment-form-field">
+          <label class="equipment-label" for="eq-responsible">Ответственный</label>
+          <select
+            id="eq-responsible"
+            v-model="form.responsible_id"
+            class="equipment-input equipment-select"
+          >
+            <option value="">Не назначен</option>
+            <option
+              v-for="opt in responsibleOptions"
+              :key="opt.id"
+              :value="opt.id"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+        </div>
+        <div class="equipment-form-field">
           <label class="equipment-label" for="eq-condition">Состояние</label>
           <select id="eq-condition" v-model="form.condition" class="equipment-input equipment-select">
             <option
@@ -449,6 +490,7 @@ async function exportToPdf() {
               <th>Марка / Модель</th>
               <th>Гос. номер</th>
               <th>Тип техники</th>
+              <th>Ответственный</th>
               <th>Состояние</th>
               <th>Действия</th>
             </tr>
@@ -465,6 +507,9 @@ async function exportToPdf() {
                 <span class="equipment-plate-badge">{{ row.license_plate }}</span>
               </td>
               <td>{{ equipmentTypeLabel(row.equipment_type) }}</td>
+              <td>
+                <span class="equipment-responsible-pill">{{ responsibleLabel(row.responsible_id) }}</span>
+              </td>
               <td>
                 <span :class="['equipment-condition-badge', conditionClass(row.condition)]">{{ conditionLabel(row.condition) }}</span>
               </td>
@@ -492,7 +537,7 @@ async function exportToPdf() {
               </td>
             </tr>
             <tr v-if="!paginatedList.length">
-              <td colspan="5" class="equipment-empty">Нет записей</td>
+              <td colspan="6" class="equipment-empty">Нет записей</td>
             </tr>
           </tbody>
         </table>
@@ -761,6 +806,17 @@ async function exportToPdf() {
   align-items: center;
   gap: var(--space-md);
   margin-bottom: var(--space-lg);
+}
+
+.equipment-responsible-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 180px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--text-secondary);
 }
 
 .equipment-list-title {
