@@ -1065,4 +1065,49 @@ async function changePassword() {
   gap: var(--space-md);
   justify-content: flex-end;
 }
+
+@media (max-width: 600px) {
+  .profile-page {
+    padding: 0 var(--space-md);
+    padding-bottom: var(--space-lg);
+  }
+
+  .profile-user-card {
+    padding: var(--space-lg);
+  }
+
+  .profile-form-area {
+    padding: var(--space-lg);
+  }
+
+  .profile-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .profile-contact-row,
+  .profile-activity-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .profile-activity-label {
+    min-width: 0;
+  }
+
+  .profile-tabs {
+    flex-wrap: wrap;
+  }
+
+  .profile-tab {
+    flex: 1 1 auto;
+    text-align: center;
+  }
+
+  .profile-page-title {
+    font-size: 1.25rem;
+  }
+}
 </style>

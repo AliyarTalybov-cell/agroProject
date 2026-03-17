@@ -1086,4 +1086,58 @@ async function exportToPdf() {
   color: var(--text-secondary);
   font-size: 0.875rem;
 }
+
+@media (max-width: 600px) {
+  .equipment-page {
+    padding: 0 var(--space-md);
+    padding-bottom: var(--space-lg);
+  }
+
+  .equipment-form-card,
+  .equipment-list-card {
+    padding: var(--space-lg);
+    margin-bottom: var(--space-lg);
+  }
+
+  .equipment-section-head {
+    align-items: flex-start;
+  }
+
+  .equipment-form-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .equipment-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .equipment-list-header {
+    align-items: flex-start;
+  }
+
+  .equipment-list-toolbar {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    row-gap: 8px;
+  }
+
+  .equipment-search-wrap {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .equipment-search-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .equipment-pagination {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
 </style>
