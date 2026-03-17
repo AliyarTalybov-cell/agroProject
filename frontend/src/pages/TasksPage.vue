@@ -1475,6 +1475,39 @@ async function confirmDeleteTask() {
     height: 20px;
   }
 
+  /* Модалка задачи: компактный вид на маленьких экранах */
+  .modal-backdrop {
+    padding: var(--space-sm);
+    align-items: flex-end;
+  }
+
+  .modal-backdrop .modal {
+    max-height: 85vh;
+    border-radius: 20px 20px 0 0;
+  }
+
+  .modal-header {
+    padding: 16px 20px;
+  }
+
+  .modal-title {
+    font-size: 1.1rem;
+  }
+
+  .modal-body {
+    padding: 16px 20px;
+    gap: 16px;
+  }
+
+  .modal-actions {
+    padding: 16px 20px;
+    gap: 10px;
+  }
+
+  .modal-actions--task {
+    flex-direction: column;
+  }
+
   .day-task-title {
     font-size: 0.85rem;
   }
@@ -2153,8 +2186,8 @@ async function confirmDeleteTask() {
 .modal-backdrop .modal {
   width: 100%;
   max-width: 672px;
-  max-height: 90vh;
-  overflow: hidden;
+  max-height: 80vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
