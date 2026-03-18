@@ -23,10 +23,10 @@ export function useAuth() {
       return
     }
     try {
-      const { data: { session } } = await supabase.auth.getSession()
+      const { data: { session } } = await supabase!.auth.getSession()
       const nextUser = session?.user ?? null
       if (nextUser && !isUserActive(nextUser)) {
-        await supabase.auth.signOut()
+        await supabase!.auth.signOut()
         user.value = null
       } else {
         user.value = nextUser
@@ -38,13 +38,13 @@ export function useAuth() {
 
   function startAuthListener() {
     if (!supabase) return
-    supabase.auth.onAuthStateChange(async (_event, session) => {
+    supabase!.auth.onAuthStateChange(async (_event, session) => {
       const nextUser = session?.user ?? null
       if (nextUser?.id !== user.value?.id) {
         profileCache.value = null
       }
       if (nextUser && !isUserActive(nextUser)) {
-        await supabase.auth.signOut()
+        await supabase!.auth.signOut()
         user.value = null
         return
       }
@@ -54,10 +54,10 @@ export function useAuth() {
 
   async function login(email: string, password: string) {
     if (!supabase) throw new Error('Supabase не настроен')
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error } = await supabase!.auth.signInWithPassword({ email, password })
     if (error) throw error
     if (data.user && !isUserActive(data.user)) {
-      await supabase.auth.signOut()
+      await supabase!.auth.signOut()
       user.value = null
       throw new Error('Аккаунт отключён. Обратитесь к администратору.')
     }
@@ -67,7 +67,7 @@ export function useAuth() {
 
   async function register(email: string, password: string, role: 'worker' | 'manager' = 'worker') {
     if (!supabase) throw new Error('Supabase не настроен')
-    const { data, error } = await supabase.auth.signUp({
+    const { data, error } = await supabase!.auth.signUp({
       email,
       password,
       options: { data: { role } },
@@ -79,7 +79,7 @@ export function useAuth() {
 
   async function logout() {
     if (!supabase) return
-    await supabase.auth.signOut()
+    await supabase!.auth.signOut()
     user.value = null
     profileCache.value = null
     try {
@@ -94,9 +94,9 @@ export function useAuth() {
     if (!supabase) throw new Error('Supabase не настроен')
     const email = user.value?.email
     if (!email) throw new Error('Пользователь не найден')
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password: currentPassword })
+    const { error: signInError } = await supabase!.auth.signInWithPassword({ email, password: currentPassword })
     if (signInError) throw new Error('Неверный текущий пароль')
-    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+    const { error: updateError } = await supabase!.auth.updateUser({ password: newPassword })
     if (updateError) throw updateError
   }
 
