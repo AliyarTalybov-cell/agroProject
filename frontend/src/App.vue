@@ -10,6 +10,8 @@ const auth = useAuth()
 const isAuthLayout = computed(() => route.name === 'login')
 const pageTitle = computed(() => (route.meta?.title as string) || 'Обзор')
 const { theme, toggle } = useTheme()
+const logoutConfirmOpen = ref(false)
+const logoutBusy = ref(false)
 
 const userDisplay = computed(() => {
   if (auth.user.value?.email) return auth.user.value.email
@@ -22,8 +24,24 @@ const userInitials = computed(() => {
   return part.slice(0, 1).toUpperCase() || '?'
 })
 async function handleLogout() {
-  await auth.logout()
-  router.push('/login')
+  logoutConfirmOpen.value = true
+}
+
+async function confirmLogout() {
+  if (logoutBusy.value) return
+  logoutBusy.value = true
+  try {
+    await auth.logout()
+    logoutConfirmOpen.value = false
+    router.push('/login')
+  } finally {
+    logoutBusy.value = false
+  }
+}
+
+function closeLogoutConfirm() {
+  if (logoutBusy.value) return
+  logoutConfirmOpen.value = false
 }
 
 const mobileMenuOpen = ref(false)
@@ -164,6 +182,28 @@ watch(mobileMenuOpen, (open) => {
       </footer>
     </aside>
 
+    <teleport to="body">
+      <div v-if="logoutConfirmOpen" class="app-modal-backdrop" role="dialog" aria-modal="true" aria-label="Подтверждение выхода" @click.self="closeLogoutConfirm">
+        <div class="app-modal" @click.stop>
+          <div class="app-modal-header">
+            <div class="app-modal-title">Выйти из аккаунта?</div>
+            <button type="button" class="app-modal-close" aria-label="Закрыть" :disabled="logoutBusy" @click="closeLogoutConfirm">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="app-modal-body">
+            <div class="app-modal-text">Вы действительно хотите выйти? Несохранённые изменения могут быть потеряны.</div>
+          </div>
+          <div class="app-modal-footer">
+            <button type="button" class="app-modal-btn app-modal-btn--ghost" :disabled="logoutBusy" @click="closeLogoutConfirm">Отмена</button>
+            <button type="button" class="app-modal-btn app-modal-btn--danger" :disabled="logoutBusy" @click="confirmLogout">
+              {{ logoutBusy ? 'Выход…' : 'Выйти' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </teleport>
+
     <main class="main-content">
       <header class="app-topbar">
         <button type="button" class="topbar-menu-btn" aria-label="Меню" @click="toggleMobileMenu">
@@ -195,4 +235,119 @@ watch(mobileMenuOpen, (open) => {
     </main>
   </div>
 </template>
+
+<style scoped>
+.app-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: var(--modal-backdrop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.app-modal {
+  width: 100%;
+  max-width: 520px;
+  border-radius: 20px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+}
+
+[data-theme='dark'] .app-modal {
+  background: rgba(18, 32, 20, 0.98);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.app-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.app-modal-title {
+  font-weight: 800;
+  color: var(--text-primary);
+  font-size: 1.05rem;
+}
+
+.app-modal-close {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.app-modal-close:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+[data-theme='dark'] .app-modal-close {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.app-modal-body {
+  padding: 18px 20px;
+}
+
+.app-modal-text {
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+
+.app-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.02);
+}
+[data-theme='dark'] .app-modal-footer {
+  background: rgba(18, 32, 20, 0.98);
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+
+.app-modal-btn {
+  border-radius: 12px;
+  padding: 11px 18px;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.app-modal-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.app-modal-btn--ghost {
+  background: #fff;
+  border-color: #e2e8f0;
+  color: var(--text-primary);
+}
+[data-theme='dark'] .app-modal-btn--ghost {
+  background: var(--bg-panel);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.app-modal-btn--danger {
+  background: var(--danger-red);
+  color: #fff;
+}
+.app-modal-btn--danger:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+</style>
 
