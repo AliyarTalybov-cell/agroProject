@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { EmployeeRole, EmployeeRow, PositionRow } from '@/lib/employeesSupabase'
 import { deleteEmployee, updateEmployee } from '@/lib/employeesSupabase'
+import { avatarColorByPosition } from '@/lib/avatarColors'
 
 const props = defineProps<{
   open: boolean
@@ -46,6 +47,10 @@ const avatar = computed(() => {
   const e = props.employee
   if (!e) return '—'
   return initials(e.display_name, e.email)
+})
+
+const avatarBg = computed(() => {
+  return avatarColorByPosition(form.value.position || props.employee?.position)
 })
 
 function close() {
@@ -127,7 +132,7 @@ watch(
 
           <div class="eem-layout">
             <aside class="eem-aside">
-              <div class="eem-avatar">{{ avatar }}</div>
+              <div class="eem-avatar" :style="{ background: avatarBg }">{{ avatar }}</div>
               <div class="eem-status-card">
                 <div class="eem-status-row">
                   <div>

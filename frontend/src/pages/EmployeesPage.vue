@@ -5,6 +5,7 @@ import { isSupabaseConfigured } from '@/lib/supabase'
 import { loadEmployees, loadPositions, searchEmployees, type EmployeeRow, type PositionRow } from '@/lib/employeesSupabase'
 import EmployeeCreateModal from '@/components/EmployeeCreateModal.vue'
 import EmployeeEditModal from '@/components/EmployeeEditModal.vue'
+import { avatarColorByPosition } from '@/lib/avatarColors'
 
 const auth = useAuth()
 
@@ -29,6 +30,10 @@ function initials(name: string | null, email: string): string {
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
   if (parts[0]?.length >= 2) return parts[0].slice(0, 2).toUpperCase()
   return (parts[0]?.[0] || '?').toUpperCase()
+}
+
+function avatarColor(position: string | null): string {
+  return avatarColorByPosition(position)
 }
 
 function roleLabel(role: string | null): string {
@@ -133,7 +138,7 @@ function openEmployee(e: EmployeeRow) {
       <div v-else class="emp-grid">
         <article v-for="e in employees" :key="e.id" class="emp-card" tabindex="0" @click="openEmployee(e)" @keydown.enter="openEmployee(e)">
           <div class="emp-card-head">
-            <div class="emp-avatar" :class="{ 'emp-avatar--manager': e.role === 'manager' }">
+            <div class="emp-avatar" :style="{ background: avatarColor(e.position) }">
               {{ initials(e.display_name, e.email) }}
             </div>
             <div class="emp-card-meta">
@@ -259,6 +264,9 @@ function openEmployee(e: EmployeeRow) {
 [data-theme='dark'] .emp-filter-select {
   background: rgba(255, 255, 255, 0.06);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: 16px 16px;
+  background-position: right 12px center;
 }
 
 .emp-search-icon {
@@ -400,7 +408,6 @@ function openEmployee(e: EmployeeRow) {
   width: 44px;
   height: 44px;
   border-radius: 999px;
-  background: rgba(107, 114, 128, 0.55);
   color: #fff;
   display: flex;
   align-items: center;
@@ -408,10 +415,6 @@ function openEmployee(e: EmployeeRow) {
   font-weight: 800;
   letter-spacing: 0.02em;
   flex: 0 0 auto;
-}
-
-.emp-avatar--manager {
-  background: var(--accent-green);
 }
 
 .emp-card-meta {
