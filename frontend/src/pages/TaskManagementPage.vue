@@ -21,6 +21,7 @@ import {
 import { loadFields as loadFieldsApi } from '@/lib/fieldsSupabase'
 import { loadWorkOperations, type WorkOperationRow } from '@/lib/reasonsAndOperations'
 import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow } from '@/lib/tasksSupabase'
+import { avatarColorByPosition } from '@/lib/avatarColors'
 
 type ViewMode = 'kanban' | 'list'
 type FilterKey = 'all' | 'mine'
@@ -122,6 +123,12 @@ function profileInitials(userId: string | null | undefined): string {
   const parts = base.split(/\s+/)
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
   return base.slice(0, 2).toUpperCase()
+}
+
+function avatarStyleByUserId(userId: string | null | undefined): Record<string, string> | undefined {
+  if (!userId) return undefined
+  const p = profilesMap.value.get(userId)
+  return { background: avatarColorByPosition(p?.position) }
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -967,7 +974,7 @@ function statusClass(s: Status) {
             <div class="task-card-head">
               <span class="task-card-num">№ {{ getTaskNumber(task.id) }}</span>
               <span class="task-card-title">{{ task.title }}</span>
-              <span class="task-card-avatar">{{ task.assignee.initials }}</span>
+              <span class="task-card-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
             </div>
             <div class="task-card-meta">
               <span class="task-pill" :class="priorityClass(task.priority)">
@@ -1024,7 +1031,7 @@ function statusClass(s: Status) {
               <td class="task-list-cell-num">{{ getTaskNumber(task.id) }}</td>
               <td class="task-list-cell-title">{{ task.title }}</td>
               <td class="task-list-cell-assignee">
-                <span class="task-list-avatar">{{ task.assignee.initials }}</span>
+                <span class="task-list-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
                 {{ task.assignee.name }}
               </td>
               <td>
@@ -1169,7 +1176,10 @@ function statusClass(s: Status) {
               <div class="task-form-field">
                 <label class="task-form-label">Исполнитель</label>
                 <div v-if="isManager" class="task-form-select-wrap">
-                  <span class="task-form-avatar">{{ (assignees.find(a => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}</span>
+                  <span
+                    class="task-form-avatar"
+                    :style="avatarStyleByUserId((assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.id)"
+                  >{{ (assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}</span>
                   <select v-model="form.assigneeId" class="task-form-select">
                     <option v-for="a in assignees" :key="a.id" :value="a.id">{{ a.name }}</option>
                   </select>
@@ -1262,8 +1272,11 @@ function statusClass(s: Status) {
                   <dd class="task-detail-value">
                     <template v-if="isEditingDetail">
                       <div class="task-form-select-wrap task-detail-select-wrap">
-                        <span class="task-detail-avatar">
-                          {{ (assignees.find(a => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}
+                        <span
+                          class="task-detail-avatar"
+                          :style="avatarStyleByUserId((assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.id)"
+                        >
+                          {{ (assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}
                         </span>
                         <select v-model="form.assigneeId" class="task-form-select">
                           <option v-for="a in assignees" :key="a.id" :value="a.id">
@@ -1273,7 +1286,7 @@ function statusClass(s: Status) {
                       </div>
                     </template>
                     <template v-else>
-                      <span class="task-detail-avatar">{{ selectedTask.assignee.initials }}</span>
+                      <span class="task-detail-avatar" :style="avatarStyleByUserId(selectedTask.assignee.id)">{{ selectedTask.assignee.initials }}</span>
                       {{ selectedTask.assignee.name }}
                     </template>
                   </dd>
@@ -1363,7 +1376,7 @@ function statusClass(s: Status) {
               <section class="task-detail-card">
                 <h3 class="task-detail-card-title">Информация о задаче</h3>
                 <div class="task-detail-info-row">
-                  <div class="task-detail-info-avatar">
+                  <div class="task-detail-info-avatar" :style="avatarStyleByUserId(selectedTask.createdBy?.id ?? null)">
                     <span>{{ profileInitials(selectedTask.createdBy?.id ?? null) }}</span>
                   </div>
                   <div class="task-detail-info-main">
@@ -1433,7 +1446,7 @@ function statusClass(s: Status) {
               </div>
               <ul v-else class="task-chat-list">
                 <li v-for="comment in taskComments" :key="comment.id" class="task-chat-item">
-                  <div class="task-chat-avatar">
+                  <div class="task-chat-avatar" :style="avatarStyleByUserId(comment.user_id)">
                     {{ profileInitials(comment.user_id) }}
                   </div>
                   <div class="task-chat-message">
@@ -2052,7 +2065,7 @@ function statusClass(s: Status) {
   height: 28px;
   border-radius: 50%;
   background: var(--chip-bg);
-  color: var(--text-secondary);
+  color: #fff;
   font-size: 0.7rem;
   font-weight: 600;
   display: flex;
@@ -2240,7 +2253,7 @@ function statusClass(s: Status) {
   height: 28px;
   border-radius: 50%;
   background: var(--chip-bg);
-  color: var(--text-secondary);
+  color: #fff;
   font-size: 0.7rem;
   font-weight: 600;
   display: inline-flex;

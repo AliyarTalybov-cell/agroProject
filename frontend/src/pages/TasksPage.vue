@@ -16,6 +16,7 @@ import {
   type CalendarTaskFileRow,
 } from '@/lib/calendarTasksSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
+import { avatarColorByPosition } from '@/lib/avatarColors'
 
 type CalendarTask = {
   id: string
@@ -94,6 +95,10 @@ function assigneeInitials(p: ProfileRow): string {
   const parts = name.split(/\s+/)
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase().slice(0, 2)
   return name.slice(0, 2).toUpperCase()
+}
+
+function assigneeAvatarStyle(p: ProfileRow): Record<string, string> {
+  return { background: avatarColorByPosition(p.position) }
 }
 
 const profilesNotAssigned = computed(() =>
@@ -984,7 +989,8 @@ async function confirmDeleteTask() {
                       class="modal-assignee-option"
                       @click="addAssignee(p.id)"
                     >
-                      {{ profileLabel(p) }}{{ p.id === auth.user.value?.id ? ' (Вы)' : '' }}
+                      <span class="modal-assignee-option-avatar" :style="assigneeAvatarStyle(p)">{{ assigneeInitials(p) }}</span>
+                      <span class="modal-assignee-option-label">{{ profileLabel(p) }}{{ p.id === auth.user.value?.id ? ' (Вы)' : '' }}</span>
                     </button>
                     <p
                       v-if="assigneeOptions.length === 0"
@@ -1001,7 +1007,10 @@ async function confirmDeleteTask() {
                   :key="uid"
                   class="modal-chip modal-chip--design"
                 >
-                  <span class="modal-chip-avatar modal-chip-avatar--design">{{ profileById(uid) ? assigneeInitials(profileById(uid)!) : '?' }}</span>
+                  <span
+                    class="modal-chip-avatar modal-chip-avatar--design"
+                    :style="profileById(uid) ? assigneeAvatarStyle(profileById(uid)!) : undefined"
+                  >{{ profileById(uid) ? assigneeInitials(profileById(uid)!) : '?' }}</span>
                   <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
                   <button type="button" class="modal-chip-remove" aria-label="Убрать" @click="removeAssignee(uid)">×</button>
                 </div>
@@ -2807,7 +2816,9 @@ async function confirmDeleteTask() {
 }
 
 .modal-assignee-option {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
   padding: 8px 10px;
   text-align: left;
@@ -2817,6 +2828,26 @@ async function confirmDeleteTask() {
   border-radius: 6px;
   cursor: pointer;
   color: var(--text-primary);
+}
+
+.modal-assignee-option-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 0.75rem;
+  flex: 0 0 auto;
+}
+
+.modal-assignee-option-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .modal-assignee-option:hover {
