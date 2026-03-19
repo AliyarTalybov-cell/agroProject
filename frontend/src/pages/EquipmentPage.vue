@@ -498,7 +498,12 @@ async function exportToPdf() {
           <tbody>
             <tr v-for="row in paginatedList" :key="row.id">
               <td>
-                <div class="equipment-cell-brand">{{ row.brand }}</div>
+                <RouterLink
+                  :to="{ name: 'equipment-details', params: { id: row.id } }"
+                  class="equipment-details-link"
+                >
+                  <div class="equipment-cell-brand">{{ row.brand }}</div>
+                </RouterLink>
                 <div class="equipment-cell-detail">
                   {{ row.model && row.year ? `${row.model} • ${row.year} г.в.` : row.model || (row.year ? `${row.year} г.в.` : '') }}
                 </div>
@@ -948,6 +953,18 @@ async function exportToPdf() {
 .equipment-cell-brand {
   font-weight: 500;
   color: var(--text-primary);
+}
+
+.equipment-details-link {
+  text-decoration: none;
+  color: inherit;
+  display: inline-block;
+}
+
+.equipment-details-link:hover .equipment-cell-brand {
+  color: var(--accent-green);
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 
 .equipment-cell-detail {

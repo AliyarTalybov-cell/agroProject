@@ -188,6 +188,20 @@ create table if not exists public.field_photos (
 alter table public.field_photos enable row level security;
 create policy "Allow all for field_photos" on public.field_photos for all using (true) with check (true);
 
+-- Фото техники (для экрана техники)
+create table if not exists public.equipment_photos (
+  id uuid primary key default gen_random_uuid(),
+  equipment_id uuid not null references public.equipment(id) on delete cascade,
+  file_url text not null,
+  file_path text,
+  title text,
+  description text,
+  created_at timestamptz default now()
+);
+
+alter table public.equipment_photos enable row level security;
+create policy "Allow all for equipment_photos" on public.equipment_photos for all using (true) with check (true);
+
 -- Файлы схем храним в Supabase Storage. В Dashboard: Storage → New bucket → имя "field-schemes", Public = true.
 -- Тогда загрузка через supabase.storage.from('field-schemes').upload(path, file) и публичный URL для scheme_file_url.
 

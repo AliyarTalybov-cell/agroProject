@@ -35,6 +35,21 @@ export type OperationRow = {
   equipment_repair_notes?: string | null
 }
 
+export type EquipmentOperationHistoryRow = {
+  id: number
+  employee: string
+  operation: string | null
+  startISO: string
+  endISO: string
+  durationMinutes: number
+  equipmentId?: string | null
+  equipmentFuelPercent?: number | null
+  equipmentConditionValue?: number | null
+  equipmentConditionLabel?: string | null
+  equipmentRepairNotes?: string | null
+  fieldName?: string | null
+}
+
 function rowToDowntime(r: DowntimeRow): StoredDowntime {
   return {
     id: r.id,
@@ -163,6 +178,56 @@ export async function loadOperationsFromSupabase(
     const { data, error } = await q
     if (error) throw error
     return (data ?? []).map((r) => rowToOperation(r as unknown as OperationRow))
+  }
+
+  try {
+    return await attempt(`${baseSelect}, ${extraSelect}`)
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string }
+    const isColumnError = err?.code === '42703' || /column .* does not exist/i.test(err?.message ?? '')
+    if (!isColumnError) throw e
+    return attempt(baseSelect)
+  }
+}
+
+export async function loadOperationsByEquipmentFromSupabase(
+  equipmentId: string,
+  onlyCurrentUser: boolean,
+  userId: string | null,
+): Promise<EquipmentOperationHistoryRow[]> {
+  if (!supabase) return []
+
+  const sb = supabase
+  const baseSelect = 'id, user_id, employee, field_name, operation, start_iso, end_iso, duration_minutes'
+  const extraSelect =
+    'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes'
+
+  const attempt = async (select: string): Promise<EquipmentOperationHistoryRow[]> => {
+    let q = sb
+      .from('operations')
+      .select(select)
+      .eq('equipment_id', equipmentId)
+      .order('start_iso', { ascending: false })
+
+    if (onlyCurrentUser && userId) q = q.eq('user_id', userId)
+
+    const { data, error } = await q
+    if (error) throw error
+
+    return (data ?? []).map((r: any) => ({
+      id: r.id as number,
+      employee: r.employee as string,
+      operation: (r.operation ?? null) as string | null,
+      startISO: r.start_iso as string,
+      endISO: r.end_iso as string,
+      durationMinutes: r.duration_minutes as number,
+      equipmentId: r.equipment_id ?? undefined,
+      equipmentFuelPercent: r.equipment_fuel_percent ?? undefined,
+      equipmentConditionValue: r.equipment_condition_value ?? undefined,
+      equipmentConditionLabel: r.equipment_condition_label ?? undefined,
+      equipmentRepairNotes: r.equipment_repair_notes ?? undefined,
+      fieldName: r.field_name ?? undefined,
+    }))
   }
 
   try {

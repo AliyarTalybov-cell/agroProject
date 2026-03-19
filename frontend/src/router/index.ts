@@ -10,6 +10,7 @@ import TaskManagementPage from '@/pages/TaskManagementPage.vue'
 import MechanicPage from '@/pages/MechanicPage.vue'
 import WeatherPage from '@/pages/WeatherPage.vue'
 import EquipmentPage from '@/pages/EquipmentPage.vue'
+import EquipmentDetailsPage from '@/pages/EquipmentDetailsPage.vue'
 import ProfilePage from '@/pages/ProfilePage.vue'
 import EmployeesPage from '@/pages/EmployeesPage.vue'
 import { getAuthUser, isAuthLoading } from '@/stores/auth'
@@ -23,6 +24,7 @@ export const routes = [
   { path: '/fields', name: 'fields', component: FieldsPage, meta: { title: 'Поля и Культуры' } },
   { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true, meta: { title: 'Поле' } },
   { path: '/equipment', name: 'equipment', component: EquipmentPage, meta: { title: 'Управление техникой' } },
+  { path: '/equipment/:id', name: 'equipment-details', component: EquipmentDetailsPage, props: true, meta: { title: 'Техника' } },
   { path: '/tasks', name: 'tasks', component: TasksPage, meta: { title: 'Календарь' } },
   { path: '/task-management', name: 'task-management', component: TaskManagementPage, meta: { title: 'Задачи' } },
   { path: '/mechanic', name: 'mechanic', component: MechanicPage, meta: { title: 'Экран оператора' } },
