@@ -396,9 +396,13 @@ onMounted(refreshAll)
 
             <li class="field-details-item">
               <span class="field-details-item-icon" aria-hidden="true">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z" />
-                  <circle cx="12" cy="9" r="2" />
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="6" y1="3" x2="6" y2="21" />
+                  <line x1="12" y1="3" x2="12" y2="21" />
+                  <line x1="18" y1="3" x2="18" y2="21" />
+                  <circle cx="6" cy="14" r="2" />
+                  <circle cx="12" cy="10" r="2" />
+                  <circle cx="18" cy="6" r="2" />
                 </svg>
               </span>
               <span class="field-details-item-label">Состояние</span>
@@ -408,9 +412,8 @@ onMounted(refreshAll)
             <li class="field-details-item">
               <span class="field-details-item-icon" aria-hidden="true">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="17 8 12 3 7 8" />
-                  <line x1="12" y1="3" x2="12" y2="15" />
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
                 </svg>
               </span>
               <span class="field-details-item-label">Ответственный</span>
