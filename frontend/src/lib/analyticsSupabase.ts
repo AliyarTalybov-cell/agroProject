@@ -2,6 +2,11 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import type { StoredDowntime } from '@/lib/downtimeStorage'
 import type { StoredOperation } from '@/lib/operationStorage'
 
+// Если в БД/Schema cache ещё нет колонки `equipment_fuel_left_percent`,
+// то запросы с ней будут падать (PGRST204 / 42703) и портить UI.
+// После первого обнаружения помечаем как "отсутствует" и перестаём её запрашивать.
+let fuelLeftColumnAvailable: boolean | null = null
+
 export type DowntimeRow = {
   id: number
   user_id: string | null
@@ -30,6 +35,7 @@ export type OperationRow = {
   notes: string | null
   equipment_id?: string | null
   equipment_fuel_percent?: number | null
+  equipment_fuel_left_percent?: number | null
   equipment_condition_value?: number | null
   equipment_condition_label?: string | null
   equipment_repair_notes?: string | null
@@ -42,12 +48,38 @@ export type EquipmentOperationHistoryRow = {
   startISO: string
   endISO: string
   durationMinutes: number
+  notes?: string | null
   equipmentId?: string | null
   equipmentFuelPercent?: number | null
+  equipmentFuelLeftPercent?: number | null
   equipmentConditionValue?: number | null
   equipmentConditionLabel?: string | null
   equipmentRepairNotes?: string | null
   fieldName?: string | null
+}
+
+function isMissingColumnError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string }
+  const code = e?.code
+  const message = (e?.message ?? '').toLowerCase()
+
+  // 42703: postgres undefined_column
+  if (code === '42703') return true
+
+  // PGRST204: postgrest schema cache missing column (как у тебя)
+  if (code === 'PGRST204') return true
+
+  if (/column .* does not exist/i.test(e?.message ?? '')) return true
+  if (message.includes('could not find') && message.includes('column')) return true
+
+  return false
+}
+
+function isFuelLeftColumnMissingError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string }
+  const msg = (e?.message ?? '').toLowerCase()
+  if (!isMissingColumnError(err)) return false
+  return msg.includes('equipment_fuel_left_percent')
 }
 
 function rowToDowntime(r: DowntimeRow): StoredDowntime {
@@ -79,6 +111,7 @@ function rowToOperation(r: OperationRow): StoredOperation {
     notes: r.notes ?? undefined,
     equipmentId: r.equipment_id ?? undefined,
     equipmentFuelPercent: r.equipment_fuel_percent ?? undefined,
+    equipmentFuelLeftPercent: r.equipment_fuel_left_percent ?? undefined,
     equipmentConditionValue: r.equipment_condition_value ?? undefined,
     equipmentConditionLabel: r.equipment_condition_label ?? undefined,
     equipmentRepairNotes: r.equipment_repair_notes ?? undefined,
@@ -131,14 +164,36 @@ export async function insertOperation(
     equipment_repair_notes: op.equipmentRepairNotes?.trim() || null,
   }
 
+  const payloadWithFuelLeft = {
+    ...payloadWithEquipment,
+    equipment_fuel_left_percent: op.equipmentFuelLeftPercent ?? null,
+  }
+
   try {
-    await supabase.from('operations').insert(payloadWithEquipment)
+    if (fuelLeftColumnAvailable === false) {
+      await supabase.from('operations').insert(payloadWithEquipment)
+      return
+    }
+    await supabase.from('operations').insert(payloadWithFuelLeft)
   } catch (e: unknown) {
-    const err = e as { code?: string; message?: string }
-    const isColumnError = err?.code === '42703' || /column .* does not exist/i.test(err?.message ?? '')
-    if (!isColumnError) throw e
-    // Если бекенд/БД ещё не содержит колонок под технику — пишем только базовые поля.
-    await supabase.from('operations').insert(basePayload)
+    console.error('insertOperation: payloadWithFuelLeft failed', e, payloadWithFuelLeft)
+    if (isFuelLeftColumnMissingError(e)) fuelLeftColumnAvailable = false
+    if (!isMissingColumnError(e)) throw e
+    // Если не существует только `equipment_fuel_left_percent`, всё равно сохраним привязку к технике и старые equipment-поля.
+    try {
+      await supabase.from('operations').insert(payloadWithEquipment)
+    } catch (e2: unknown) {
+      console.error('insertOperation: payloadWithEquipment fallback failed', e2, payloadWithEquipment)
+      if (isFuelLeftColumnMissingError(e2)) fuelLeftColumnAvailable = false
+      if (!isMissingColumnError(e2)) throw e2
+      // Если БД ещё не содержит вообще колонок под технику — пишем только базовые поля.
+      try {
+        await supabase.from('operations').insert(basePayload)
+      } catch (e3: unknown) {
+        console.error('insertOperation: basePayload fallback failed', e3, basePayload)
+        throw e3
+      }
+    }
   }
 }
 
@@ -166,8 +221,8 @@ export async function loadOperationsFromSupabase(
   if (!supabase) return []
   const sb = supabase
   const baseSelect = 'id, user_id, employee, field_id, field_name, operation, start_iso, end_iso, duration_minutes, notes'
-  const extraSelect =
-    'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes'
+  const equipmentSelect = 'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes'
+  const equipmentFuelLeftSelect = 'equipment_fuel_left_percent'
 
   const attempt = async (select: string): Promise<StoredOperation[]> => {
     let q = sb
@@ -181,12 +236,22 @@ export async function loadOperationsFromSupabase(
   }
 
   try {
-    return await attempt(`${baseSelect}, ${extraSelect}`)
+    if (fuelLeftColumnAvailable === false) {
+      return await attempt(`${baseSelect}, ${equipmentSelect}`)
+    }
+    return await attempt(`${baseSelect}, ${equipmentSelect}, ${equipmentFuelLeftSelect}`)
   } catch (e: unknown) {
-    const err = e as { code?: string; message?: string }
-    const isColumnError = err?.code === '42703' || /column .* does not exist/i.test(err?.message ?? '')
-    if (!isColumnError) throw e
-    return attempt(baseSelect)
+    if (!isMissingColumnError(e)) throw e
+    if (isFuelLeftColumnMissingError(e)) fuelLeftColumnAvailable = false
+    // Сначала пробуем без `equipment_fuel_left_percent`, но с остальными equipment-полями.
+    try {
+      return await attempt(`${baseSelect}, ${equipmentSelect}`)
+    } catch (e2: unknown) {
+      if (!isMissingColumnError(e2)) throw e2
+      if (isFuelLeftColumnMissingError(e2)) fuelLeftColumnAvailable = false
+      // Последний fallback: без equipment-колонок.
+      return attempt(baseSelect)
+    }
   }
 }
 
@@ -198,9 +263,9 @@ export async function loadOperationsByEquipmentFromSupabase(
   if (!supabase) return []
 
   const sb = supabase
-  const baseSelect = 'id, user_id, employee, field_name, operation, start_iso, end_iso, duration_minutes'
-  const extraSelect =
-    'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes'
+  const baseSelect = 'id, user_id, employee, field_name, operation, start_iso, end_iso, duration_minutes, notes'
+  const equipmentSelect = 'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes'
+  const equipmentFuelLeftSelect = 'equipment_fuel_left_percent'
 
   const attempt = async (select: string): Promise<EquipmentOperationHistoryRow[]> => {
     let q = sb
@@ -221,8 +286,10 @@ export async function loadOperationsByEquipmentFromSupabase(
       startISO: r.start_iso as string,
       endISO: r.end_iso as string,
       durationMinutes: r.duration_minutes as number,
+      notes: r.notes ?? undefined,
       equipmentId: r.equipment_id ?? undefined,
       equipmentFuelPercent: r.equipment_fuel_percent ?? undefined,
+      equipmentFuelLeftPercent: r.equipment_fuel_left_percent ?? undefined,
       equipmentConditionValue: r.equipment_condition_value ?? undefined,
       equipmentConditionLabel: r.equipment_condition_label ?? undefined,
       equipmentRepairNotes: r.equipment_repair_notes ?? undefined,
@@ -231,12 +298,21 @@ export async function loadOperationsByEquipmentFromSupabase(
   }
 
   try {
-    return await attempt(`${baseSelect}, ${extraSelect}`)
+    if (fuelLeftColumnAvailable === false) {
+      return await attempt(`${baseSelect}, ${equipmentSelect}`)
+    }
+    return await attempt(`${baseSelect}, ${equipmentSelect}, ${equipmentFuelLeftSelect}`)
   } catch (e: unknown) {
-    const err = e as { code?: string; message?: string }
-    const isColumnError = err?.code === '42703' || /column .* does not exist/i.test(err?.message ?? '')
-    if (!isColumnError) throw e
-    return attempt(baseSelect)
+    if (!isMissingColumnError(e)) throw e
+    if (isFuelLeftColumnMissingError(e)) fuelLeftColumnAvailable = false
+    try {
+      // Сначала без `equipment_fuel_left_percent`, но с остальными equipment-полями.
+      return await attempt(`${baseSelect}, ${equipmentSelect}`)
+    } catch (e2: unknown) {
+      if (!isMissingColumnError(e2)) throw e2
+      if (isFuelLeftColumnMissingError(e2)) fuelLeftColumnAvailable = false
+      return attempt(baseSelect)
+    }
   }
 }
 

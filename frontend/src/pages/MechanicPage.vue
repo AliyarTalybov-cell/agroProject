@@ -111,6 +111,13 @@ const finishNotesModalOpen = ref(false)
 const finishNotesType = ref<'downtime' | 'operation' | null>(null)
 const finishNotesText = ref('')
 
+// Для операций с техникой: сколько топлива осталось у техники (после остановки)
+const equipmentFuelLeftPercent = ref<number>(0)
+
+const shouldAskEquipmentFuelLeft = computed(
+  () => finishNotesType.value === 'operation' && !!activeOperation.value?.equipmentId,
+)
+
 const newFieldName = ref('')
 const newFieldOperation = ref('')
 
@@ -264,6 +271,13 @@ function startDowntime(reason: { label: string; category: DowntimeCategory }) {
 function openFinishNotesModal(type: 'downtime' | 'operation') {
   finishNotesType.value = type
   finishNotesText.value = ''
+  equipmentFuelLeftPercent.value = 0
+  if (type === 'operation' && activeOperation.value?.equipmentId) {
+    // По умолчанию ставим то, что было при старте операции.
+    equipmentFuelLeftPercent.value = typeof activeOperation.value.equipmentFuelPercent === 'number'
+      ? Math.round(activeOperation.value.equipmentFuelPercent)
+      : 0
+  }
   finishNotesModalOpen.value = true
 }
 
@@ -271,17 +285,20 @@ function closeFinishNotesModal() {
   finishNotesModalOpen.value = false
   finishNotesType.value = null
   finishNotesText.value = ''
+  equipmentFuelLeftPercent.value = 0
 }
 
 function confirmFinishNotes(notes: string | null) {
   const type = finishNotesType.value
-  closeFinishNotesModal()
   const notesVal = notes?.trim() || undefined
+  const fuelLeft =
+    type === 'operation' && activeOperation.value?.equipmentId ? equipmentFuelLeftPercent.value : undefined
+  closeFinishNotesModal()
   if (type === 'downtime') {
     stopDowntimeWithNotes(notesVal)
     isFinishedModalType.value = 'downtime'
   } else if (type === 'operation') {
-    stopOperationWithNotes(notesVal)
+    stopOperationWithNotes(notesVal, fuelLeft)
     isFinishedModalType.value = 'operation'
   }
   finishNotesText.value = ''
@@ -316,13 +333,23 @@ function stopDowntimeWithNotes(notes?: string) {
   saveActive(null)
 }
 
-function stopOperationWithNotes(notes?: string) {
+function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | null) {
   if (!workStartedAt.value) return
   const now = new Date()
   const start = new Date(workStartedAt.value)
   const durationMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60000))
   const field = currentField.value
   const savedOp = activeOperation.value
+  const hasEquipment = !!savedOp?.equipmentId
+
+  // Страховка: если в сохранённом активном состоянии почему-то пустые значения,
+  // берем их из текущих слайдеров техники.
+  const equipmentFuelPercentFinal = savedOp?.equipmentFuelPercent ?? (hasEquipment ? Math.round(fuelPercent.value) : null)
+  const equipmentConditionValueFinal = savedOp?.equipmentConditionValue ?? (hasEquipment ? Math.round(conditionPercent.value) : null)
+  const equipmentConditionLabelFinal = savedOp?.equipmentConditionLabel ?? (hasEquipment ? equipmentConditionLabel.value : null)
+  const equipmentRepairNotesFinal =
+    savedOp?.equipmentRepairNotes ??
+    (hasEquipment && equipmentConditionRequiresNotes.value ? equipmentRepairNotes.value.trim() : null)
   const op = {
     id: now.getTime(),
     employee: employeeDisplayName.value,
@@ -334,15 +361,22 @@ function stopOperationWithNotes(notes?: string) {
     durationMinutes,
     notes,
     equipmentId: savedOp?.equipmentId ?? null,
-    equipmentFuelPercent: savedOp?.equipmentFuelPercent ?? null,
-    equipmentConditionValue: savedOp?.equipmentConditionValue ?? null,
-    equipmentConditionLabel: savedOp?.equipmentConditionLabel ?? null,
-    equipmentRepairNotes: savedOp?.equipmentRepairNotes ?? null,
+    equipmentFuelPercent: equipmentFuelPercentFinal ?? null,
+    equipmentFuelLeftPercent: equipmentFuelLeft ?? null,
+    equipmentConditionValue: equipmentConditionValueFinal ?? null,
+    equipmentConditionLabel: equipmentConditionLabelFinal ?? null,
+    equipmentRepairNotes: equipmentRepairNotesFinal ?? null,
   }
   appendOperation(op)
   if (isSupabaseConfigured()) {
-    insertOperation(op, auth.user.value?.id ?? null).catch(() => {})
+    insertOperation(op, auth.user.value?.id ?? null).catch((e) => {
+      console.error('insertOperation failed (MechanicPage)', e, { op })
+    })
   }
+  // Диагностика: чтобы понять, что реально уходит в insertOperation.
+  // В идеале equipmentFuelPercent/equipmentCondition* должны быть числами.
+  // eslint-disable-next-line no-console
+  console.debug('insertOperation payload (MechanicPage)', { op })
   saveActiveOperation(null)
   activeOperation.value = null
   workStartedAt.value = null
@@ -953,6 +987,23 @@ function addField() {
               placeholder="Например: Замена масла, проверка подшипников, дозаправка..."
             />
           </label>
+
+          <div v-if="shouldAskEquipmentFuelLeft" class="equipment-sliders" style="margin-top: var(--space-md);">
+            <div class="equipment-slider-block">
+              <div class="equipment-slider-row">
+                <span class="equipment-slider-label">Топливо осталось у техники</span>
+                <span class="equipment-slider-value">{{ equipmentFuelLeftPercent }}%</span>
+              </div>
+              <input
+                v-model.number="equipmentFuelLeftPercent"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                class="equipment-range"
+              />
+            </div>
+          </div>
         </div>
         <div class="modal-actions">
           <button class="modal-btn" type="button" @click="confirmFinishNotes(finishNotesText)">

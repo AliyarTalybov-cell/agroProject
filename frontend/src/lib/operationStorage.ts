@@ -10,6 +10,7 @@ export type StoredOperation = {
   notes?: string
   equipmentId?: string | null
   equipmentFuelPercent?: number | null
+  equipmentFuelLeftPercent?: number | null
   equipmentConditionValue?: number | null
   equipmentConditionLabel?: string | null
   equipmentRepairNotes?: string | null
@@ -23,6 +24,7 @@ export type ActiveOperation = {
   employee: string
   equipmentId?: string | null
   equipmentFuelPercent?: number | null
+  equipmentFuelLeftPercent?: number | null
   equipmentConditionValue?: number | null
   equipmentConditionLabel?: string | null
   equipmentRepairNotes?: string | null

@@ -26,6 +26,7 @@ create table if not exists public.operations (
   operation text,
   equipment_id uuid references public.equipment(id) on delete set null,
   equipment_fuel_percent int,
+  equipment_fuel_left_percent int,
   equipment_condition_value int,
   equipment_condition_label text,
   equipment_repair_notes text,

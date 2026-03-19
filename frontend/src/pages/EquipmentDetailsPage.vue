@@ -142,6 +142,14 @@ function fuelBarClass(pct: number | null | undefined): string {
   return 'equipment-history-fuel-fill--high'
 }
 
+function fuelStartValue(h: EquipmentOperationHistoryRow): number | null {
+  return h.equipmentFuelPercent ?? null
+}
+
+function fuelFinalValue(h: EquipmentOperationHistoryRow): number | null {
+  return h.equipmentFuelLeftPercent ?? null
+}
+
 /** Раскрытие карточек истории */
 const expandedHistory = ref<Record<number, boolean>>({})
 
@@ -155,9 +163,11 @@ function toggleHistoryExpand(id: number) {
 
 function initHistoryExpanded() {
   const next: Record<number, boolean> = {}
-  for (const h of history.value) {
-    next[h.id] = true
-  }
+  // По умолчанию раскрываем только 3 самых свежих записи (они уже отсортированы DESC по `start_iso` на бэке).
+  const DEFAULT_OPEN_COUNT = 3
+  const openIds = new Set(history.value.slice(0, DEFAULT_OPEN_COUNT).map((h) => h.id))
+
+  for (const h of history.value) next[h.id] = openIds.has(h.id)
   expandedHistory.value = next
 }
 
@@ -513,77 +523,74 @@ onMounted(refreshAll)
                 :aria-expanded="isHistoryExpanded(h.id)"
                 @click="toggleHistoryExpand(h.id)"
               >
-                <span
-                  class="equipment-history-op-icon"
-                  :style="{ background: visual.boxBg, color: visual.iconColor }"
-                  aria-hidden="true"
-                >
-                  <!-- Агрохим / анализ -->
-                  <template v-if="visual.kind === 'analysis'">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M3 6h18" />
-                      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-                      <path d="M10 11v6" />
-                      <path d="M14 11v6" />
-                    </svg>
-                  </template>
-                  <!-- Обработка полей -->
-                  <template v-else-if="visual.kind === 'field'">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 3.5 2 8.8-1.73 2.61-3 4.5-8 6.2Z" />
-                      <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
-                    </svg>
-                  </template>
-                  <!-- Контроль полевых работ -->
-                  <template v-else-if="visual.kind === 'control'">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
-                      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                      <path d="M9 14l2 2 4-4" />
-                    </svg>
-                  </template>
-                  <template v-else>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M14 2l-1 1 7 7 1-1-7-7z" />
-                      <path d="M3 21l3-1 14-14-2-2L4 18l-1 3z" />
-                    </svg>
-                  </template>
-                </span>
-                <div class="equipment-history-op-text">
-                  <div class="equipment-history-op-title">{{ h.operation || 'Операция' }}</div>
-                  <div class="equipment-history-op-meta">
-                    {{ formatDateTime(h.startISO) }} • Длительность: {{ h.durationMinutes }} мин
+                <div class="equipment-history-toggle-left">
+                  <span
+                    class="equipment-history-op-icon"
+                    :style="{ background: visual.boxBg, color: visual.iconColor }"
+                    aria-hidden="true"
+                  >
+                    <!-- Агрохим / анализ -->
+                    <template v-if="visual.kind === 'analysis'">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 6h18" />
+                        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                        <path d="M10 11v6" />
+                        <path d="M14 11v6" />
+                      </svg>
+                    </template>
+                    <!-- Обработка полей -->
+                    <template v-else-if="visual.kind === 'field'">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 3.5 2 8.8-1.73 2.61-3 4.5-8 6.2Z" />
+                        <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
+                      </svg>
+                    </template>
+                    <!-- Контроль полевых работ -->
+                    <template v-else-if="visual.kind === 'control'">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+                        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                        <path d="M9 14l2 2 4-4" />
+                      </svg>
+                    </template>
+                    <template v-else>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2l-1 1 7 7 1-1-7-7z" />
+                        <path d="M3 21l3-1 14-14-2-2L4 18l-1 3z" />
+                        <path d="M13 6l5 5" />
+                      </svg>
+                    </template>
+                  </span>
+                  <div class="equipment-history-op-text">
+                    <div class="equipment-history-op-title">{{ h.operation || 'Операция' }}</div>
+                    <div class="equipment-history-op-meta">
+                      {{ formatDateTime(h.startISO) }} • Длительность: {{ h.durationMinutes }} мин
+                    </div>
                   </div>
                 </div>
-                <span class="equipment-history-chevron" :class="{ 'equipment-history-chevron--open': isHistoryExpanded(h.id) }" aria-hidden="true">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="m6 9 6 6 6-6" />
-                  </svg>
-                </span>
+
+                <div class="equipment-history-toggle-right">
+                  <div class="equipment-history-toggle-employee">
+                    <span class="equipment-history-avatar" :style="employeeAvatarStyle(h.employee)">{{ employeeInitials(h.employee) }}</span>
+                    <span class="equipment-history-toggle-employee-name">{{ h.employee }}</span>
+                  </div>
+                  <span class="equipment-history-condition-pill" :class="conditionToneClass(h)">
+                    {{ h.equipmentConditionLabel || (h.equipmentConditionValue != null ? `${h.equipmentConditionValue}%` : '—') }}
+                  </span>
+                  <span class="equipment-history-chevron" :class="{ 'equipment-history-chevron--open': isHistoryExpanded(h.id) }" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </span>
+                </div>
               </button>
 
               <div v-show="isHistoryExpanded(h.id)" class="equipment-history-card-body">
-                <div class="equipment-history-cols">
-                  <div class="equipment-history-col">
-                    <div class="equipment-history-col-head">
-                      <span class="equipment-history-col-icon" aria-hidden="true">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                          <circle cx="12" cy="7" r="4" />
-                        </svg>
-                      </span>
-                      <span class="equipment-history-col-label">Исполнитель</span>
-                    </div>
-                    <div class="equipment-history-employee-row">
-                      <span class="equipment-history-avatar" :style="employeeAvatarStyle(h.employee)">{{ employeeInitials(h.employee) }}</span>
-                      <span class="equipment-history-employee-name">{{ h.employee }}</span>
-                    </div>
-                  </div>
-
-                  <div class="equipment-history-col">
-                    <div class="equipment-history-col-head">
-                      <span class="equipment-history-col-icon" aria-hidden="true">
+                <div class="equipment-history-body-grid">
+                  <div class="equipment-history-body-col">
+                    <div class="equipment-history-body-col-head">
+                      <span class="equipment-history-body-col-icon" aria-hidden="true">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                           <path d="M5 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
                           <path d="M7 8h4" />
@@ -593,47 +600,64 @@ onMounted(refreshAll)
                           <path d="M19 18v2" />
                         </svg>
                       </span>
-                      <span class="equipment-history-col-label">Топливо</span>
+                      <span class="equipment-history-body-col-label">Топливо</span>
                     </div>
-                    <div class="equipment-history-fuel">
-                      <span class="equipment-history-fuel-pct">{{ h.equipmentFuelPercent != null ? `${h.equipmentFuelPercent}%` : '—' }}</span>
-                      <div class="equipment-history-fuel-track">
-                        <div
-                          class="equipment-history-fuel-fill"
-                          :class="fuelBarClass(h.equipmentFuelPercent ?? null)"
-                          :style="{ width: h.equipmentFuelPercent != null ? `${Math.min(100, Math.max(0, h.equipmentFuelPercent))}%` : '0%' }"
-                        />
+
+                    <div class="equipment-history-fuel-rows">
+                      <div class="equipment-history-fuel-row">
+                        <span class="equipment-history-fuel-row-label">Старт</span>
+                        <div class="equipment-history-fuel-row-track">
+                          <div
+                            class="equipment-history-fuel-fill"
+                            :class="fuelBarClass(fuelStartValue(h))"
+                            :style="{ width: fuelStartValue(h) != null ? `${Math.min(100, Math.max(0, fuelStartValue(h) as number))}%` : '0%' }"
+                          />
+                        </div>
+                        <span class="equipment-history-fuel-row-pct">{{ fuelStartValue(h) != null ? `${fuelStartValue(h)}%` : '—' }}</span>
+                      </div>
+
+                      <div v-if="fuelFinalValue(h) != null" class="equipment-history-fuel-row equipment-history-fuel-row--final">
+                        <span class="equipment-history-fuel-row-label">Остаток</span>
+                        <div class="equipment-history-fuel-row-track">
+                          <div
+                            class="equipment-history-fuel-fill"
+                            :class="fuelBarClass(fuelFinalValue(h))"
+                            :style="{ width: fuelFinalValue(h) != null ? `${Math.min(100, Math.max(0, fuelFinalValue(h) as number))}%` : '0%' }"
+                          />
+                        </div>
+                        <span class="equipment-history-fuel-row-pct">{{ fuelFinalValue(h) != null ? `${fuelFinalValue(h)}%` : '—' }}</span>
                       </div>
                     </div>
                   </div>
 
-                  <div class="equipment-history-col">
-                    <div class="equipment-history-col-head">
-                      <span class="equipment-history-col-icon" aria-hidden="true">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                  <div class="equipment-history-body-col">
+                    <div class="equipment-history-body-col-head">
+                      <span class="equipment-history-body-col-icon" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M12 20h9" />
+                          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 18l-4 1 1-4Z" />
                         </svg>
                       </span>
-                      <span class="equipment-history-col-label">Состояние</span>
+                      <span class="equipment-history-body-col-label">Список дел / заметки</span>
                     </div>
-                    <div class="equipment-history-pill" :class="conditionToneClass(h)">
-                      {{ h.equipmentConditionLabel || (h.equipmentConditionValue != null ? `${h.equipmentConditionValue}%` : '—') }}
+                    <div class="equipment-history-body-box">
+                      {{ h.notes || '—' }}
                     </div>
                   </div>
-                </div>
 
-                <div v-if="h.equipmentRepairNotes" class="equipment-history-repair-block">
-                  <div class="equipment-history-repair-head">
-                    <span class="equipment-history-col-icon" aria-hidden="true">
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path
-                          d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
-                        />
-                      </svg>
-                    </span>
-                    <span class="equipment-history-repair-label">Починка</span>
+                  <div class="equipment-history-body-col">
+                    <div class="equipment-history-body-col-head">
+                      <span class="equipment-history-body-col-icon" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                        </svg>
+                      </span>
+                      <span class="equipment-history-body-col-label">Починка / проблемы</span>
+                    </div>
+                    <div class="equipment-history-body-box">
+                      {{ h.equipmentRepairNotes || '—' }}
+                    </div>
                   </div>
-                  <p class="equipment-history-repair-text">{{ h.equipmentRepairNotes }}</p>
                 </div>
               </div>
             </li>
@@ -1138,7 +1162,7 @@ onMounted(refreshAll)
 }
 
 .equipment-details-history {
-  padding: var(--space-lg);
+  padding: var(--space-md);
 }
 
 .equipment-history-list {
@@ -1166,9 +1190,10 @@ onMounted(refreshAll)
 .equipment-history-card-toggle {
   width: 100%;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px;
+  padding: 12px 12px;
   border: none;
   background: transparent;
   cursor: pointer;
@@ -1182,9 +1207,9 @@ onMounted(refreshAll)
 }
 
 .equipment-history-op-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1196,6 +1221,45 @@ onMounted(refreshAll)
   min-width: 0;
 }
 
+.equipment-history-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.equipment-history-toggle-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.equipment-history-toggle-employee {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.equipment-history-toggle-employee-name {
+  font-weight: 900;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.equipment-history-condition-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 900;
+  font-size: 0.8rem;
+  border: 1px solid transparent;
+}
+
 .equipment-history-op-title {
   font-weight: 800;
   font-size: 0.95rem;
@@ -1204,8 +1268,8 @@ onMounted(refreshAll)
 }
 
 .equipment-history-op-meta {
-  margin-top: 4px;
-  font-size: 0.8rem;
+  margin-top: 2px;
+  font-size: 0.78rem;
   color: var(--text-secondary);
   font-weight: 500;
 }
@@ -1216,7 +1280,7 @@ onMounted(refreshAll)
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 4px;
+  margin-top: 2px;
   transition: transform 0.2s ease;
 }
 
@@ -1225,13 +1289,13 @@ onMounted(refreshAll)
 }
 
 .equipment-history-card-body {
-  padding: 0 16px 16px;
+  padding: 0 12px 12px;
 }
 
 .equipment-history-cols {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(0, 1fr);
-  gap: 12px 18px;
+  gap: 10px 14px;
   align-items: start;
 }
 
@@ -1239,7 +1303,7 @@ onMounted(refreshAll)
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .equipment-history-col-icon {
@@ -1264,7 +1328,30 @@ onMounted(refreshAll)
 .equipment-history-fuel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+}
+
+.equipment-history-fuel-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.equipment-history-fuel-block-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.equipment-history-fuel-block--final {
+  padding-top: 6px;
+  border-top: 1px dashed var(--topbar-border);
+}
+
+.equipment-history-fuel-row--final {
+  margin-top: 2px;
 }
 
 .equipment-history-fuel-pct {
@@ -1274,7 +1361,7 @@ onMounted(refreshAll)
 }
 
 .equipment-history-fuel-track {
-  height: 8px;
+  height: 6px;
   border-radius: 999px;
   background: var(--bg-base);
   border: 1px solid var(--border-color);
@@ -1361,9 +1448,96 @@ onMounted(refreshAll)
   color: #b91c1c;
 }
 
+.equipment-history-body-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.equipment-history-body-col-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.equipment-history-body-col-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  opacity: 0.95;
+}
+
+.equipment-history-body-col-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.equipment-history-body-col-label {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.equipment-history-body-box {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+  white-space: pre-wrap;
+  max-height: 92px;
+  overflow: auto;
+  word-break: break-word;
+}
+
+.equipment-history-fuel-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.equipment-history-fuel-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.equipment-history-fuel-row-label {
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--text-secondary);
+}
+
+.equipment-history-fuel-row-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.equipment-history-fuel-row-track .equipment-history-fuel-fill {
+  height: 100%;
+}
+
+.equipment-history-fuel-row-pct {
+  font-size: 0.85rem;
+  font-weight: 900;
+  color: var(--text-primary);
+}
+
 .equipment-history-repair-block {
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px dashed var(--topbar-border);
 }
 
@@ -1389,6 +1563,36 @@ onMounted(refreshAll)
   color: var(--text-primary);
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.equipment-history-notes-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--topbar-border);
+}
+
+.equipment-history-notes-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.equipment-history-notes-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.equipment-history-notes-text {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  line-height: 1.45;
 }
 
 /* Пагинация — стиль как у «Задач» (TaskManagementPage) */
@@ -1528,6 +1732,9 @@ onMounted(refreshAll)
   }
   .equipment-history-cols {
     grid-template-columns: 1fr;
+  }
+  .equipment-history-body-box {
+    max-height: 76px;
   }
 }
 </style>
