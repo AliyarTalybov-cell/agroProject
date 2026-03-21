@@ -33,6 +33,7 @@ import {
   type FieldRow,
 } from '@/lib/fieldsSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
+import UiDeleteButton from '@/components/UiDeleteButton.vue'
 
 type CropKey = 'all' | 'wheat' | 'corn' | 'soy' | 'sunflower' | 'none' | 'meadow'
 
@@ -1176,9 +1177,7 @@ onMounted(async () => {
                     <button type="button" class="fields-action-btn" aria-label="Редактировать" title="Редактировать" @click="openEditField(f)">
                       <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                     </button>
-                    <button type="button" class="fields-action-btn fields-action-btn--danger" aria-label="Удалить" title="Удалить" @click="openDeleteConfirm(f)">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
-                    </button>
+                    <UiDeleteButton size="sm" @click="openDeleteConfirm(f)" />
                   </div>
                 </td>
               </tr>
@@ -1293,7 +1292,7 @@ onMounted(async () => {
                     <td class="refs-cell-muted">{{ r.created_by || '—' }}</td>
                     <td class="refs-cell-muted">{{ formatRefDate(r.created_at) }}</td>
                     <td class="refs-cell-actions">
-                      <button type="button" class="refs-btn refs-btn--danger" :disabled="refsLoading" @click="openDeleteReasonConfirm(r)">Удалить</button>
+                      <UiDeleteButton size="xs" :disabled="refsLoading" @click="openDeleteReasonConfirm(r)" />
                     </td>
                   </tr>
                   <tr v-if="!downtimeReasons.length && !refsLoading">
@@ -1358,7 +1357,7 @@ onMounted(async () => {
                     <td class="refs-cell-muted">{{ op.created_by || '—' }}</td>
                     <td class="refs-cell-muted">{{ formatRefDate(op.created_at) }}</td>
                     <td class="refs-cell-actions">
-                      <button type="button" class="refs-btn refs-btn--danger" :disabled="refsLoading" @click="openDeleteOperationConfirm(op)">Удалить</button>
+                      <UiDeleteButton size="xs" :disabled="refsLoading" @click="openDeleteOperationConfirm(op)" />
                     </td>
                   </tr>
                   <tr v-if="!workOperations.length && !refsLoading">
@@ -1419,7 +1418,7 @@ onMounted(async () => {
                   <tr v-for="t in paginatedLandTypes" :key="t.id">
                     <td>{{ t.name }}</td>
                     <td class="refs-cell-actions">
-                      <button type="button" class="refs-btn refs-btn--danger" :disabled="refsLoading" @click="openDeleteLandTypeConfirm(t)">Удалить</button>
+                      <UiDeleteButton size="xs" :disabled="refsLoading" @click="openDeleteLandTypeConfirm(t)" />
                     </td>
                   </tr>
                   <tr v-if="!landTypes.length && !refsLoading">
@@ -1480,7 +1479,7 @@ onMounted(async () => {
                   <tr v-for="c in paginatedCrops" :key="c.id">
                     <td>{{ c.label }}</td>
                     <td class="refs-cell-actions">
-                      <button type="button" class="refs-btn refs-btn--danger" :disabled="refsLoading" @click="openDeleteCropConfirm(c)">Удалить</button>
+                      <UiDeleteButton size="xs" :disabled="refsLoading" @click="openDeleteCropConfirm(c)" />
                     </td>
                   </tr>
                   <tr v-if="!crops.length && !refsLoading">
@@ -1669,7 +1668,7 @@ onMounted(async () => {
                         <span>PDF</span>
                       </div>
                       <span class="modal-dropzone-filename">{{ newFieldSchemeFileName }}</span>
-                      <button type="button" class="modal-dropzone-remove" @click.prevent.stop="clearSchemeFile">Удалить</button>
+                      <UiDeleteButton size="xs" hover-label="Удалить файл" title="Удалить файл" aria-label="Удалить файл" @click.prevent.stop="clearSchemeFile" />
                     </div>
                   </template>
                   <template v-else>
@@ -1705,7 +1704,7 @@ onMounted(async () => {
           </p>
           <div class="fields-confirm-actions">
             <button type="button" class="modal-btn-ghost" @click="closeDeleteConfirm">Отмена</button>
-            <button type="button" class="modal-btn modal-btn--danger" @click="confirmDelete">Удалить</button>
+            <UiDeleteButton size="md" @click="confirmDelete" />
           </div>
         </div>
       </div>
@@ -1726,7 +1725,7 @@ onMounted(async () => {
           </p>
           <div class="fields-confirm-actions">
             <button type="button" class="modal-btn-ghost" @click="closeDeleteReasonConfirm">Отмена</button>
-            <button type="button" class="modal-btn modal-btn--danger" @click="confirmDeleteReason">Удалить</button>
+            <UiDeleteButton size="md" @click="confirmDeleteReason" />
           </div>
         </div>
       </div>
@@ -1747,7 +1746,7 @@ onMounted(async () => {
           </p>
           <div class="fields-confirm-actions">
             <button type="button" class="modal-btn-ghost" @click="closeDeleteOperationConfirm">Отмена</button>
-            <button type="button" class="modal-btn modal-btn--danger" @click="confirmDeleteOperation">Удалить</button>
+            <UiDeleteButton size="md" @click="confirmDeleteOperation" />
           </div>
         </div>
       </div>
@@ -1768,7 +1767,7 @@ onMounted(async () => {
           </p>
           <div class="fields-confirm-actions">
             <button type="button" class="modal-btn-ghost" @click="closeDeleteLandTypeConfirm">Отмена</button>
-            <button type="button" class="modal-btn modal-btn--danger" @click="confirmDeleteLandType">Удалить</button>
+            <UiDeleteButton size="md" @click="confirmDeleteLandType" />
           </div>
         </div>
       </div>
@@ -1789,7 +1788,7 @@ onMounted(async () => {
           </p>
           <div class="fields-confirm-actions">
             <button type="button" class="modal-btn-ghost" @click="closeDeleteCropConfirm">Отмена</button>
-            <button type="button" class="modal-btn modal-btn--danger" @click="confirmDeleteCrop">Удалить</button>
+            <UiDeleteButton size="md" @click="confirmDeleteCrop" />
           </div>
         </div>
       </div>
@@ -2059,7 +2058,7 @@ onMounted(async () => {
   box-shadow: 0 0 0 1px var(--accent-green);
 }
 .fields-th-actions,
-.fields-td-actions { width: 120px; min-width: 120px; text-align: right; }
+.fields-td-actions { width: 148px; min-width: 148px; text-align: right; }
 .fields-table tbody tr {
   transition: background 0.15s ease;
 }
@@ -2342,10 +2341,6 @@ onMounted(async () => {
 .fields-action-btn:nth-child(2):hover {
   color: var(--accent-green);
   background: var(--nav-active-bg);
-}
-.fields-action-btn--danger:hover {
-  background: color-mix(in srgb, var(--danger-red) 15%, transparent);
-  color: var(--danger-red);
 }
 .fields-load-error {
   padding: var(--space-md) 24px;
@@ -2797,13 +2792,6 @@ onMounted(async () => {
   opacity: 0.6;
   cursor: not-allowed;
 }
-.refs-btn--danger {
-  background: #c0392b;
-  color: #fff;
-}
-.refs-btn--danger:hover:not(:disabled) {
-  background: #a93226;
-}
 .refs-th-actions {
   width: 100px;
   text-align: right;
@@ -3239,20 +3227,6 @@ onMounted(async () => {
   word-break: break-all;
   font-size: 0.875rem;
 }
-.modal-dropzone-remove {
-  padding: var(--space-xs) var(--space-sm);
-  font-size: 0.875rem;
-  color: var(--accent-green);
-  background: transparent;
-  border: 1px solid var(--accent-green);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.2s, color 0.2s;
-}
-.modal-dropzone-remove:hover {
-  background: var(--accent-green);
-  color: var(--bg-panel);
-}
 
 .modal-backdrop {
   position: fixed;
@@ -3344,16 +3318,6 @@ onMounted(async () => {
   background: var(--sidebar-hover-bg);
   color: var(--text-primary);
 }
-.modal-btn--danger {
-  background: var(--danger-red);
-  border-color: var(--danger-red);
-  color: #fff;
-}
-.modal-btn--danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger-red) 85%, black);
-  border-color: color-mix(in srgb, var(--danger-red) 85%, black);
-  color: #fff;
-}
 /* Модальное окно подтверждения удаления (как в ProfilePage) */
 .fields-confirm-backdrop {
   position: fixed;
@@ -3388,6 +3352,7 @@ onMounted(async () => {
 }
 .fields-confirm-actions {
   display: flex;
+  align-items: center;
   gap: var(--space-md);
   justify-content: flex-end;
 }

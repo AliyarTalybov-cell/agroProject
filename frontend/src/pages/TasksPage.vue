@@ -17,6 +17,7 @@ import {
 } from '@/lib/calendarTasksSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
+import UiDeleteButton from '@/components/UiDeleteButton.vue'
 
 type CalendarTask = {
   id: string
@@ -1045,13 +1046,13 @@ async function confirmDeleteTask() {
                     <span class="modal-file-name">{{ f.file_name }}</span>
                     <span class="modal-file-size">{{ formatFileSize(f.file_size) }}</span>
                   </div>
-                  <button type="button" class="modal-file-delete" aria-label="Удалить файл" @click.prevent="removeFile(f)">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                      <line x1="10" x2="10" y1="11" y2="17" />
-                      <line x1="14" x2="14" y1="11" y2="17" />
-                    </svg>
-                  </button>
+                  <UiDeleteButton
+                    size="xs"
+                    aria-label="Удалить файл"
+                    title="Удалить файл"
+                    hover-label="Удалить файл"
+                    @click.prevent="removeFile(f)"
+                  />
                 </a>
                 <button
                   v-if="editingTaskId"
@@ -1077,14 +1078,16 @@ async function confirmDeleteTask() {
 
           <!-- Подвал по макету: bg-gray-50, border-t, Удалить слева, Отмена + Сохранить справа -->
           <div class="modal-actions modal-actions--design">
-            <button v-if="editingTaskId" type="button" class="modal-btn-danger modal-btn-danger--design" :disabled="taskSaveLoading" @click="openDeleteConfirm">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                <line x1="10" x2="10" y1="11" y2="17" />
-                <line x1="14" x2="14" y1="11" y2="17" />
-              </svg>
-              Удалить задачу
-            </button>
+            <UiDeleteButton
+              v-if="editingTaskId"
+              size="md"
+              wide
+              :disabled="taskSaveLoading"
+              hover-label="Удалить задачу"
+              title="Удалить задачу"
+              aria-label="Удалить задачу"
+              @click="openDeleteConfirm"
+            />
             <div class="modal-actions-right">
               <button type="button" class="modal-btn-ghost modal-btn-ghost--design" :disabled="taskSaveLoading" @click="closeTaskModal">Отмена</button>
               <button type="submit" class="modal-btn modal-btn--design" :disabled="taskSaveLoading">
@@ -1115,13 +1118,7 @@ async function confirmDeleteTask() {
           <button type="button" class="modal-btn-ghost modal-btn-ghost--design" :disabled="deleteInProgress" @click="closeDeleteConfirm">
             Отмена
           </button>
-          <button type="button" class="modal-btn modal-btn--design modal-btn--danger" :disabled="deleteInProgress" @click="confirmDeleteTask">
-            <span v-if="deleteInProgress" class="modal-btn-loading">
-              <span class="modal-btn-spinner" aria-hidden="true" />
-              Удаление…
-            </span>
-            <span v-else>Удалить</span>
-          </button>
+          <UiDeleteButton size="md" :loading="deleteInProgress" :disabled="deleteInProgress" @click="confirmDeleteTask" />
         </div>
       </div>
     </div>
@@ -1513,8 +1510,15 @@ async function confirmDeleteTask() {
     gap: 10px;
   }
 
-  .modal-actions--task {
+  .modal-actions.modal-actions--design {
     flex-direction: column;
+    align-items: center;
+  }
+
+  .modal-actions.modal-actions--design .modal-actions-right {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
   }
 
   .day-task-title {
@@ -1533,45 +1537,6 @@ async function confirmDeleteTask() {
     padding: 3px 6px;
   }
 
-  .modal-backdrop {
-    padding: var(--space-sm);
-    align-items: flex-end;
-  }
-
-  .modal-backdrop .modal {
-    max-height: 85vh;
-    border-radius: 20px 20px 0 0;
-  }
-
-  .modal-header {
-    padding: 16px 20px;
-  }
-
-  .modal-title {
-    font-size: 1.1rem;
-  }
-
-  .modal-actions {
-    padding: 16px 20px;
-    gap: 10px;
-  }
-
-  .modal-actions--task {
-    flex-direction: column;
-  }
-
-  .modal-actions--task .modal-btn-danger {
-    order: 1;
-    width: 100%;
-    justify-content: center;
-  }
-
-  .modal-actions--task .modal-btn-ghost,
-  .modal-actions--task .modal-btn {
-    order: 2;
-    width: 100%;
-    justify-content: center;
-  }
 }
 
 .calendar-card {
@@ -2160,25 +2125,6 @@ async function confirmDeleteTask() {
   background: rgba(148, 163, 184, 0.16);
 }
 
-.modal-btn-danger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: auto;
-  padding: 10px 20px;
-  border-radius: 12px;
-  border: none;
-  background: transparent;
-  color: #dc2626;
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.modal-btn-danger:hover {
-  background: rgba(220, 38, 38, 0.1);
-}
-
 /* Модальное окно: поверх страницы (по дизайну HTML) */
 .modal-backdrop {
   position: fixed;
@@ -2616,15 +2562,6 @@ async function confirmDeleteTask() {
   color: var(--text-secondary);
 }
 
-.modal-file-card--design .modal-file-delete {
-  color: var(--text-secondary);
-  padding: 4px;
-}
-
-.modal-file-card--design .modal-file-delete:hover {
-  color: #dc2626;
-}
-
 .modal-attach-placeholder--design {
   display: flex;
   align-items: center;
@@ -2656,23 +2593,6 @@ async function confirmDeleteTask() {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-}
-
-.modal-btn-danger--design {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  color: #dc2626;
-  font-weight: 700;
-  font-size: 0.875rem;
-}
-
-.modal-btn-danger--design:hover {
-  color: #b91c1c;
 }
 
 .modal-actions-right {
@@ -2965,19 +2885,6 @@ async function confirmDeleteTask() {
   color: var(--text-secondary);
 }
 
-.modal-file-delete {
-  flex-shrink: 0;
-  padding: 4px;
-  color: var(--text-secondary);
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-.modal-file-delete:hover {
-  color: #dc2626;
-}
-
 .modal-attach-placeholder--muted {
   cursor: default;
   opacity: 0.8;
@@ -3096,11 +3003,6 @@ async function confirmDeleteTask() {
   border-top: 1px solid var(--border-color);
 }
 
-.modal-actions--task {
-  justify-content: space-between;
-  flex-wrap: wrap;
-}
-
 .modal-btn,
 .modal-btn-ghost {
   padding: 9px 18px;
@@ -3203,16 +3105,8 @@ async function confirmDeleteTask() {
 
 .modal-confirm-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
-}
-
-.modal-btn--danger {
-  background: #dc2626;
-  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.35);
-}
-
-.modal-btn--danger:hover:not(:disabled) {
-  background: #b91c1c;
 }
 </style>

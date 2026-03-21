@@ -12,6 +12,7 @@ import {
   type EquipmentCondition,
 } from '@/lib/equipmentSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
+import UiDeleteButton from '@/components/UiDeleteButton.vue'
 
 const EQUIPMENT_TYPES = [
   { value: '', label: 'Выберите тип' },
@@ -492,7 +493,7 @@ async function exportToPdf() {
               <th>Тип техники</th>
               <th>Ответственный</th>
               <th>Состояние</th>
-              <th>Действия</th>
+              <th class="equipment-th-actions">Действия</th>
             </tr>
           </thead>
           <tbody>
@@ -518,7 +519,7 @@ async function exportToPdf() {
               <td>
                 <span :class="['equipment-condition-badge', conditionClass(row.condition)]">{{ conditionLabel(row.condition) }}</span>
               </td>
-              <td>
+              <td class="equipment-td-actions">
                 <div class="equipment-actions">
                   <button
                     type="button"
@@ -529,15 +530,7 @@ async function exportToPdf() {
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                   </button>
-                  <button
-                    type="button"
-                    class="equipment-action-btn equipment-action-btn--danger"
-                    aria-label="Удалить"
-                    title="Удалить"
-                    @click="removeEquipment(row)"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
-                  </button>
+                  <UiDeleteButton size="sm" @click="removeEquipment(row)" />
                 </div>
               </td>
             </tr>
@@ -933,6 +926,13 @@ async function exportToPdf() {
   border-bottom: 1px solid var(--border-color);
 }
 
+.equipment-th-actions,
+.equipment-td-actions {
+  width: 148px;
+  min-width: 148px;
+  text-align: right;
+}
+
 .equipment-table th {
   font-weight: 600;
   color: var(--text-secondary);
@@ -1016,8 +1016,11 @@ async function exportToPdf() {
 }
 
 .equipment-actions {
-  display: flex;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 4px;
+  flex-wrap: nowrap;
 }
 
 .equipment-action-btn {
@@ -1032,11 +1035,6 @@ async function exportToPdf() {
 .equipment-action-btn:hover {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
-}
-
-.equipment-action-btn--danger:hover {
-  background: rgba(185, 28, 28, 0.1);
-  color: var(--danger-red);
 }
 
 .equipment-empty {

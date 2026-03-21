@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import type { EmployeeRole, EmployeeRow, PositionRow } from '@/lib/employeesSupabase'
 import { deleteEmployee, updateEmployee } from '@/lib/employeesSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
+import UiDeleteButton from '@/components/UiDeleteButton.vue'
 
 const props = defineProps<{
   open: boolean
@@ -211,10 +212,17 @@ watch(
         </div>
 
         <footer class="eem-footer">
-          <button type="button" class="eem-del" :disabled="busy" @click="confirmDelete = true">
-            <svg class="eem-del-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
-            Удалить сотрудника
-          </button>
+          <div class="eem-footer-delete">
+            <UiDeleteButton
+              size="md"
+              wide
+              :disabled="busy"
+              hover-label="Удалить сотрудника"
+              title="Удалить сотрудника"
+              aria-label="Удалить сотрудника"
+              @click="confirmDelete = true"
+            />
+          </div>
           <div class="eem-actions">
             <button type="button" class="eem-btn eem-btn--ghost" :disabled="busy" @click="close">Закрыть</button>
             <button type="button" class="eem-btn eem-btn--primary" :disabled="busy" @click="save">
@@ -229,9 +237,7 @@ watch(
             <div class="eem-confirm-text">Действие необратимо: будет удалён пользователь и профиль.</div>
             <div class="eem-confirm-actions">
               <button type="button" class="eem-btn eem-btn--ghost" :disabled="busy" @click="confirmDelete = false">Отмена</button>
-              <button type="button" class="eem-btn eem-btn--danger" :disabled="busy" @click="doDelete">
-                {{ busy ? 'Удаление…' : 'Удалить' }}
-              </button>
+              <UiDeleteButton size="md" :loading="busy" :disabled="busy" @click="doDelete" />
             </div>
           </div>
         </div>
@@ -545,23 +551,12 @@ watch(
   background: rgba(18, 32, 20, 0.98);
   border-top-color: rgba(255, 255, 255, 0.12);
 }
-.eem-del {
-  display: inline-flex;
+.eem-footer-delete {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: calc(100% - 12px);
+  display: flex;
   align-items: center;
-  gap: 8px;
-  border: none;
-  background: none;
-  color: var(--danger-red);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 0;
-}
-.eem-del:hover:not(:disabled) {
-  text-decoration: underline;
-}
-.eem-del-icon {
-  flex-shrink: 0;
 }
 .eem-actions {
   display: flex;
@@ -594,10 +589,6 @@ watch(
 }
 .eem-btn--primary:hover:not(:disabled) {
   background: var(--accent-green-hover);
-}
-.eem-btn--danger {
-  background: var(--danger-red);
-  color: #fff;
 }
 [data-theme='dark'] .eem-btn--ghost {
   background: var(--bg-panel);
@@ -637,6 +628,7 @@ watch(
 }
 .eem-confirm-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 12px;
 }

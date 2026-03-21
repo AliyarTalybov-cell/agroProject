@@ -14,6 +14,7 @@ import {
 import { loadOperationsByEquipmentFromSupabase, type EquipmentOperationHistoryRow } from '@/lib/analyticsSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
+import UiDeleteButton from '@/components/UiDeleteButton.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -495,9 +496,9 @@ onMounted(refreshAll)
                   @error="($event.target as HTMLImageElement).style.visibility = 'hidden'"
                 />
                 <span class="field-details-gallery-title">{{ item.title }}</span>
-                <button type="button" class="field-details-gallery-delete" @click.prevent="onDeletePhoto(item.photo)">
-                  ✕
-                </button>
+                <div class="field-details-gallery-delete-wrap">
+                  <UiDeleteButton size="xs" hover-label="Удалить" title="Удалить" @click.prevent="onDeletePhoto(item.photo)" />
+                </div>
               </div>
             </div>
           </div>
@@ -1038,27 +1039,11 @@ onMounted(refreshAll)
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.field-details-gallery-delete {
+.field-details-gallery-delete-wrap {
   position: absolute;
   top: 6px;
   right: 6px;
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  border: none;
-  background: rgba(255, 255, 255, 0.9);
-  color: #111827;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.75rem;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.35);
   z-index: 2;
-}
-.field-details-gallery-delete:hover {
-  background: #fee2e2;
-  color: #b91c1c;
 }
 
 .equipment-history-section {

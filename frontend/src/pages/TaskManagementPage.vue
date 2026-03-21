@@ -23,6 +23,7 @@ import { loadFields as loadFieldsApi } from '@/lib/fieldsSupabase'
 import { loadWorkOperations, type WorkOperationRow } from '@/lib/reasonsAndOperations'
 import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
+import UiDeleteButton from '@/components/UiDeleteButton.vue'
 
 type ViewMode = 'kanban' | 'list'
 type FilterKey = 'all' | 'mine'
@@ -1517,9 +1518,9 @@ function statusClass(s: Status) {
               <button type="button" class="task-detail-btn task-detail-btn--edit" @click="cancelDetailEdit">
                 Отмена
               </button>
-              <button type="button" class="task-detail-btn task-detail-btn--delete" @click="deleteTask">
-                Удалить
-              </button>
+              <div class="task-detail-del-wrap">
+                <UiDeleteButton size="md" @click="deleteTask" />
+              </div>
               <button
                 type="button"
                 class="task-detail-btn task-detail-btn--close task-detail-btn--saving"
@@ -1535,9 +1536,9 @@ function statusClass(s: Status) {
               <button type="button" class="task-detail-btn task-detail-btn--edit" @click="openEdit">
                 Редактировать
               </button>
-              <button type="button" class="task-detail-btn task-detail-btn--delete" @click="deleteTask">
-                Удалить
-              </button>
+              <div class="task-detail-del-wrap">
+                <UiDeleteButton size="md" @click="deleteTask" />
+              </div>
               <button type="button" class="task-detail-btn task-detail-btn--close" @click="closeTask">
                 Закрыть
               </button>
@@ -2675,15 +2676,6 @@ function statusClass(s: Status) {
   background: var(--accent-green-hover);
 }
 
-.task-form-delete {
-  padding: 10px 16px;
-  border: none;
-  background: transparent;
-  color: var(--danger-red);
-  font-size: 0.9375rem;
-  cursor: pointer;
-}
-
 .task-form-actions--detail {
   justify-content: flex-start;
   gap: var(--space-sm);
@@ -2727,14 +2719,9 @@ function statusClass(s: Status) {
   background: var(--bg-panel-hover);
 }
 
-.task-detail-btn--delete {
-  border: none;
-  background: transparent;
-  color: var(--danger-red);
-}
-
-.task-detail-btn--delete:hover {
-  background: rgba(211, 60, 60, 0.1);
+.task-detail-del-wrap {
+  display: flex;
+  align-items: center;
 }
 
 .task-detail-btn--close {
@@ -3314,13 +3301,8 @@ function statusClass(s: Status) {
   color: var(--text-primary);
 }
 
-[data-theme='dark'] .task-form-cancel:hover,
-[data-theme='dark'] .task-form-delete:hover {
+[data-theme='dark'] .task-form-cancel:hover {
   color: var(--text-primary);
-}
-
-[data-theme='dark'] .task-form-delete:hover {
-  color: var(--danger-red);
 }
 
 [data-theme='dark'] .task-detail-btn--edit {
@@ -3479,6 +3461,11 @@ function statusClass(s: Status) {
     width: 100%;
   }
 
+  .task-detail-actions .task-detail-del-wrap {
+    width: 100%;
+    justify-content: center;
+  }
+
   .task-pagination {
     flex-direction: column;
     align-items: stretch;
@@ -3579,6 +3566,11 @@ function statusClass(s: Status) {
 
   .task-detail-actions .task-detail-btn {
     width: 100%;
+  }
+
+  .task-detail-actions .task-detail-del-wrap {
+    width: 100%;
+    justify-content: center;
   }
 }
 </style>
