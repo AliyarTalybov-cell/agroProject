@@ -450,7 +450,7 @@ watch(
 }
 
 .eem-acc-switch-input:checked + .eem-acc-switch-slider {
-  background-color: #5fdd54;
+  background-color: var(--accent-green);
   border: 1px solid transparent;
 }
 
@@ -459,7 +459,7 @@ watch(
 }
 
 .eem-acc-switch-input:focus-visible + .eem-acc-switch-slider {
-  outline: calc(2px * 0.75) solid color-mix(in srgb, #5fdd54 70%, #333);
+  outline: calc(2px * 0.75) solid color-mix(in srgb, var(--accent-green) 75%, #333);
   outline-offset: calc(3px * 0.75);
 }
 
@@ -469,7 +469,7 @@ watch(
 }
 
 [data-theme='dark'] .eem-acc-switch-input:checked + .eem-acc-switch-slider {
-  background-color: #5fdd54;
+  background-color: var(--accent-green);
   border-color: transparent;
 }
 .eem-form {
