@@ -505,7 +505,7 @@ onMounted(refreshAll)
         </div>
       </div>
 
-      <section class="field-details-card equipment-history-section" style="margin-top: 24px;">
+      <section class="field-details-card equipment-history-section">
         <div class="field-details-media-header">
           <div>
             <h2 class="field-details-media-title">История взаимодействия</h2>
@@ -724,6 +724,9 @@ onMounted(refreshAll)
 /* Дизайн как на `FieldDetailsPage.vue` (классы field-details-*) */
 .field-details {
   padding-bottom: 24px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 .field-details-header {
   margin-bottom: 20px;
@@ -749,9 +752,11 @@ onMounted(refreshAll)
   gap: 24px;
   align-items: start;
 }
-@media (max-width: 900px) {
+/* До десктопа: одна колонка (инфо + фото друг под другом) */
+@media (max-width: 1024px) {
   .field-details-grid {
     grid-template-columns: 1fr;
+    gap: 20px;
   }
 }
 .field-details-card {
@@ -982,9 +987,19 @@ onMounted(refreshAll)
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
 }
-@media (max-width: 600px) {
+@media (max-width: 1100px) {
+  .field-details-gallery {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 720px) {
   .field-details-gallery {
     grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 380px) {
+  .field-details-gallery {
+    grid-template-columns: 1fr;
   }
 }
 .field-details-gallery-item {
@@ -1044,6 +1059,10 @@ onMounted(refreshAll)
 .field-details-gallery-delete:hover {
   background: #fee2e2;
   color: #b91c1c;
+}
+
+.equipment-history-section {
+  margin-top: 24px;
 }
 
 .equipment-details-header {
@@ -1182,6 +1201,7 @@ onMounted(refreshAll)
   border-radius: 12px;
   background: var(--bg-panel);
   overflow: hidden;
+  min-width: 0;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -1456,6 +1476,7 @@ onMounted(refreshAll)
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
   align-items: start;
+  min-width: 0;
 }
 
 .equipment-history-body-col-head {
@@ -1736,8 +1757,155 @@ onMounted(refreshAll)
   .equipment-history-cols {
     grid-template-columns: 1fr;
   }
+  .equipment-history-body-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+  }
   .equipment-history-body-box {
     max-height: 76px;
+  }
+}
+
+/* Планшеты и мобильные: страница техники */
+@media (max-width: 768px) {
+  .field-details-header {
+    margin-bottom: 14px;
+  }
+  .field-details-back {
+    font-size: 0.88rem;
+    white-space: normal;
+    text-align: left;
+    max-width: 100%;
+  }
+  .field-details-card {
+    padding: 16px;
+    border-radius: 10px;
+  }
+  .field-details-title-row {
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .field-details-title-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+  }
+  .field-details-name {
+    font-size: 1.2rem;
+  }
+  .field-details-list {
+    gap: 12px;
+  }
+  .field-details-media-header {
+    margin-bottom: 14px;
+    gap: 12px;
+  }
+  .field-details-upload-btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .equipment-history-section {
+    margin-top: 16px;
+  }
+  .equipment-history-card-toggle {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 10px;
+  }
+  .equipment-history-toggle-left {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .equipment-history-toggle-right {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 8px 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--topbar-border);
+  }
+  .equipment-history-toggle-employee-name {
+    max-width: 100%;
+  }
+  .equipment-history-body-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .equipment-history-card-body {
+    padding: 0 10px 10px;
+  }
+}
+
+@media (max-width: 520px) {
+  .field-details-item {
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+    gap: 6px 10px;
+    align-items: start;
+  }
+  .field-details-item-icon {
+    grid-row: 1 / span 2;
+    align-self: start;
+    margin-top: 0;
+  }
+  .field-details-item-label {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .field-details-item-value {
+    grid-column: 2;
+    grid-row: 2;
+    text-align: left;
+  }
+  .field-details-name {
+    font-size: 1.05rem;
+  }
+  .equipment-history-op-title {
+    font-size: 0.88rem;
+  }
+  .equipment-history-op-meta {
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+  .equipment-history-condition-pill {
+    font-size: 0.72rem;
+    padding: 5px 8px;
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
+  }
+  .equipment-history-fuel-row {
+    grid-template-columns: auto 1fr minmax(2.5rem, auto);
+    gap: 8px;
+  }
+  .equipment-task-pagination-info {
+    font-size: 0.8rem;
+    width: 100%;
+    text-align: center;
+  }
+}
+
+@media (max-width: 640px) {
+  .equipment-task-pagination {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .equipment-task-pagination-right {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 12px;
+  }
+  .equipment-task-pagination-nav {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .equipment-task-pagination-size {
+    justify-content: space-between;
+    width: 100%;
   }
 }
 </style>
