@@ -34,6 +34,7 @@ import {
 } from '@/lib/fieldsSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 type CropKey = 'all' | 'wheat' | 'corn' | 'soy' | 'sunflower' | 'none' | 'meadow'
 
@@ -1108,7 +1109,9 @@ onMounted(async () => {
         </div>
 
         <p v-if="fieldsError" class="fields-load-error">{{ fieldsError }}</p>
-        <div v-if="fieldsLoading" class="fields-loading">Загрузка полей...</div>
+        <div v-if="fieldsLoading" class="fields-loading" role="status" aria-live="polite">
+          <UiLoadingBar />
+        </div>
         <div class="fields-table-wrap">
           <table class="fields-table" aria-label="Список полей">
             <thead>
@@ -1653,7 +1656,11 @@ onMounted(async () => {
                   @dragleave.prevent="onSchemeDragLeave"
                   @drop.prevent="onSchemeDrop"
                 >
-                  <template v-if="schemeUploading">Загрузка...</template>
+                  <template v-if="schemeUploading">
+                    <span class="modal-dropzone-loading-inner">
+                      <UiLoadingBar size="compact" />
+                    </span>
+                  </template>
                   <template v-else-if="newFieldSchemeFileName">
                     <div class="modal-scheme-preview-wrap">
                       <img
@@ -2349,9 +2356,17 @@ onMounted(async () => {
   margin: 0;
 }
 .fields-loading {
-  padding: var(--space-md) 24px;
-  color: var(--text-secondary);
-  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg) 24px;
+}
+.modal-dropzone-loading-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 12px 0;
 }
 .fields-empty {
   color: var(--text-secondary);

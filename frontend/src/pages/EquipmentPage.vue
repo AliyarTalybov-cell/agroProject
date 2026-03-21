@@ -13,6 +13,7 @@ import {
 } from '@/lib/equipmentSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const EQUIPMENT_TYPES = [
   { value: '', label: 'Выберите тип' },
@@ -483,7 +484,9 @@ async function exportToPdf() {
         </div>
       </div>
 
-      <div v-if="loading" class="equipment-loading">Загрузка…</div>
+      <div v-if="loading" class="equipment-loading" role="status" aria-live="polite">
+        <UiLoadingBar />
+      </div>
       <div v-else class="table-wrapper">
         <table class="equipment-table" aria-label="Список техники">
           <thead>
@@ -904,9 +907,11 @@ async function exportToPdf() {
 }
 
 .equipment-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
   padding: var(--space-lg);
-  text-align: center;
-  color: var(--text-secondary);
 }
 
 .table-wrapper {

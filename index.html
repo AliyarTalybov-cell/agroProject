@@ -154,7 +154,14 @@
           </div>
         </header>
         <div class="weather-widget-compact" id="weather-widget-compact" aria-live="polite">
-          <div class="weather-compact-loading" id="weather-compact-loading">Загрузка погоды…</div>
+          <div class="weather-compact-loading" id="weather-compact-loading">
+            <div class="agro-ui-loader agro-ui-loader--compact">
+              <div class="agro-ui-loader__wrapper">
+                <div class="agro-ui-loader__text">ЗАГРУЗКА</div>
+                <div class="agro-ui-loader__box" aria-hidden="true"></div>
+              </div>
+            </div>
+          </div>
           <div class="weather-compact-content" id="weather-compact-content" hidden></div>
           <div class="weather-compact-error" id="weather-compact-error" hidden>Не удалось загрузить погоду</div>
         </div>
@@ -181,7 +188,14 @@
         </header>
 
         <div class="weather-detail" id="weather-detail">
-          <div class="weather-detail-loading" id="weather-detail-loading">Загрузка погоды…</div>
+          <div class="weather-detail-loading" id="weather-detail-loading">
+            <div class="agro-ui-loader">
+              <div class="agro-ui-loader__wrapper">
+                <div class="agro-ui-loader__text">ЗАГРУЗКА</div>
+                <div class="agro-ui-loader__box" aria-hidden="true"></div>
+              </div>
+            </div>
+          </div>
           <div class="weather-detail-error" id="weather-detail-error" hidden>Не удалось загрузить погоду</div>
           <div class="weather-detail-content" id="weather-detail-content" hidden>
             <!-- Текущая погода (крупный блок) -->

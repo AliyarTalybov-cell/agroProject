@@ -15,6 +15,7 @@ import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { loadCrops, loadLandTypes, type CropRow, type LandTypeRow } from '@/lib/landTypesAndCrops'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const props = defineProps<{ id: string }>()
 
@@ -297,8 +298,8 @@ watch(() => props.id, loadData)
     </div>
 
     <div v-if="loading" class="field-details-grid">
-      <div class="field-details-card field-details-card--left">
-        <p class="field-details-muted">Загрузка…</p>
+      <div class="field-details-card field-details-card--left field-details-card--loading">
+        <UiLoadingBar size="md" />
       </div>
     </div>
 
@@ -683,6 +684,12 @@ watch(() => props.id, loadData)
 }
 .field-details-card--left {
   min-width: 0;
+}
+.field-details-card--loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
 }
 .field-details-card--right {
   min-width: 0;

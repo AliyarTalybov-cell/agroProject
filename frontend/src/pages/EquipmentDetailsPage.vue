@@ -15,6 +15,7 @@ import { loadOperationsByEquipmentFromSupabase, type EquipmentOperationHistoryRo
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -343,8 +344,8 @@ onMounted(refreshAll)
     </div>
 
     <div v-if="loading" class="field-details-grid">
-      <div class="field-details-card field-details-card--left">
-        <p class="field-details-muted">Загрузка…</p>
+      <div class="field-details-card field-details-card--left field-details-card--loading">
+        <UiLoadingBar size="md" />
       </div>
     </div>
 
@@ -510,11 +511,18 @@ onMounted(refreshAll)
         <div class="field-details-media-header">
           <div>
             <h2 class="field-details-media-title">История взаимодействия</h2>
-            <p class="field-details-media-subtitle">{{ historyLoading ? 'Загрузка…' : `Записей: ${history.length}` }}</p>
+            <p class="field-details-media-subtitle field-details-media-subtitle--history">
+              <template v-if="historyLoading">
+                <UiLoadingBar size="compact" />
+              </template>
+              <template v-else>Записей: {{ history.length }}</template>
+            </p>
           </div>
         </div>
 
-        <div v-if="historyLoading" class="field-details-muted" style="padding: 8px 0;">Загрузка…</div>
+        <div v-if="historyLoading" class="equipment-history-loading-wrap">
+          <UiLoadingBar size="md" />
+        </div>
         <div v-else-if="!history.length" class="field-details-muted">
           Нет записей в журнале операций с этой техникой.
         </div>
@@ -770,8 +778,24 @@ onMounted(refreshAll)
 .field-details-card--left {
   min-width: 0;
 }
+.field-details-card--loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+}
 .field-details-card--right {
   min-width: 0;
+}
+.field-details-media-subtitle--history {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+}
+.equipment-history-loading-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 8px;
 }
 .field-details-title-row {
   display: flex;

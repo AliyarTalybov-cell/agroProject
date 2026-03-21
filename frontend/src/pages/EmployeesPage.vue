@@ -6,6 +6,7 @@ import { loadEmployees, loadPositions, searchEmployees, type EmployeeRow, type P
 import EmployeeCreateModal from '@/components/EmployeeCreateModal.vue'
 import EmployeeEditModal from '@/components/EmployeeEditModal.vue'
 import { avatarColorByPosition } from '@/lib/avatarColors'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const auth = useAuth()
 
@@ -131,8 +132,7 @@ function openEmployee(e: EmployeeRow) {
       <div v-if="error" class="emp-alert emp-alert--error" role="alert">{{ error }}</div>
 
       <div v-if="loading" class="emp-loading" role="status" aria-live="polite">
-        <div class="emp-spinner" aria-hidden="true"></div>
-        <div>Загрузка сотрудников…</div>
+        <UiLoadingBar />
       </div>
 
       <div v-else class="emp-grid">
@@ -546,26 +546,8 @@ function openEmployee(e: EmployeeRow) {
 .emp-loading {
   display: flex;
   align-items: center;
-  gap: 10px;
-  color: var(--text-secondary);
-  padding: 14px 0;
-}
-.emp-spinner {
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  border: 2px solid rgba(0, 0, 0, 0.12);
-  border-top-color: var(--accent-green);
-  animation: spin 0.8s linear infinite;
-}
-[data-theme='dark'] .emp-spinner {
-  border-color: rgba(255, 255, 255, 0.16);
-  border-top-color: var(--accent-green);
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  justify-content: center;
+  padding: 24px 0;
 }
 </style>
 

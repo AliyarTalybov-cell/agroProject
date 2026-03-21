@@ -17,6 +17,7 @@ import { useAuth } from '@/stores/auth'
 import { loadCalendarTasks, updateCalendarTask, type CalendarTaskRow } from '@/lib/calendarTasksSupabase'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
 import { loadEquipment, type EquipmentRow } from '@/lib/equipmentSupabase'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const DEFAULT_REASONS: Array<{ label: string; description: string; category: DowntimeCategory }> = [
   { label: 'Поломка техники', description: 'Неисправность, требующая остановки работы', category: 'breakdown' },
@@ -701,7 +702,9 @@ function addField() {
             <span class="mechanic-today-tasks-title">Задачи на сегодня</span>
             <router-link to="/tasks" class="mechanic-today-tasks-link">Календарь</router-link>
           </div>
-          <div v-if="todayTasksLoading" class="mechanic-today-tasks-loading">Загрузка…</div>
+          <div v-if="todayTasksLoading" class="mechanic-today-tasks-loading">
+            <UiLoadingBar size="compact" />
+          </div>
           <template v-else-if="todayTasks.length">
             <div v-if="todayTasksPending.length" class="mechanic-today-tasks-group">
               <div class="mechanic-today-tasks-group-title">К выполнению</div>
@@ -943,7 +946,9 @@ function addField() {
         <div class="modal-badge">Агро-Контроль</div>
         <div class="modal-title">Техника для операции</div>
 
-        <div v-if="equipmentLoading" class="modal-text">Загрузка техники…</div>
+        <div v-if="equipmentLoading" class="modal-text modal-text--loading">
+          <UiLoadingBar size="md" />
+        </div>
         <div v-else-if="equipmentError" class="modal-text modal-text-muted">{{ equipmentError }}</div>
         <div v-else>
           <div class="modal-form">
@@ -1329,7 +1334,13 @@ function addField() {
   text-decoration: underline;
 }
 
-.mechanic-today-tasks-loading,
+.mechanic-today-tasks-loading {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  padding: 16px 0;
+}
+
 .mechanic-today-tasks-empty {
   margin: 0;
   font-size: 0.85rem;
@@ -1939,6 +1950,12 @@ function addField() {
   color: var(--text-secondary);
   margin-bottom: var(--space-md);
   line-height: 1.45;
+}
+
+.modal-text--loading {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 20px;
 }
 
 .modal-text-muted {

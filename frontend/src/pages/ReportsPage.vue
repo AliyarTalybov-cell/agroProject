@@ -17,6 +17,7 @@ import { loadOperatorStatusesFromSupabase, type OperatorStatusRow } from '@/lib/
 import { loadEquipment, type EquipmentRow } from '@/lib/equipmentSupabase'
 import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -725,7 +726,9 @@ onUnmounted(() => {
         Статус работы сотрудников (Live)
       </h2>
       <p v-if="!isSupabaseConfigured()" class="dash-muted">Подключите Supabase, чтобы видеть статусы с экрана оператора.</p>
-      <p v-else-if="loading" class="dash-muted">Загрузка…</p>
+      <div v-else-if="loading" class="dash-live-loading">
+        <UiLoadingBar size="md" />
+      </div>
       <div v-else class="dash-live-grid">
         <div
           v-for="p in filteredWorkersForLive"
@@ -1275,6 +1278,12 @@ onUnmounted(() => {
 .dash-muted {
   color: var(--text-secondary);
   font-size: 0.9rem;
+}
+
+.dash-live-loading {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0 8px;
 }
 
 .dash-live-grid {

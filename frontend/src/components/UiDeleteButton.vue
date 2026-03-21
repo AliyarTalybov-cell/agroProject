@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useId } from 'vue'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 withDefaults(
   defineProps<{
@@ -90,7 +91,12 @@ function tipTitle(title: string, hoverLabel: string, loading: boolean) {
         </svg>
       </span>
     </span>
-    <span v-if="loading" class="ui-del-btn__spinner" aria-hidden="true" />
+    <UiLoadingBar
+      v-if="loading"
+      size="micro"
+      hide-label
+      class="ui-del-btn__loading-bar"
+    />
   </button>
 </template>
 
@@ -232,41 +238,26 @@ function tipTitle(title: string, hoverLabel: string, loading: boolean) {
   opacity: 0;
 }
 
-.ui-del-btn__spinner {
+.ui-del-btn__loading-bar {
   position: absolute;
   inset: 0;
-  margin: auto;
-  border-style: solid;
-  border-color: rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: ui-del-spin 0.7s linear infinite;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
 
-.ui-del-btn--xs .ui-del-btn__spinner {
-  width: 12px;
-  height: 12px;
-  border-width: 1.5px;
+.ui-del-btn--xs .ui-del-btn__loading-bar :deep(.ui-loading-bar) {
+  transform: scale(0.34);
 }
-.ui-del-btn--sm .ui-del-btn__spinner {
-  width: 14px;
-  height: 14px;
-  border-width: 2px;
+.ui-del-btn--sm .ui-del-btn__loading-bar :deep(.ui-loading-bar) {
+  transform: scale(0.42);
 }
-.ui-del-btn--md .ui-del-btn__spinner {
-  width: 17px;
-  height: 17px;
-  border-width: 2px;
+.ui-del-btn--md .ui-del-btn__loading-bar :deep(.ui-loading-bar) {
+  transform: scale(0.52);
 }
-.ui-del-btn--lg .ui-del-btn__spinner {
-  width: 20px;
-  height: 20px;
-  border-width: 2px;
-}
-
-@keyframes ui-del-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.ui-del-btn--lg .ui-del-btn__loading-bar :deep(.ui-loading-bar) {
+  transform: scale(0.64);
 }
 </style>

@@ -18,6 +18,7 @@ import {
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 type CalendarTask = {
   id: string
@@ -725,16 +726,14 @@ async function confirmDeleteTask() {
               Запланировано {{ tasksForSelectedDate.length }} {{ tasksForSelectedDate.length === 1 ? 'задача' : tasksForSelectedDate.length < 5 ? 'задачи' : 'задач' }}
               ({{ tasksForSelectedDate.filter(t => t.completedAt).length }} выполнено)
             </p>
-            <p v-if="filesLoading" class="day-header-loading">
-              <span class="day-header-loading-dots"><span /><span /><span /></span>
-              Загрузка вложений…
-            </p>
+            <div v-if="filesLoading" class="day-header-loading">
+              <UiLoadingBar size="md" />
+            </div>
           </div>
         </header>
 
         <div v-if="tasksLoading" class="day-loading">
-          <div class="day-loading-spinner" aria-hidden="true" />
-          <p class="day-loading-text">Загрузка задач…</p>
+          <UiLoadingBar />
           <div class="day-loading-skeletons">
             <div class="day-loading-skeleton" />
             <div class="day-loading-skeleton day-loading-skeleton--short" />
@@ -1092,8 +1091,9 @@ async function confirmDeleteTask() {
               <button type="button" class="modal-btn-ghost modal-btn-ghost--design" :disabled="taskSaveLoading" @click="closeTaskModal">Отмена</button>
               <button type="submit" class="modal-btn modal-btn--design" :disabled="taskSaveLoading">
                 <span v-if="taskSaveLoading" class="modal-btn-loading">
-                  <span class="modal-btn-spinner" aria-hidden="true" />
-                  Сохранение…
+                  <span class="modal-btn-loading-scale">
+                    <UiLoadingBar size="compact" />
+                  </span>
                 </span>
                 <span v-else>{{ editingTaskId ? 'Сохранить изменения' : 'Создать задачу' }}</span>
               </button>
@@ -1875,27 +1875,6 @@ async function confirmDeleteTask() {
   gap: 16px;
 }
 
-.day-loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--agro);
-  border-radius: 50%;
-  animation: day-loading-spin 0.8s linear infinite;
-}
-
-@keyframes day-loading-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.day-loading-text {
-  margin: 0;
-  font-size: 0.9rem;
-  color: var(--text-secondary);
-}
-
 .day-loading-skeletons {
   width: 100%;
   max-width: 320px;
@@ -1938,45 +1917,10 @@ async function confirmDeleteTask() {
 }
 
 .day-header-loading {
-  margin: 6px 0 0;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+  margin: 10px 0 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-.day-header-loading-dots {
-  display: inline-flex;
-  gap: 4px;
-}
-
-.day-header-loading-dots span {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--agro);
-  animation: day-loading-dot 0.6s ease-in-out infinite both;
-}
-
-.day-header-loading-dots span:nth-child(2) {
-  animation-delay: 0.1s;
-}
-
-.day-header-loading-dots span:nth-child(3) {
-  animation-delay: 0.2s;
-}
-
-@keyframes day-loading-dot {
-  0%,
-  100% {
-    opacity: 0.3;
-    transform: scale(0.85);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1);
-  }
+  justify-content: flex-start;
 }
 
 .day-empty {
@@ -3057,22 +3001,12 @@ async function confirmDeleteTask() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
 }
 
-.modal-btn-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: modal-btn-spin 0.7s linear infinite;
-}
-
-@keyframes modal-btn-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.modal-btn-loading-scale {
+  display: inline-flex;
+  transform: scale(0.9);
+  transform-origin: center;
 }
 
 .modal-backdrop--confirm {

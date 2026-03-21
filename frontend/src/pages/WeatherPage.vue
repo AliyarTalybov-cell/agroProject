@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { fetchWeather, fetchForecast5, getWeatherIconUrl, type WeatherData, type ForecastDayItem } from '@/lib/weatherApi'
 import { RUSSIAN_CITIES } from '@/lib/cities'
 import { useWeatherCity } from '@/composables/useWeatherCity'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const { cityValue, setCity, city, country } = useWeatherCity()
 const weather = ref<WeatherData | null>(null)
@@ -184,7 +185,9 @@ const fieldsWithWeather = computed(() => {
       </div>
     </header>
 
-    <div v-if="loading" class="weather-detail-loading weather-loading-pulse">Загрузка погоды…</div>
+    <div v-if="loading" class="weather-detail-loading">
+      <UiLoadingBar size="md" />
+    </div>
     <div v-else-if="error" class="weather-detail-error">Не удалось загрузить погоду</div>
     <template v-else-if="weather">
       <!-- Герой-карточка как в design: волна + локация | температура | рекомендация -->
@@ -458,8 +461,10 @@ const fieldsWithWeather = computed(() => {
   padding: var(--space-xl);
 }
 
-.weather-loading-pulse {
-  animation: weatherPulse 1.2s ease-in-out infinite;
+.weather-detail-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .weather-detail-error {
@@ -474,16 +479,6 @@ const fieldsWithWeather = computed(() => {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes weatherPulse {
-  0%,
-  100% {
-    opacity: 0.7;
-  }
-  50% {
-    opacity: 1;
   }
 }
 

@@ -24,6 +24,7 @@ import { loadWorkOperations, type WorkOperationRow } from '@/lib/reasonsAndOpera
 import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 type ViewMode = 'kanban' | 'list'
 type FilterKey = 'all' | 'mine'
@@ -979,8 +980,7 @@ function statusClass(s: Status) {
     </header>
 
     <div v-if="tasksLoading" class="task-loading" role="status" aria-live="polite">
-      <div class="task-loading-spinner" aria-hidden="true"></div>
-      <p class="task-loading-text">Загрузка задач<span class="task-loading-dots" aria-hidden="true">...</span></p>
+      <UiLoadingBar />
     </div>
     <!-- Kanban -->
     <div v-show="viewMode === 'kanban' && !tasksLoading" class="task-kanban">
@@ -1273,7 +1273,7 @@ function statusClass(s: Status) {
           <button type="button" class="task-modal-close" aria-label="Закрыть" @click="closeTask">×</button>
           <div class="task-detail-layout">
             <div v-if="isMetaInitialLoading" class="task-detail-loading-overlay" aria-hidden="true">
-              <div class="task-detail-loading-spinner"></div>
+              <UiLoadingBar size="md" />
             </div>
             <div class="task-detail-main">
               <div class="task-detail-badges">
@@ -1431,7 +1431,9 @@ function statusClass(s: Status) {
               </section>
               <section class="task-detail-card task-detail-card--history">
                 <h3 class="task-detail-card-title">История изменений</h3>
-                <div v-if="eventsLoading" class="task-history-loading">Загрузка истории…</div>
+                <div v-if="eventsLoading" class="task-history-loading">
+                  <UiLoadingBar size="compact" />
+                </div>
                 <ul v-else class="task-history-list">
                   <li v-if="!taskEvents.length" class="task-history-empty">История пока пуста</li>
                   <li v-for="event in taskEvents" :key="event.id" class="task-history-item">
@@ -1477,7 +1479,9 @@ function statusClass(s: Status) {
           </div>
           <section class="task-chat">
             <h3 class="task-chat-title">Обсуждение задачи</h3>
-            <div v-if="commentsLoading" class="task-chat-loading">Загрузка комментариев…</div>
+            <div v-if="commentsLoading" class="task-chat-loading">
+              <UiLoadingBar size="compact" />
+            </div>
             <div v-else class="task-chat-body">
               <div v-if="!taskComments.length" class="task-chat-empty">
                 Пока нет комментариев. Напишите первый.
@@ -1509,7 +1513,7 @@ function statusClass(s: Status) {
               ></textarea>
               <button type="submit" class="task-chat-send" :class="{ 'task-chat-send--loading': isSendingComment }" :disabled="!newCommentMessage.trim() || isSendingComment">
                 <span v-if="!isSendingComment">Отправить</span>
-                <span v-else class="task-chat-send-spinner" aria-hidden="true"></span>
+                <UiLoadingBar v-else size="micro" hide-label class="task-chat-send-loader" />
               </button>
             </form>
           </section>
@@ -1529,7 +1533,7 @@ function statusClass(s: Status) {
                 :disabled="isSavingDetail"
               >
                 <span v-if="!isSavingDetail">Сохранить</span>
-                <span v-else class="task-detail-saving-spinner" aria-hidden="true"></span>
+                <UiLoadingBar v-else size="compact" class="task-detail-save-loader" />
               </button>
             </template>
             <template v-else>
@@ -1565,39 +1569,6 @@ function statusClass(s: Status) {
   gap: var(--space-lg);
   min-height: 280px;
   padding: var(--space-xl);
-}
-
-.task-loading-spinner {
-  width: 48px;
-  height: 48px;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--accent-green);
-  border-radius: 50%;
-  animation: task-loading-spin 0.85s ease-in-out infinite;
-}
-
-.task-loading-text {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 0.9375rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-
-.task-loading-dots {
-  opacity: 0.7;
-  animation: task-loading-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes task-loading-pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
-
-@keyframes task-loading-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .task-form-static-assignee {
@@ -2740,14 +2711,14 @@ function statusClass(s: Status) {
   min-width: 120px;
 }
 
-.task-detail-saving-spinner {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.6);
-  border-top-color: #ffffff;
-  animation: task-loading-spin 0.8s linear infinite;
-  display: inline-block;
+.task-detail-save-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.task-detail-save-loader :deep(.ui-loading-bar) {
+  transform: scale(0.88);
+  transform-origin: center;
 }
 
 /* Detail modal */
@@ -2779,15 +2750,6 @@ function statusClass(s: Status) {
   align-items: center;
   justify-content: center;
   z-index: 2;
-}
-
-.task-detail-loading-spinner {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--accent-green);
-  animation: task-loading-spin 0.8s linear infinite;
 }
 
 .task-detail-sidebar {
@@ -2870,8 +2832,11 @@ function statusClass(s: Status) {
 }
 
 .task-history-loading {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0;
+  min-height: 48px;
 }
 
 .task-history-list {
@@ -2944,8 +2909,11 @@ function statusClass(s: Status) {
 }
 
 .task-chat-loading {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 0;
+  min-height: 56px;
 }
 
 .task-chat-body {
@@ -3061,16 +3029,20 @@ function statusClass(s: Status) {
 
 .task-chat-send--loading {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 104px;
 }
 
-.task-chat-send-spinner {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.6);
-  border-top-color: #ffffff;
-  animation: task-loading-spin 0.8s linear infinite;
-  display: inline-block;
+.task-chat-send-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.task-chat-send-loader :deep(.ui-loading-bar) {
+  transform: scale(0.82);
+  transform-origin: center;
 }
 
 .task-pill-status {

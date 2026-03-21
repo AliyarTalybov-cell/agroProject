@@ -3,6 +3,7 @@ import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchWeather, getWeatherIconUrl, type WeatherData } from '@/lib/weatherApi'
 import { useWeatherCity } from '@/composables/useWeatherCity'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const { variant = 'default' } = defineProps<{
   /** Компактный вариант для дашборда (Обзор) — в стиле страницы Погода, но плотнее */
@@ -61,7 +62,9 @@ const weatherSkyClass = () => {
 
 <template>
   <div class="weather-widget-compact" :class="{ 'weather-widget-compact--dashboard': variant === 'dashboard' }" aria-live="polite">
-    <div v-if="loading" class="weather-compact-loading weather-compact-pulse">Загрузка погоды…</div>
+    <div v-if="loading" class="weather-compact-loading">
+      <UiLoadingBar size="compact" />
+    </div>
     <div v-else-if="error" class="weather-compact-error">Не удалось загрузить погоду</div>
     <div v-else class="weather-compact-content weather-compact-in">
       <div class="weather-compact-sky weather-sky" :class="weatherSkyClass()" aria-hidden="true">
@@ -185,22 +188,8 @@ const weatherSkyClass = () => {
   box-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.12);
 }
 
-.weather-compact-pulse {
-  animation: compactPulse 1.2s ease-in-out infinite;
-}
-
 .weather-compact-in {
   animation: compactFadeIn 0.4s ease forwards;
-}
-
-@keyframes compactPulse {
-  0%,
-  100% {
-    opacity: 0.7;
-  }
-  50% {
-    opacity: 1;
-  }
 }
 
 @keyframes compactFadeIn {
@@ -218,6 +207,13 @@ const weatherSkyClass = () => {
 .weather-compact-error {
   color: var(--text-secondary);
   font-size: 0.9rem;
+}
+
+.weather-compact-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0;
 }
 
 .weather-compact-error {
