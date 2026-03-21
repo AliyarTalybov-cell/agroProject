@@ -9,7 +9,12 @@ const router = useRouter()
 const auth = useAuth()
 const isAuthLayout = computed(() => route.name === 'login')
 const pageTitle = computed(() => (route.meta?.title as string) || 'Обзор')
-const { theme, toggle } = useTheme()
+const { theme, setTheme } = useTheme()
+/** checked = светлая тема (как в переключателе Uiverse: день / солнце) */
+const themeIsLight = computed({
+  get: () => theme.value === 'light',
+  set: (v: boolean) => setTheme(v ? 'light' : 'dark'),
+})
 const logoutConfirmOpen = ref(false)
 const logoutBusy = ref(false)
 
@@ -211,10 +216,23 @@ watch(mobileMenuOpen, (open) => {
         </button>
         <h1 class="app-topbar-title">{{ pageTitle }}</h1>
         <div class="app-topbar-right">
-          <button type="button" class="topbar-icon-btn" aria-label="Переключить тему" @click="toggle">
-            <svg v-if="theme === 'light'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v1"/><path d="M12 20v1"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M3 12h1"/><path d="M20 12h1"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
-            <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
-          </button>
+          <label
+            for="app-theme-switch"
+            class="app-theme-switch"
+            :title="theme === 'light' ? 'Переключить на тёмную тему' : 'Переключить на светлую тему'"
+          >
+            <input
+              id="app-theme-switch"
+              v-model="themeIsLight"
+              type="checkbox"
+              class="app-theme-switch-input"
+              role="switch"
+              :aria-checked="themeIsLight"
+              :aria-label="theme === 'light' ? 'Включить тёмную тему' : 'Включить светлую тему'"
+            />
+            <span class="app-theme-slider" aria-hidden="true" />
+            <span class="app-theme-decoration" aria-hidden="true" />
+          </label>
           <div class="topbar-user">
             <RouterLink to="/profile" class="topbar-user-link" aria-label="Настройки профиля">
               <div class="topbar-user-avatar">{{ userInitials }}</div>
@@ -348,6 +366,108 @@ watch(mobileMenuOpen, (open) => {
 }
 .app-modal-btn--danger:hover:not(:disabled) {
   filter: brightness(1.05);
+}
+
+/* Переключатель темы (адаптация Uiverse / juanpabl0svn) */
+.app-theme-switch {
+  font-size: 15px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.5em;
+  height: 2em;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.app-theme-switch-input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+  margin: 0;
+}
+
+.app-theme-slider {
+  --theme-switch-track: #20262c;
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: var(--theme-switch-track);
+  transition: background-color 0.5s ease;
+  border-radius: 30px;
+}
+
+.app-theme-slider::before {
+  position: absolute;
+  content: '';
+  height: 1.4em;
+  width: 1.4em;
+  border-radius: 50%;
+  left: 10%;
+  bottom: 15%;
+  box-shadow:
+    inset 8px -4px 0 0 #ececd9,
+    -4px 1px 4px 0 #dadada;
+  background: var(--theme-switch-track);
+  transition:
+    transform 0.5s ease,
+    box-shadow 0.5s ease;
+}
+
+.app-theme-decoration {
+  position: absolute;
+  height: 2px;
+  width: 2px;
+  border-radius: 50%;
+  right: 20%;
+  top: 15%;
+  background: #e5f041e6;
+  backdrop-filter: blur(10px);
+  transition: all 0.5s ease;
+  pointer-events: none;
+  box-shadow:
+    -7px 10px 0 #e5f041e6,
+    8px 15px 0 #e5f041e6,
+    -17px 1px 0 #e5f041e6,
+    -20px 10px 0 #e5f041e6,
+    -7px 23px 0 #e5f041e6,
+    -15px 25px 0 #e5f041e6;
+}
+
+.app-theme-switch-input:checked ~ .app-theme-decoration {
+  transform: translateX(-20px);
+  width: 10px;
+  height: 10px;
+  background: white;
+  box-shadow:
+    -12px 0 0 white,
+    -6px 0 0 1.6px white,
+    5px 15px 0 1px white,
+    1px 17px 0 white,
+    10px 17px 0 white;
+}
+
+.app-theme-switch-input:checked + .app-theme-slider {
+  background-color: #5494de;
+}
+
+.app-theme-switch-input:checked + .app-theme-slider::before {
+  transform: translateX(100%);
+  box-shadow:
+    inset 15px -4px 0 15px #efdf2b,
+    0 0 10px 0 #efdf2b;
+}
+
+.app-theme-switch-input:focus-visible + .app-theme-slider {
+  outline: 2px solid color-mix(in srgb, #5494de 85%, white);
+  outline-offset: 3px;
+}
+
+.app-theme-switch:hover .app-theme-slider {
+  filter: brightness(1.06);
 }
 </style>
 

@@ -152,9 +152,17 @@ watch(
                       {{ form.active ? 'Активен' : 'Неактивен' }}
                     </div>
                   </div>
-                  <label class="eem-switch">
-                    <input v-model="form.active" type="checkbox" class="eem-switch-input" />
-                    <span class="eem-switch-bg"><span class="eem-switch-dot"></span></span>
+                  <label class="eem-acc-switch" for="eem-account-active-switch" title="Включить или отключить доступ">
+                    <input
+                      id="eem-account-active-switch"
+                      v-model="form.active"
+                      type="checkbox"
+                      class="eem-acc-switch-input"
+                      role="switch"
+                      :aria-checked="form.active"
+                      aria-label="Активен: доступ к системе включён"
+                    />
+                    <span class="eem-acc-switch-slider" aria-hidden="true" />
                   </label>
                 </div>
               </div>
@@ -390,43 +398,73 @@ watch(
 .eem-dot--off {
   background: #9ca3af;
 }
-.eem-switch {
+/* Переключатель статуса (Uiverse / mrhyddenn), масштаб −25% */
+.eem-acc-switch {
+  font-size: calc(17px * 0.75);
   position: relative;
-  width: 44px;
-  height: 24px;
+  display: inline-block;
+  width: calc(62px * 0.75);
+  height: calc(35px * 0.75);
   flex-shrink: 0;
+  cursor: pointer;
+  margin: 0;
 }
-.eem-switch-input {
-  position: absolute;
+
+.eem-acc-switch-input {
   opacity: 0;
-}
-.eem-switch-bg {
-  display: block;
-  width: 44px;
-  height: 24px;
-  border-radius: 999px;
-  background: #e5e7eb;
-  border: 1px solid var(--border-color);
-  position: relative;
-  transition: background 0.2s ease;
-}
-.eem-switch-dot {
+  width: 0;
+  height: 0;
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
+  margin: 0;
+}
+
+.eem-acc-switch-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  bottom: 0;
   background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  transition: transform 0.2s ease;
+  transition: background-color 0.4s ease, border-color 0.4s ease;
+  border-radius: calc(30px * 0.75);
+  border: 1px solid #ccc;
 }
-.eem-switch-input:checked + .eem-switch-bg {
-  background: var(--accent-green);
-  border-color: var(--accent-green);
+
+.eem-acc-switch-slider::before {
+  position: absolute;
+  content: '';
+  height: 1.9em;
+  width: 1.9em;
+  border-radius: calc(16px * 0.75);
+  left: calc(1.2px * 0.75);
+  top: 50%;
+  transform: translateY(-50%);
+  background-color: white;
+  box-shadow: 0 calc(2px * 0.75) calc(5px * 0.75) #999999;
+  transition: transform 0.4s ease;
 }
-.eem-switch-input:checked + .eem-switch-bg .eem-switch-dot {
-  transform: translateX(20px);
+
+.eem-acc-switch-input:checked + .eem-acc-switch-slider {
+  background-color: #5fdd54;
+  border: 1px solid transparent;
+}
+
+.eem-acc-switch-input:checked + .eem-acc-switch-slider::before {
+  transform: translate(calc(1.5em), -50%);
+}
+
+.eem-acc-switch-input:focus-visible + .eem-acc-switch-slider {
+  outline: calc(2px * 0.75) solid color-mix(in srgb, #5fdd54 70%, #333);
+  outline-offset: calc(3px * 0.75);
+}
+
+[data-theme='dark'] .eem-acc-switch-slider {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+[data-theme='dark'] .eem-acc-switch-input:checked + .eem-acc-switch-slider {
+  background-color: #5fdd54;
+  border-color: transparent;
 }
 .eem-form {
   min-width: 0;
