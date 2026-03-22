@@ -129,6 +129,13 @@ body {
   background-image: var(--bg-body-image);
 }
 
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  height: 100%;
+}
+
 a {
   color: inherit;
 }
@@ -136,12 +143,15 @@ a {
 .app-layout {
   display: grid;
   grid-template-columns: 256px 1fr;
+  grid-template-rows: minmax(0, 1fr);
   width: 100%;
-  min-height: 100vh;
+  flex: 1;
+  min-height: 0;
+  max-height: 100%;
+  align-items: stretch;
 }
 
 .app-topbar {
-  grid-column: 2;
   position: relative;
   display: flex;
   align-items: center;
@@ -296,6 +306,8 @@ a {
   flex-direction: column;
   background: var(--sidebar-bg);
   transition: background 0.2s ease, border-color 0.2s ease;
+  min-height: 0;
+  align-self: stretch;
 }
 
 .sidebar-brand {
@@ -547,7 +559,10 @@ a {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
+  height: 100%;
+  align-self: stretch;
 }
 
 .main-content-inner {
@@ -566,6 +581,48 @@ a {
 
 .main-content-inner--animated {
   overflow-x: hidden;
+}
+
+/* Чат: занимает всю высоту под topbar, скролл только внутри списка и ленты */
+.main-content-inner--animated:has(.chat-page) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  padding: 12px max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px))
+    max(12px, env(safe-area-inset-left, 0px));
+}
+
+@media (min-width: 768px) {
+  .main-content-inner--animated:has(.chat-page) {
+    padding: 16px 20px max(16px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(20px, env(safe-area-inset-left, 0px));
+    padding-right: max(20px, env(safe-area-inset-right, 0px));
+  }
+}
+
+@media (min-width: 900px) {
+  .main-content-inner--animated:has(.chat-page) {
+    padding: 24px 32px max(24px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(32px, env(safe-area-inset-left, 0px));
+    padding-right: max(32px, env(safe-area-inset-right, 0px));
+  }
+}
+
+.main-content-inner--animated:has(.chat-page) > .chat-page {
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  max-height: 100%;
+}
+
+/* Мобильный чат: не растягивать страницу по высоте контента — скролл внутри списка/ленты */
+@media (max-width: 899px) {
+  .main-content-inner--animated:has(.chat-page) {
+    flex: 1 1 0%;
+    max-height: 100%;
+  }
 }
 
 /* ——— Анимация перехода между страницами ——— */

@@ -97,6 +97,23 @@ const groupEmployees = ref<EmployeeRow[]>([])
 const groupSelected = ref<Set<string>>(new Set())
 const groupBusy = ref(false)
 
+const CHAT_MOBILE_BREAKPOINT_PX = 900
+
+function getInitialMobileChatLayout(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia(`(max-width: ${CHAT_MOBILE_BREAKPOINT_PX - 1}px)`).matches
+}
+
+/** Узкая вёрстка: один экран — список или переписка */
+const isMobileChatLayout = ref(getInitialMobileChatLayout())
+/** На мобилке: list | thread */
+const mobileChatPanel = ref<'list' | 'thread'>('list')
+let mobileChatMq: MediaQueryList | null = null
+let mobileChatMqHandler: ((e: MediaQueryListEvent) => void) | null = null
+
+/** Точка старта для свайпа «назад к списку» */
+const threadBackSwipeStart = ref<{ x: number; y: number } | null>(null)
+
 let dmSearchTimer: ReturnType<typeof setTimeout> | null = null
 let rtStop: (() => void) | null = null
 let presenceTicker: ReturnType<typeof setInterval> | null = null
@@ -104,6 +121,51 @@ let presenceTicker: ReturnType<typeof setInterval> | null = null
 const presenceClock = ref(0)
 
 const active = computed(() => conversations.value.find((c) => c.id === activeId.value) ?? null)
+
+const chatPageLayoutClass = computed(() => {
+  if (!isMobileChatLayout.value) return {}
+  return mobileChatPanel.value === 'thread'
+    ? { 'chat-page--mobile-thread': true }
+    : { 'chat-page--mobile-list': true }
+})
+
+function syncMobileChatLayout() {
+  if (typeof window === 'undefined') return
+  isMobileChatLayout.value = window.matchMedia(`(max-width: ${CHAT_MOBILE_BREAKPOINT_PX - 1}px)`).matches
+}
+
+function backToChatList() {
+  mobileChatPanel.value = 'list'
+  closeMsgContextMenu()
+  resetSwipeOffsets()
+  threadBackSwipeStart.value = null
+}
+
+function onThreadBackSwipeTouchStart(e: TouchEvent) {
+  if (!isMobileChatLayout.value || mobileChatPanel.value !== 'thread') return
+  const t = e.touches[0]
+  if (!t) return
+  threadBackSwipeStart.value = { x: t.clientX, y: t.clientY }
+}
+
+function onThreadBackSwipeTouchEnd(e: TouchEvent) {
+  const start = threadBackSwipeStart.value
+  threadBackSwipeStart.value = null
+  if (!start || !isMobileChatLayout.value || mobileChatPanel.value !== 'thread') return
+  const t = e.changedTouches[0]
+  if (!t) return
+  const dx = t.clientX - start.x
+  const dy = Math.abs(t.clientY - start.y)
+  if (dx > 72 && dy < 56) backToChatList()
+}
+
+function onThreadBackSwipeTouchCancel() {
+  threadBackSwipeStart.value = null
+}
+
+watch(activeId, (id) => {
+  if (!id && isMobileChatLayout.value) mobileChatPanel.value = 'list'
+})
 
 const filteredList = computed(() => {
   const q = searchLocal.value.trim()
@@ -364,6 +426,7 @@ async function onPick(c: UiChatConversation) {
     await refreshThreads()
     await Promise.all([reloadMessages(), c.kind === 'group' ? loadGroupMembers() : Promise.resolve()])
     startRealtime()
+    if (isMobileChatLayout.value) mobileChatPanel.value = 'thread'
   } catch (e) {
     error.value = formatSupabaseError(e) || 'Не удалось открыть диалог'
   } finally {
@@ -686,6 +749,16 @@ function onGlobalKeydown(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
+  syncMobileChatLayout()
+  if (typeof window !== 'undefined') {
+    mobileChatMq = window.matchMedia(`(max-width: ${CHAT_MOBILE_BREAKPOINT_PX - 1}px)`)
+    mobileChatMqHandler = () => {
+      const narrow = mobileChatMq?.matches ?? false
+      isMobileChatLayout.value = narrow
+      if (narrow) mobileChatPanel.value = 'list'
+    }
+    mobileChatMq.addEventListener('change', mobileChatMqHandler)
+  }
   document.addEventListener('pointerdown', onGlobalPointerDown)
   document.addEventListener('keydown', onGlobalKeydown)
   presenceTicker = setInterval(() => {
@@ -705,6 +778,11 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  if (mobileChatMq && mobileChatMqHandler) {
+    mobileChatMq.removeEventListener('change', mobileChatMqHandler)
+  }
+  mobileChatMq = null
+  mobileChatMqHandler = null
   document.removeEventListener('pointerdown', onGlobalPointerDown)
   document.removeEventListener('keydown', onGlobalKeydown)
   stopRealtime()
@@ -717,7 +795,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="chat-page">
+  <div class="chat-page" :class="chatPageLayoutClass">
     <p v-if="!configured" class="chat-page__warn">
       Подключите Supabase (переменные окружения), чтобы чат работал с базой данных.
     </p>
@@ -754,8 +832,15 @@ onUnmounted(() => {
               <path d="M16 16h5v5" />
             </svg>
           </button>
-          <button v-if="isManager" type="button" class="chat-page__toolbar-btn chat-page__toolbar-btn--primary" @click="openGroupModal">
-            Новая команда
+          <button
+            v-if="isManager"
+            type="button"
+            class="chat-page__toolbar-btn chat-page__toolbar-btn--primary"
+            aria-label="Новая команда"
+            @click="openGroupModal"
+          >
+            <span class="chat-page__toolbar-label chat-page__toolbar-label--full">Новая команда</span>
+            <span class="chat-page__toolbar-label chat-page__toolbar-label--short" aria-hidden="true">Команда</span>
           </button>
         </div>
         <div class="chat-page__search-wrap">
@@ -791,9 +876,11 @@ onUnmounted(() => {
             :aria-selected="filterTab === 'unread'"
             class="chat-page__tab"
             :class="{ 'chat-page__tab--active': filterTab === 'unread' }"
+            aria-label="Непрочитанные"
             @click="setTab('unread')"
           >
-            Непрочитанные
+            <span class="chat-page__tab-text chat-page__tab-text--full">Непрочитанные</span>
+            <span class="chat-page__tab-text chat-page__tab-text--short" aria-hidden="true">Непрочит.</span>
           </button>
           <button
             type="button"
@@ -857,10 +944,41 @@ onUnmounted(() => {
         <p>Сообщения загружаются из Supabase после настройки проекта.</p>
       </div>
       <div v-else-if="!active" class="chat-page__thread-empty">
-        <p>Выберите диалог слева или нажмите «Написать».</p>
+        <p>
+          {{
+            isMobileChatLayout
+              ? 'Выберите диалог в списке или нажмите «Написать».'
+              : 'Выберите диалог слева или нажмите «Написать».'
+          }}
+        </p>
       </div>
       <template v-else>
         <header class="chat-page__thread-head">
+          <!-- From Uiverse.io by xopc333 — назад к списку (адаптировано под тему) -->
+          <button
+            v-if="isMobileChatLayout && mobileChatPanel === 'thread'"
+            type="button"
+            class="chat-page__mobile-back-btn"
+            aria-label="Назад к списку чатов"
+            @click="backToChatList"
+          >
+            <div class="chat-page__mobile-back-box">
+              <span class="chat-page__mobile-back-ico" aria-hidden="true">
+                <svg viewBox="0 0 46 40" xmlns="http://www.w3.org/2000/svg">
+                  <path
+                    d="M46 20.038c0-.7-.3-1.5-.8-2.1l-16-17c-1.1-1-3.2-1.4-4.4-.3-1.2 1.1-1.2 3.3 0 4.4l11.3 11.9H3c-1.7 0-3 1.3-3 3s1.3 3 3 3h33.1l-11.3 11.9c-1 1-1.2 3.3 0 4.4 1.2 1.1 3.3.8 4.4-.3l16-17c.5-.5.8-1.1.8-1.9z"
+                  />
+                </svg>
+              </span>
+              <span class="chat-page__mobile-back-ico" aria-hidden="true">
+                <svg viewBox="0 0 46 40" xmlns="http://www.w3.org/2000/svg">
+                  <path
+                    d="M46 20.038c0-.7-.3-1.5-.8-2.1l-16-17c-1.1-1-3.2-1.4-4.4-.3-1.2 1.1-1.2 3.3 0 4.4l11.3 11.9H3c-1.7 0-3 1.3-3 3s1.3 3 3 3h33.1l-11.3 11.9c-1 1-1.2 3.3 0 4.4 1.2 1.1 3.3.8 4.4-.3l16-17c.5-.5.8-1.1.8-1.9z"
+                  />
+                </svg>
+              </span>
+            </div>
+          </button>
           <div class="chat-page__thread-user">
             <button
               v-if="active.kind === 'group'"
@@ -882,7 +1000,7 @@ onUnmounted(() => {
                 aria-hidden="true"
               />
             </div>
-            <div>
+            <div class="chat-page__thread-head-text">
               <h2 class="chat-page__thread-title">{{ active.name }}</h2>
               <p v-if="active.kind === 'group'" class="chat-page__thread-meta">
                 <button
@@ -996,7 +1114,13 @@ onUnmounted(() => {
               </ul>
             </div>
 
-            <div ref="messagesScrollEl" class="chat-page__messages">
+            <div
+              ref="messagesScrollEl"
+              class="chat-page__messages"
+              @touchstart.passive="onThreadBackSwipeTouchStart"
+              @touchend.passive="onThreadBackSwipeTouchEnd"
+              @touchcancel.passive="onThreadBackSwipeTouchCancel"
+            >
               <div v-if="hasMoreOlderMessages" class="chat-page__load-older-wrap">
                 <button
                   type="button"
@@ -1230,8 +1354,14 @@ onUnmounted(() => {
               </div>
               <div class="chat-page__composer-meta">
                 <p class="chat-page__hint">
-                  Enter — отправить, Shift+Enter — перенос. До {{ CHAT_MESSAGE_MAX_CHARS }} символов. Файл до 10 МБ. Свои
-                  сообщения: ПКМ — меню, на телефоне — свайп влево.
+                  <template v-if="isMobileChatLayout && mobileChatPanel === 'thread'">
+                    Свайп вправо по ленте сообщений — вернуться к списку. Свои сообщения: долгое нажатие — меню, свайп
+                    влево — удалить.
+                  </template>
+                  <template v-else>
+                    Enter — отправить, Shift+Enter — перенос. До {{ CHAT_MESSAGE_MAX_CHARS }} символов. Файл до 10 МБ.
+                    Свои сообщения: ПКМ — меню, на телефоне — свайп влево.
+                  </template>
                 </p>
                 <span
                   class="chat-page__draft-count"
@@ -1360,9 +1490,12 @@ onUnmounted(() => {
 .chat-page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
-  min-height: min(720px, calc(100dvh - 140px));
-  max-height: calc(100dvh - 120px);
+  gap: var(--space-sm);
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 @media (min-width: 900px) {
@@ -1370,6 +1503,7 @@ onUnmounted(() => {
     flex-direction: row;
     align-items: stretch;
     gap: var(--space-md);
+    max-height: min(920px, calc(100dvh - 96px));
   }
 }
 
@@ -1377,26 +1511,52 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  flex: 1 1 auto;
   background: var(--bg-panel);
   border: 1px solid var(--border-color);
-  border-radius: 16px;
+  border-radius: 12px;
   box-shadow: var(--shadow-card);
   overflow: hidden;
-  max-height: 42vh;
+}
+
+/* Мобильный: полноэкранно список ИЛИ чат (не делим экран пополам) */
+@media (max-width: 899px) {
+  .chat-page:not(.chat-page--mobile-thread) .chat-page__thread {
+    display: none !important;
+  }
+
+  .chat-page--mobile-thread .chat-page__list {
+    display: none !important;
+  }
+
+  .chat-page--mobile-list .chat-page__list,
+  .chat-page--mobile-thread .chat-page__thread {
+    flex: 1 1 0% !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    width: 100% !important;
+    overflow: hidden;
+  }
 }
 
 @media (min-width: 900px) {
   .chat-page__list {
-    flex: 0 0 380px;
-    width: 380px;
+    flex: 0 0 min(380px, 34vw);
+    width: min(380px, 34vw);
     max-height: none;
+    border-radius: 16px;
   }
 }
 
 .chat-page__list-head {
-  padding: 20px;
+  padding: 16px;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+@media (min-width: 900px) {
+  .chat-page__list-head {
+    padding: 20px;
+  }
 }
 
 .chat-page__search-wrap {
@@ -1457,9 +1617,10 @@ onUnmounted(() => {
 }
 
 .chat-page__list-scroll {
-  flex: 1;
+  flex: 1 1 0%;
   overflow-y: auto;
   min-height: 0;
+  -webkit-overflow-scrolling: touch;
 }
 
 .chat-page__row {
@@ -1655,6 +1816,105 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
+/* From Uiverse.io by xopc333 — круглая кнопка «назад» (40×40 как .chat-page__icon-btn) */
+.chat-page__mobile-back-btn {
+  --mobile-back-size: 40px;
+  --mobile-back-shift: -40px;
+  flex-shrink: 0;
+  display: block;
+  position: relative;
+  width: var(--mobile-back-size);
+  height: var(--mobile-back-size);
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  outline: none;
+  background-color: transparent;
+  cursor: pointer;
+  border: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.chat-page__mobile-back-btn::before,
+.chat-page__mobile-back-btn::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  inset: 5px;
+}
+
+.chat-page__mobile-back-btn::before {
+  border: 3px solid color-mix(in srgb, var(--border-color) 65%, var(--text-secondary));
+  transition:
+    opacity 0.4s cubic-bezier(0.77, 0, 0.175, 1) 80ms,
+    transform 0.5s cubic-bezier(0.455, 0.03, 0.515, 0.955) 80ms;
+}
+
+.chat-page__mobile-back-btn::after {
+  border: 3px solid var(--accent-green);
+  transform: scale(1.28);
+  transition: opacity 0.4s cubic-bezier(0.165, 0.84, 0.44, 1), transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  opacity: 0;
+}
+
+.chat-page__mobile-back-btn:hover::before,
+.chat-page__mobile-back-btn:focus-visible::before {
+  opacity: 0;
+  transform: scale(0.7);
+  transition:
+    opacity 0.4s cubic-bezier(0.165, 0.84, 0.44, 1),
+    transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.chat-page__mobile-back-btn:hover::after,
+.chat-page__mobile-back-btn:focus-visible::after {
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    opacity 0.4s cubic-bezier(0.77, 0, 0.175, 1) 80ms,
+    transform 0.5s cubic-bezier(0.455, 0.03, 0.515, 0.955) 80ms;
+}
+
+.chat-page__mobile-back-box {
+  display: flex;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(var(--mobile-back-size) * 2);
+  height: var(--mobile-back-size);
+  transition: transform 0.4s ease;
+}
+
+.chat-page__mobile-back-btn:hover .chat-page__mobile-back-box,
+.chat-page__mobile-back-btn:focus-visible .chat-page__mobile-back-box {
+  transform: translateX(var(--mobile-back-shift));
+}
+
+.chat-page__mobile-back-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--mobile-back-size);
+  width: var(--mobile-back-size);
+  height: var(--mobile-back-size);
+  margin: 0;
+  transform: rotate(180deg);
+  color: var(--text-primary);
+}
+
+.chat-page__mobile-back-ico svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: currentColor;
+}
+
+.chat-page__mobile-back-btn:focus-visible {
+  outline: 2px solid var(--accent-green);
+  outline-offset: 2px;
+}
+
 .chat-page__thread-head {
   display: flex;
   align-items: center;
@@ -1662,6 +1922,7 @@ onUnmounted(() => {
   padding: 16px 24px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+  gap: 8px;
 }
 
 .chat-page__thread-user {
@@ -1671,12 +1932,20 @@ onUnmounted(() => {
   min-width: 0;
 }
 
+.chat-page__thread-head-text {
+  min-width: 0;
+  flex: 1;
+}
+
 .chat-page__thread-title {
   margin: 0;
   font-size: 1.125rem;
   font-weight: 700;
   color: var(--text-primary);
   line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-page__thread-meta {
@@ -2041,8 +2310,11 @@ onUnmounted(() => {
 }
 
 .chat-page__messages {
-  flex: 1;
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 24px;
   background: color-mix(in srgb, var(--agri-bg) 55%, var(--bg-panel));
 }
@@ -3034,5 +3306,204 @@ a.chat-page__attach {
   border-top: none;
   margin-top: 8px;
   padding-top: 8px;
+}
+
+.chat-page__tab-text--short,
+.chat-page__toolbar-label--short {
+  display: none;
+}
+
+@media (max-width: 420px) {
+  .chat-page__tab-text--full {
+    display: none;
+  }
+
+  .chat-page__tab-text--short {
+    display: inline;
+  }
+}
+
+@media (max-width: 380px) {
+  .chat-page__toolbar-label--full {
+    display: none;
+  }
+
+  .chat-page__toolbar-label--short {
+    display: inline;
+  }
+}
+
+@media (max-width: 899px) {
+  .chat-page__thread-head {
+    padding: 10px 12px;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .chat-page__thread-actions {
+    flex-shrink: 0;
+    padding-top: 2px;
+  }
+
+  .chat-page__thread-user {
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .chat-page__thread-title {
+    font-size: 1rem;
+  }
+
+  .chat-page__thread-meta {
+    font-size: 0.8125rem;
+  }
+
+  .chat-page__row {
+    padding: 12px;
+    gap: 0;
+  }
+
+  .chat-page__row-main {
+    margin-left: 12px;
+  }
+
+  .chat-page__av {
+    width: 44px;
+    height: 44px;
+    font-size: 1rem;
+  }
+
+  .chat-page__search {
+    font-size: 16px; /* iOS: не увеличивать зум при фокусе */
+  }
+
+  .chat-page__tabs {
+    margin-top: 12px;
+    gap: 6px;
+  }
+
+  .chat-page__tab {
+    padding: 6px 12px;
+    font-size: 0.8125rem;
+  }
+
+  .chat-page__toolbar {
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .chat-page__toolbar-btn {
+    padding: 8px 12px;
+    font-size: 0.75rem;
+  }
+
+  .chat-page__messages {
+    padding: 12px 10px;
+  }
+
+  .chat-page__msg-row {
+    margin-bottom: 16px;
+    max-width: 100%;
+  }
+
+  .chat-page__composer-wrap {
+    padding: 10px 10px max(10px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .chat-page__composer {
+    gap: 6px;
+    padding: 6px;
+    border-radius: 12px;
+  }
+
+  .chat-page__textarea {
+    font-size: 16px;
+    min-height: 40px;
+    padding: 8px 4px;
+    max-height: 6.5rem;
+  }
+
+  .chat-page__composer-meta {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 0 4px;
+  }
+
+  .chat-page__draft-count {
+    align-self: flex-end;
+  }
+
+  .chat-page__composer-attach.action_has {
+    --sz: 0.9rem;
+  }
+
+  .chat-page__send {
+    position: relative;
+    margin-left: 2px;
+    padding: 0.55em 0.65em;
+    padding-left: 0.7em;
+  }
+
+  /* Только иконка — подпись остаётся для скринридеров */
+  .chat-page__send span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .chat-page__modal-backdrop {
+    padding: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px))
+      max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Диалоги выбора — снизу как sheet */
+  .chat-page__modal-backdrop:has(.chat-page__modal:not(.chat-page__modal--sm)) {
+    align-items: flex-end;
+  }
+
+  .chat-page__modal {
+    max-height: min(92dvh, calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 16px));
+    width: 100%;
+    max-width: 100%;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .chat-page__modal--sm {
+    border-radius: 16px;
+    max-width: calc(100vw - 24px);
+    width: 100%;
+  }
+
+  .chat-page__modal-list,
+  .chat-page__modal-list--scroll {
+    max-height: min(42dvh, 280px);
+  }
+
+  .chat-page__modal-footer {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+
+  .chat-page__modal-footer .chat-page__toolbar-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 380px) {
+  .chat-page__hint {
+    font-size: 0.6875rem;
+    line-height: 1.35;
+  }
 }
 </style>
