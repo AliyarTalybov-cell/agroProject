@@ -1039,13 +1039,7 @@ async function confirmDeleteTask() {
                     <span class="modal-file-name">{{ f.file_name }}</span>
                     <span class="modal-file-size">{{ formatFileSize(f.file_size) }}</span>
                   </div>
-                  <UiDeleteButton
-                    size="xs"
-                    aria-label="Удалить файл"
-                    title="Удалить файл"
-                    hover-label="Удалить файл"
-                    @click.prevent="removeFile(f)"
-                  />
+                  <UiDeleteButton size="xs" @click.prevent="removeFile(f)" />
                 </a>
                 <button
                   v-if="editingTaskId"
@@ -1076,9 +1070,6 @@ async function confirmDeleteTask() {
               size="md"
               wide
               :disabled="taskSaveLoading"
-              hover-label="Удалить задачу"
-              title="Удалить задачу"
-              aria-label="Удалить задачу"
               @click="openDeleteConfirm"
             />
             <div class="modal-actions-right">
@@ -2593,6 +2584,7 @@ async function confirmDeleteTask() {
   border-radius: 12px;
   text-decoration: none;
   color: inherit;
+  overflow: visible;
 }
 
 .modal-file-card--design:hover {
@@ -2670,6 +2662,7 @@ async function confirmDeleteTask() {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
+  overflow: visible;
 }
 
 .modal-actions-right {
@@ -3175,5 +3168,6 @@ async function confirmDeleteTask() {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  overflow: visible;
 }
 </style>

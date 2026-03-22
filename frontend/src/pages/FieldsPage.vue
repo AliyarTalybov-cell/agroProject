@@ -1295,7 +1295,7 @@ onMounted(async () => {
                     <td class="refs-cell-muted">{{ r.created_by || '—' }}</td>
                     <td class="refs-cell-muted">{{ formatRefDate(r.created_at) }}</td>
                     <td class="refs-cell-actions">
-                      <UiDeleteButton size="xs" :disabled="refsLoading" @click="openDeleteReasonConfirm(r)" />
+                      <UiDeleteButton size="sm" :disabled="refsLoading" @click="openDeleteReasonConfirm(r)" />
                     </td>
                   </tr>
                   <tr v-if="!downtimeReasons.length && !refsLoading">
@@ -1360,7 +1360,7 @@ onMounted(async () => {
                     <td class="refs-cell-muted">{{ op.created_by || '—' }}</td>
                     <td class="refs-cell-muted">{{ formatRefDate(op.created_at) }}</td>
                     <td class="refs-cell-actions">
-                      <UiDeleteButton size="xs" :disabled="refsLoading" @click="openDeleteOperationConfirm(op)" />
+                      <UiDeleteButton size="sm" :disabled="refsLoading" @click="openDeleteOperationConfirm(op)" />
                     </td>
                   </tr>
                   <tr v-if="!workOperations.length && !refsLoading">
@@ -1421,7 +1421,7 @@ onMounted(async () => {
                   <tr v-for="t in paginatedLandTypes" :key="t.id">
                     <td>{{ t.name }}</td>
                     <td class="refs-cell-actions">
-                      <UiDeleteButton size="xs" :disabled="refsLoading" @click="openDeleteLandTypeConfirm(t)" />
+                      <UiDeleteButton size="sm" :disabled="refsLoading" @click="openDeleteLandTypeConfirm(t)" />
                     </td>
                   </tr>
                   <tr v-if="!landTypes.length && !refsLoading">
@@ -1482,7 +1482,7 @@ onMounted(async () => {
                   <tr v-for="c in paginatedCrops" :key="c.id">
                     <td>{{ c.label }}</td>
                     <td class="refs-cell-actions">
-                      <UiDeleteButton size="xs" :disabled="refsLoading" @click="openDeleteCropConfirm(c)" />
+                      <UiDeleteButton size="sm" :disabled="refsLoading" @click="openDeleteCropConfirm(c)" />
                     </td>
                   </tr>
                   <tr v-if="!crops.length && !refsLoading">
@@ -1675,7 +1675,7 @@ onMounted(async () => {
                         <span>PDF</span>
                       </div>
                       <span class="modal-dropzone-filename">{{ newFieldSchemeFileName }}</span>
-                      <UiDeleteButton size="xs" hover-label="Удалить файл" title="Удалить файл" aria-label="Удалить файл" @click.prevent.stop="clearSchemeFile" />
+                      <UiDeleteButton size="xs" @click.prevent.stop="clearSchemeFile" />
                     </div>
                   </template>
                   <template v-else>
@@ -1993,6 +1993,7 @@ onMounted(async () => {
 }
 .fields-table-wrap {
   overflow-x: auto;
+  padding-bottom: 52px;
 }
 .fields-table {
   width: 100%;
@@ -2065,7 +2066,13 @@ onMounted(async () => {
   box-shadow: 0 0 0 1px var(--accent-green);
 }
 .fields-th-actions,
-.fields-td-actions { width: 148px; min-width: 148px; text-align: right; }
+.fields-td-actions {
+  width: 168px;
+  min-width: 168px;
+  text-align: right;
+  overflow: visible;
+  vertical-align: middle;
+}
 .fields-table tbody tr {
   transition: background 0.15s ease;
 }
@@ -2808,14 +2815,20 @@ onMounted(async () => {
   cursor: not-allowed;
 }
 .refs-th-actions {
-  width: 100px;
+  width: 132px;
+  min-width: 132px;
   text-align: right;
+  overflow: visible;
+  vertical-align: middle;
 }
 .refs-cell-actions {
   text-align: right;
+  overflow: visible;
+  vertical-align: middle;
 }
 .refs-table-wrap {
   overflow-x: auto;
+  padding-bottom: 52px;
 }
 .refs-table {
   width: 100%;
@@ -2827,6 +2840,7 @@ onMounted(async () => {
   padding: 8px 12px;
   text-align: left;
   border-bottom: 1px solid var(--border-color);
+  overflow: visible;
 }
 .refs-table th {
   color: var(--text-secondary);

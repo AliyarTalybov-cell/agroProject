@@ -14,6 +14,7 @@ import {
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import UiTrashIcon from '@/components/UiTrashIcon.vue'
 
 const EQUIPMENT_TYPES = [
   { value: '', label: 'Выберите тип' },
@@ -439,7 +440,7 @@ async function exportToPdf() {
 
       <div class="equipment-form-actions">
         <button type="button" class="equipment-btn equipment-btn-clear" @click="clearForm">
-          <svg class="equipment-btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+          <UiTrashIcon class="equipment-btn-icon" aria-hidden="true" />
           Очистить
         </button>
         <button
@@ -916,6 +917,8 @@ async function exportToPdf() {
 
 .table-wrapper {
   overflow-x: auto;
+  /* место под плашку «Удалить» под иконкой (UiDeleteButton) */
+  padding-bottom: 52px;
 }
 
 .equipment-table {
@@ -929,13 +932,16 @@ async function exportToPdf() {
   padding: 14px 16px;
   text-align: left;
   border-bottom: 1px solid var(--border-color);
+  overflow: visible;
 }
 
 .equipment-th-actions,
 .equipment-td-actions {
-  width: 148px;
-  min-width: 148px;
+  width: 168px;
+  min-width: 168px;
   text-align: right;
+  overflow: visible;
+  vertical-align: middle;
 }
 
 .equipment-table th {

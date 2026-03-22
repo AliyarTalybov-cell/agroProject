@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, useTemplateRef, watch } from 'vue'
 import { useAuth } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { formatSupabaseError } from '@/lib/formatSupabaseError'
 import { loadEmployees, searchEmployees, type EmployeeRow } from '@/lib/employeesSupabase'
+import UiTrashIcon from '@/components/UiTrashIcon.vue'
 import {
   type AvatarTone,
   type ChatFilterTab,
@@ -22,6 +23,7 @@ import {
   refreshChatTotalUnread,
   sendChatMessage,
   sendChatMessageWithFile,
+  deleteChatMessage,
   subscribeToThreadMessages,
   fetchGroupThreadMembersDisplay,
   presenceFromLastActivity,
@@ -55,6 +57,17 @@ const draft = ref('')
 const pendingAttachment = ref<File | null>(null)
 const attachBusy = ref(false)
 const fileInputRef = useTemplateRef<HTMLInputElement>('chatFileInput')
+
+/** Свайп «влево» для своих сообщений (px, отрицательное) */
+const SWIPE_DELETE_W = 76
+const swipeOffsets = reactive<Record<string, number>>({})
+const swipeDrag = ref<{ id: string; startX: number; base: number } | null>(null)
+const swipeDraggingId = ref<string | null>(null)
+
+const msgContextMenu = ref<{ msg: UiChatMessage; x: number; y: number } | null>(null)
+const deleteMessageModalOpen = ref(false)
+const deleteMessageTarget = ref<UiChatMessage | null>(null)
+const deleteMessageBusy = ref(false)
 
 const groupMembers = ref<GroupMemberDisplay[]>([])
 const groupMembersLoading = ref(false)
@@ -221,6 +234,8 @@ async function onPick(c: UiChatConversation) {
   error.value = null
   pendingAttachment.value = null
   if (fileInputRef.value) fileInputRef.value.value = ''
+  closeMsgContextMenu()
+  resetSwipeOffsets()
   if (c.kind !== 'group') {
     groupMembers.value = []
     groupMembersLoading.value = false
@@ -308,6 +323,116 @@ function onAttachmentInputChange(e: Event) {
 function clearPendingAttachment() {
   pendingAttachment.value = null
   if (fileInputRef.value) fileInputRef.value.value = ''
+}
+
+function resetSwipeOffsets() {
+  swipeDrag.value = null
+  swipeDraggingId.value = null
+  for (const k of Object.keys(swipeOffsets)) delete swipeOffsets[k]
+}
+
+function closeMsgContextMenu() {
+  msgContextMenu.value = null
+}
+
+function openDeleteMessageModal(msg: UiChatMessage) {
+  closeMsgContextMenu()
+  deleteMessageTarget.value = msg
+  deleteMessageModalOpen.value = true
+}
+
+function closeDeleteMessageModal() {
+  deleteMessageModalOpen.value = false
+  deleteMessageTarget.value = null
+}
+
+/** Закрытие модалки удаления только по действию пользователя (не во время запроса) */
+function tryCloseDeleteMessageModal() {
+  if (deleteMessageBusy.value) return
+  closeDeleteMessageModal()
+}
+
+async function confirmDeleteMessage() {
+  const msg = deleteMessageTarget.value
+  if (!msg || deleteMessageBusy.value) return
+  deleteMessageBusy.value = true
+  error.value = null
+  try {
+    await deleteChatMessage(msg.id)
+    delete swipeOffsets[msg.id]
+    closeDeleteMessageModal()
+    await reloadMessages()
+    await refreshThreads()
+    await refreshChatTotalUnread()
+  } catch (e) {
+    error.value = formatSupabaseError(e) || 'Не удалось удалить сообщение'
+  } finally {
+    deleteMessageBusy.value = false
+  }
+}
+
+function onMessageContextMenu(e: MouseEvent, msg: UiChatMessage) {
+  if (msg.side !== 'out') return
+  e.preventDefault()
+  const menuW = 200
+  const menuH = 52
+  let x = e.clientX
+  let y = e.clientY
+  if (typeof window !== 'undefined') {
+    x = Math.min(x, window.innerWidth - menuW - 8)
+    y = Math.min(y, window.innerHeight - menuH - 8)
+    x = Math.max(8, x)
+    y = Math.max(8, y)
+  }
+  msgContextMenu.value = { msg, x, y }
+}
+
+function ctxMenuDeleteClick() {
+  const msg = msgContextMenu.value?.msg
+  closeMsgContextMenu()
+  if (msg) openDeleteMessageModal(msg)
+}
+
+function ownPaneStyle(msg: UiChatMessage): Record<string, string> {
+  if (msg.side !== 'out') return {}
+  const x = swipeOffsets[msg.id] ?? 0
+  return { transform: `translate3d(${x}px,0,0)` }
+}
+
+function onOwnPaneTouchStart(e: TouchEvent, msg: UiChatMessage) {
+  if (msg.side !== 'out' || e.touches.length !== 1) return
+  closeMsgContextMenu()
+  const t = e.touches[0]!
+  swipeDrag.value = { id: msg.id, startX: t.clientX, base: swipeOffsets[msg.id] ?? 0 }
+  swipeDraggingId.value = msg.id
+}
+
+function onOwnPaneTouchMove(e: TouchEvent, msg: UiChatMessage) {
+  if (msg.side !== 'out' || !swipeDrag.value || swipeDrag.value.id !== msg.id || e.touches.length !== 1) return
+  const t = e.touches[0]!
+  const dx = t.clientX - swipeDrag.value.startX
+  let next = swipeDrag.value.base + dx
+  if (next > 0) next = 0
+  if (next < -SWIPE_DELETE_W) next = -SWIPE_DELETE_W
+  swipeOffsets[msg.id] = next
+  if (Math.abs(dx) > 6) e.preventDefault()
+}
+
+function onOwnPaneTouchEnd(msg: UiChatMessage) {
+  if (msg.side !== 'out') return
+  if (swipeDrag.value?.id === msg.id) swipeDrag.value = null
+  swipeDraggingId.value = null
+  const cur = swipeOffsets[msg.id] ?? 0
+  swipeOffsets[msg.id] = cur < -SWIPE_DELETE_W / 2 ? -SWIPE_DELETE_W : 0
+}
+
+function stripDeleteClick(msg: UiChatMessage) {
+  openDeleteMessageModal(msg)
+}
+
+/** Красная зона удаления только при открытом свайпе — иначе даёт артефакты по краям пузыря */
+function deleteStripVisible(msgId: string): boolean {
+  return (swipeOffsets[msgId] ?? 0) < -4
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -429,7 +554,22 @@ async function submitGroup() {
   }
 }
 
+function onGlobalPointerDown(e: MouseEvent) {
+  const t = e.target as HTMLElement | null
+  if (t?.closest?.('.chat-page__ctx-menu')) return
+  closeMsgContextMenu()
+}
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    closeMsgContextMenu()
+    tryCloseDeleteMessageModal()
+  }
+}
+
 onMounted(async () => {
+  document.addEventListener('pointerdown', onGlobalPointerDown)
+  document.addEventListener('keydown', onGlobalKeydown)
   presenceTicker = setInterval(() => {
     presenceClock.value++
   }, 60_000)
@@ -447,6 +587,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('pointerdown', onGlobalPointerDown)
+  document.removeEventListener('keydown', onGlobalKeydown)
   stopRealtime()
   if (dmSearchTimer) clearTimeout(dmSearchTimer)
   if (presenceTicker) {
@@ -755,63 +897,101 @@ onUnmounted(() => {
                 </template>
 
                 <div class="chat-page__msg-col" :class="{ 'chat-page__msg-col--out': block.msg.side === 'out' }">
-              <div v-if="block.msg.text" class="chat-page__bubble" :class="block.msg.side === 'out' ? 'chat-page__bubble--out' : 'chat-page__bubble--in'">
-                <p>{{ block.msg.text }}</p>
-              </div>
-              <a
-                v-if="block.msg.attachment?.url"
-                :href="block.msg.attachment.url"
-                class="chat-page__attach"
-                :class="block.msg.side === 'out' ? 'chat-page__attach--out' : ''"
-                target="_blank"
-                rel="noopener noreferrer"
-                :download="block.msg.attachment.name"
-              >
-                <div class="chat-page__attach-icon" aria-hidden="true">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M7 21h10a2 2 0 0 0 2-2V9.414a1 1 0 0 0-.293-.707l-5.414-5.414A1 1 0 0 0 12.586 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z" />
-                  </svg>
-                </div>
-                <div class="chat-page__attach-meta">
-                  <p class="chat-page__attach-name">{{ block.msg.attachment.name }}</p>
-                  <p class="chat-page__attach-size">{{ block.msg.attachment.size }}</p>
-                  <p class="chat-page__attach-hint">Скачать</p>
-                </div>
-              </a>
-              <div
-                v-else-if="block.msg.attachment"
-                class="chat-page__attach"
-                :class="block.msg.side === 'out' ? 'chat-page__attach--out' : ''"
-                role="group"
-                :aria-label="`Вложение: ${block.msg.attachment.name}`"
-              >
-                <div class="chat-page__attach-icon" aria-hidden="true">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M7 21h10a2 2 0 0 0 2-2V9.414a1 1 0 0 0-.293-.707l-5.414-5.414A1 1 0 0 0 12.586 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z" />
-                  </svg>
-                </div>
-                <div class="chat-page__attach-meta">
-                  <p class="chat-page__attach-name">{{ block.msg.attachment.name }}</p>
-                  <p class="chat-page__attach-size">{{ block.msg.attachment.size }}</p>
-                </div>
-              </div>
-                <div class="chat-page__msg-foot" :class="{ 'chat-page__msg-foot--out': block.msg.side === 'out' }">
-                  <span>{{ block.msg.time }}</span>
-                  <svg
-                    v-if="block.msg.side === 'out' && block.msg.read"
-                    class="chat-page__read-icon"
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    aria-label="Прочитано"
+                  <div
+                    class="chat-page__msg-block-wrap"
+                    :class="{
+                      'chat-page__msg-block-wrap--own': block.msg.side === 'out',
+                      'chat-page__msg-block-wrap--strip-open':
+                        block.msg.side === 'out' && deleteStripVisible(block.msg.id),
+                    }"
                   >
-                    <path d="M5 13l4 4L19 7" />
-                  </svg>
-                </div>
+                    <div
+                      v-if="block.msg.side === 'out'"
+                      class="chat-page__msg-delete-strip"
+                      :class="{ 'chat-page__msg-delete-strip--visible': deleteStripVisible(block.msg.id) }"
+                    >
+                      <!-- From Uiverse.io by boryanakrasteva -->
+                      <button
+                        type="button"
+                        class="btn chat-page__msg-delete-strip-btn"
+                        aria-label="Удалить сообщение"
+                        @click="stripDeleteClick(block.msg)"
+                      >
+                        <span class="chat-page__del-pill" aria-hidden="true">Удалить</span>
+                        <UiTrashIcon class="icon" width="15.43" height="18" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <div
+                      class="chat-page__msg-block-pane"
+                      :class="{
+                        'chat-page__msg-block-pane--own': block.msg.side === 'out',
+                        'chat-page__msg-block-pane--dt': block.msg.side !== 'out' || swipeDraggingId !== block.msg.id,
+                      }"
+                      :style="ownPaneStyle(block.msg)"
+                      @touchstart="onOwnPaneTouchStart($event, block.msg)"
+                      @touchmove="onOwnPaneTouchMove($event, block.msg)"
+                      @touchend="onOwnPaneTouchEnd(block.msg)"
+                      @contextmenu="onMessageContextMenu($event, block.msg)"
+                    >
+                      <div v-if="block.msg.text" class="chat-page__bubble" :class="block.msg.side === 'out' ? 'chat-page__bubble--out' : 'chat-page__bubble--in'">
+                        <p>{{ block.msg.text }}</p>
+                      </div>
+                      <a
+                        v-if="block.msg.attachment?.url"
+                        :href="block.msg.attachment.url"
+                        class="chat-page__attach"
+                        :class="block.msg.side === 'out' ? 'chat-page__attach--out' : ''"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        :download="block.msg.attachment.name"
+                      >
+                        <div class="chat-page__attach-icon" aria-hidden="true">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M7 21h10a2 2 0 0 0 2-2V9.414a1 1 0 0 0-.293-.707l-5.414-5.414A1 1 0 0 0 12.586 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z" />
+                          </svg>
+                        </div>
+                        <div class="chat-page__attach-meta">
+                          <p class="chat-page__attach-name">{{ block.msg.attachment.name }}</p>
+                          <p class="chat-page__attach-size">{{ block.msg.attachment.size }}</p>
+                          <p class="chat-page__attach-hint">Скачать</p>
+                        </div>
+                      </a>
+                      <div
+                        v-else-if="block.msg.attachment"
+                        class="chat-page__attach"
+                        :class="block.msg.side === 'out' ? 'chat-page__attach--out' : ''"
+                        role="group"
+                        :aria-label="`Вложение: ${block.msg.attachment.name}`"
+                      >
+                        <div class="chat-page__attach-icon" aria-hidden="true">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M7 21h10a2 2 0 0 0 2-2V9.414a1 1 0 0 0-.293-.707l-5.414-5.414A1 1 0 0 0 12.586 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z" />
+                          </svg>
+                        </div>
+                        <div class="chat-page__attach-meta">
+                          <p class="chat-page__attach-name">{{ block.msg.attachment.name }}</p>
+                          <p class="chat-page__attach-size">{{ block.msg.attachment.size }}</p>
+                        </div>
+                      </div>
+                      <div class="chat-page__msg-foot" :class="{ 'chat-page__msg-foot--out': block.msg.side === 'out' }">
+                        <span>{{ block.msg.time }}</span>
+                        <svg
+                          v-if="block.msg.side === 'out' && block.msg.read"
+                          class="chat-page__read-icon"
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          aria-label="Прочитано"
+                        >
+                          <path d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <template v-if="block.msg.side === 'out'">
@@ -839,16 +1019,45 @@ onUnmounted(() => {
                 </button>
               </div>
               <div class="chat-page__composer" :class="{ 'chat-page__composer--busy': attachBusy }">
+            <!-- From Uiverse.io by ilkhoeri — иконка «документ» для вложения -->
             <button
               type="button"
-              class="chat-page__composer-icon"
+              class="action_has has_saved chat-page__composer-attach"
               title="Прикрепить файл"
               aria-label="Прикрепить файл"
               :disabled="chatLoading || attachBusy"
               @click="triggerAttachmentPick"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M15.172 7 8.586 13.586a2 2 0 1 0 2.828 2.828l6.414-6.586a4 4 0 1 0-5.656-5.656l-6.415 6.585a6 6 0 1 0 8.486 8.486L20.5 13" />
+              <svg
+                aria-hidden="true"
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                stroke-linejoin="round"
+                stroke-linecap="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                fill="none"
+              >
+                <path
+                  d="m19,21H5c-1.1,0-2-.9-2-2V5c0-1.1.9-2,2-2h11l5,5v11c0,1.1-.9,2-2,2Z"
+                  stroke-linejoin="round"
+                  stroke-linecap="round"
+                  data-path="box"
+                />
+                <path
+                  d="M7 3L7 8L15 8"
+                  stroke-linejoin="round"
+                  stroke-linecap="round"
+                  data-path="line-top"
+                />
+                <path
+                  d="M17 20L17 13L7 13L7 20"
+                  stroke-linejoin="round"
+                  stroke-linecap="round"
+                  data-path="line-bottom"
+                />
               </svg>
             </button>
             <textarea
@@ -874,7 +1083,7 @@ onUnmounted(() => {
             </div>
               </div>
               <p class="chat-page__hint">
-                Нажмите Enter для отправки, Shift+Enter для переноса. Файл до 10 МБ — скрепка, затем «Отправить».
+                Enter — отправить, Shift+Enter — перенос. Файл до 10 МБ. Свои сообщения: ПКМ — меню, на телефоне — свайп влево.
               </p>
             </footer>
             </div>
@@ -936,6 +1145,54 @@ onUnmounted(() => {
           <button type="button" class="chat-page__toolbar-btn" :disabled="groupBusy" @click="groupModalOpen = false">Отмена</button>
           <button type="button" class="chat-page__toolbar-btn chat-page__toolbar-btn--primary" :disabled="groupBusy" @click="submitGroup">
             {{ groupBusy ? 'Создание…' : 'Создать' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <Teleport to="body">
+      <Transition name="chat-ctx">
+        <div v-if="msgContextMenu" class="chat-page__ctx-layer">
+          <div
+            class="chat-page__ctx-menu"
+            role="menu"
+            :style="{ left: msgContextMenu.x + 'px', top: msgContextMenu.y + 'px' }"
+            @pointerdown.stop
+          >
+            <!-- Та же кнопка, что в полосе свайпа (Uiverse / boryanakrasteva), цвета под панель -->
+            <button
+              type="button"
+              class="btn chat-page__ctx-delete-btn"
+              role="menuitem"
+              aria-label="Удалить сообщение"
+              @click="ctxMenuDeleteClick"
+            >
+              <span class="chat-page__del-pill chat-page__del-pill--ctx" aria-hidden="true">Удалить</span>
+              <UiTrashIcon class="icon" width="15.43" height="18" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <div
+      v-if="deleteMessageModalOpen"
+      class="chat-page__modal-backdrop"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="chat-delete-msg-title"
+      @click.self="tryCloseDeleteMessageModal"
+    >
+      <div class="chat-page__modal chat-page__modal--sm" @click.stop>
+        <h2 id="chat-delete-msg-title" class="chat-page__modal-title">Удалить сообщение?</h2>
+        <p class="chat-page__modal-text">
+          Это действие нельзя отменить.
+          <template v-if="deleteMessageTarget?.attachment"> Вложенный файл будет удалён навсегда.</template>
+        </p>
+        <div class="chat-page__modal-footer">
+          <button type="button" class="chat-page__toolbar-btn" :disabled="deleteMessageBusy" @click="tryCloseDeleteMessageModal">Отмена</button>
+          <button type="button" class="chat-page__toolbar-btn chat-page__toolbar-btn--danger" :disabled="deleteMessageBusy" @click="confirmDeleteMessage">
+            {{ deleteMessageBusy ? 'Удаление…' : 'Удалить' }}
           </button>
         </div>
       </div>
@@ -1674,6 +1931,230 @@ onUnmounted(() => {
   align-items: flex-end;
 }
 
+.chat-page__msg-block-wrap {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+}
+
+.chat-page__msg-block-wrap--own {
+  position: relative;
+  overflow: hidden;
+  align-self: flex-end;
+  border-radius: 4px;
+}
+
+/* Подсказка «Удалить» не обрезается, пока открыт свайп */
+.chat-page__msg-block-wrap--own.chat-page__msg-block-wrap--strip-open {
+  overflow: visible;
+}
+
+.chat-page__msg-delete-strip {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #dc2626;
+  z-index: 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.18s ease,
+    visibility 0.18s ease;
+}
+
+.chat-page__msg-delete-strip--visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* Плашка «Удалить» только при hover / focus — над иконкой */
+.chat-page__del-pill {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  margin-bottom: 4px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background-color: rgb(168, 7, 7);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+  z-index: 4;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(4px);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.2s linear,
+    visibility 0.2s linear,
+    transform 0.2s linear;
+}
+
+.chat-page__del-pill--ctx {
+  font-size: 9px;
+  padding: 2px 5px;
+}
+
+/* В ПКМ-меню плашка снизу (как UiDeleteButton), не вылезает за край экрана */
+.chat-page__ctx-menu .chat-page__ctx-delete-btn .chat-page__del-pill {
+  top: 100%;
+  bottom: auto;
+  margin-bottom: 0;
+  margin-top: 6px;
+  transform: translateX(-50%) translateY(-6px);
+}
+
+.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:hover .chat-page__del-pill,
+.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:focus-visible .chat-page__del-pill {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+  transition-delay: 0.15s;
+}
+
+.chat-page__ctx-menu .btn.chat-page__ctx-delete-btn:hover .chat-page__del-pill,
+.chat-page__ctx-menu .btn.chat-page__ctx-delete-btn:focus-visible .chat-page__del-pill {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+  transition-delay: 0.15s;
+}
+
+.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn {
+  background-color: transparent;
+  position: relative;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  overflow: visible;
+}
+
+.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn .icon {
+  transform: scale(1);
+  transition: 0.2s linear;
+  display: block;
+}
+
+.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn .icon path {
+  fill: currentColor;
+}
+
+.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:hover > .icon {
+  transform: scale(1.12);
+}
+
+.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:hover > .icon path {
+  fill: rgb(168, 7, 7);
+}
+
+.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-page__msg-block-pane {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-page__msg-block-pane--own {
+  align-items: flex-end;
+  background: transparent;
+  touch-action: pan-y;
+}
+
+.chat-page__msg-block-pane--dt {
+  transition: transform 0.22s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.chat-page__ctx-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 4500;
+  pointer-events: none;
+}
+
+.chat-page__ctx-menu {
+  position: fixed;
+  pointer-events: auto;
+  min-width: auto;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-card);
+  overflow: visible;
+  animation: chat-ctx-pop 0.2s ease;
+}
+
+@keyframes chat-ctx-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Контекстное меню: та же логика — плашка при наведении */
+.chat-page__ctx-menu .btn.chat-page__ctx-delete-btn {
+  background-color: transparent;
+  position: relative;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary, #64748b);
+  overflow: visible;
+}
+
+.chat-page__ctx-menu .btn.chat-page__ctx-delete-btn .icon {
+  transform: scale(1);
+  transition: 0.2s linear;
+  display: block;
+}
+
+.chat-page__ctx-menu .btn.chat-page__ctx-delete-btn .icon path {
+  fill: currentColor;
+}
+
+.chat-page__ctx-menu .btn.chat-page__ctx-delete-btn:hover > .icon {
+  transform: scale(1.12);
+}
+
+.chat-page__ctx-menu .btn.chat-page__ctx-delete-btn:hover > .icon path {
+  fill: rgb(168, 7, 7);
+}
+
 .chat-page__bubble {
   padding: 12px 20px;
   border-radius: 16px;
@@ -1848,7 +2329,7 @@ a.chat-page__attach {
 }
 
 .chat-page__textarea:disabled,
-.chat-page__composer-icon:disabled,
+.chat-page__composer-attach:disabled,
 .chat-page__send:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -1877,23 +2358,113 @@ a.chat-page__attach {
   pointer-events: none;
 }
 
-.chat-page__composer-icon {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
+/* Uiverse.io / ilkhoeri — кнопка вложения файла */
+.chat-page__composer-attach.action_has {
+  --color: 220 9% 46%;
+  --color-has: 211 100% 48%;
+  --sz: 1rem;
   cursor: pointer;
-  padding: 8px;
-  border-radius: 12px;
   display: flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(var(--sz) * 2.5);
+  width: calc(var(--sz) * 2.5);
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.375rem;
+  border: 0.0625rem solid hsl(var(--color));
   flex-shrink: 0;
-  transition:
-    color 0.15s ease,
-    background 0.15s ease;
+  background: transparent;
+  color: hsl(var(--color));
 }
 
-.chat-page__composer-icon:hover {
-  color: var(--accent-green);
-  background: var(--bg-panel);
+[data-theme='dark'] .chat-page__composer-attach.action_has {
+  --color: 215 14% 55%;
+  --color-has: 211 100% 58%;
+}
+
+.chat-page__composer-attach.has_saved:hover:not(:disabled) {
+  border-color: hsl(var(--color-has));
+}
+
+.chat-page__composer-attach.has_saved:hover:not(:disabled) svg {
+  color: hsl(var(--color-has));
+}
+
+.chat-page__composer-attach.has_saved svg {
+  overflow: visible;
+  height: calc(var(--sz) * 1.75);
+  width: calc(var(--sz) * 1.75);
+  --ease: cubic-bezier(0.5, 0, 0.25, 1);
+  --zoom-from: 1.75;
+  --zoom-via: 0.75;
+  --zoom-to: 1;
+  --duration: 1s;
+}
+
+.chat-page__composer-attach.has_saved:hover:not(:disabled) path[data-path='box'] {
+  transition: all 0.3s var(--ease);
+  animation: chat-attach-has-saved var(--duration) var(--ease) forwards;
+  fill: hsl(var(--color-has) / 0.35);
+}
+
+.chat-page__composer-attach.has_saved:hover:not(:disabled) path[data-path='line-top'] {
+  animation: chat-attach-has-saved-line-top var(--duration) var(--ease) forwards;
+}
+
+.chat-page__composer-attach.has_saved:hover:not(:disabled) path[data-path='line-bottom'] {
+  animation:
+    chat-attach-has-saved-line-bottom var(--duration) var(--ease) forwards,
+    chat-attach-has-saved-line-bottom-2 calc(var(--duration) * 1) var(--ease) calc(var(--duration) * 0.75);
+}
+
+@keyframes chat-attach-has-saved-line-top {
+  33.333% {
+    transform: rotate(0deg) translate(1px, 2px) scale(var(--zoom-from));
+    d: path('M 3 5 L 3 8 L 3 8');
+  }
+  66.666% {
+    transform: rotate(20deg) translate(2px, -2px) scale(var(--zoom-via));
+  }
+  99.999% {
+    transform: rotate(0deg) translate(0px, 0px) scale(var(--zoom-to));
+  }
+}
+
+@keyframes chat-attach-has-saved-line-bottom {
+  33.333% {
+    transform: rotate(0deg) translate(1px, 2px) scale(var(--zoom-from));
+    d: path('M 17 20 L 17 13 L 7 13 L 7 20');
+  }
+  66.666% {
+    transform: rotate(20deg) translate(2px, -2px) scale(var(--zoom-via));
+  }
+  99.999% {
+    transform: rotate(0deg) translate(0px, 0px) scale(var(--zoom-to));
+    d: path('M 17 21 L 17 21 L 7 21 L 7 21');
+  }
+}
+
+@keyframes chat-attach-has-saved-line-bottom-2 {
+  from {
+    d: path('M 17 21 L 17 21 L 7 21 L 7 21');
+  }
+  to {
+    transform: rotate(0deg) translate(0px, 0px) scale(var(--zoom-to));
+    d: path('M 17 20 L 17 13 L 7 13 L 7 20');
+    fill: white;
+  }
+}
+
+@keyframes chat-attach-has-saved {
+  33.333% {
+    transform: rotate(0deg) translate(1px, 2px) scale(var(--zoom-from));
+  }
+  66.666% {
+    transform: rotate(20deg) translate(2px, -2px) scale(var(--zoom-via));
+  }
+  99.999% {
+    transform: rotate(0deg) translate(0px, 0px) scale(var(--zoom-to));
+  }
 }
 
 .chat-page__textarea {
@@ -2009,6 +2580,16 @@ a.chat-page__attach {
 .chat-page__toolbar-btn--primary:hover:not(:disabled) {
   background: var(--accent-green-hover);
   border-color: var(--accent-green-hover);
+}
+
+.chat-page__toolbar-btn--danger {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.chat-page__toolbar-btn--danger:hover:not(:disabled) {
+  filter: brightness(1.06);
 }
 
 .chat-page__thread-empty {
@@ -2162,5 +2743,28 @@ a.chat-page__attach {
   padding: 16px 18px 0;
   margin-top: 12px;
   border-top: 1px solid var(--border-color);
+}
+
+.chat-page__modal--sm {
+  max-width: 380px;
+  padding: 20px 0 8px;
+}
+
+.chat-page__modal--sm .chat-page__modal-title {
+  padding: 0 20px;
+  margin-bottom: 10px;
+}
+
+.chat-page__modal-text {
+  margin: 0 20px 4px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.chat-page__modal--sm .chat-page__modal-footer {
+  border-top: none;
+  margin-top: 8px;
+  padding-top: 8px;
 }
 </style>

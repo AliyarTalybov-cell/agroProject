@@ -498,7 +498,7 @@ onMounted(refreshAll)
                 />
                 <span class="field-details-gallery-title">{{ item.title }}</span>
                 <div class="field-details-gallery-delete-wrap">
-                  <UiDeleteButton size="xs" hover-label="Удалить" title="Удалить" @click.prevent="onDeletePhoto(item.photo)" />
+                  <UiDeleteButton size="xs" @click.prevent="onDeletePhoto(item.photo)" />
                 </div>
               </div>
             </div>

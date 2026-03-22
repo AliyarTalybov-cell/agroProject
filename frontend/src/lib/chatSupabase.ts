@@ -409,6 +409,38 @@ export async function sendChatMessageWithFile(threadId: string, file: File, body
   }
 }
 
+/**
+ * Удалить своё сообщение и файл из Storage (если было вложение).
+ */
+export async function deleteChatMessage(messageId: string): Promise<void> {
+  if (!supabase) throw new Error('Нет подключения')
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) throw new Error('Требуется вход')
+
+  const { data: row, error: selErr } = await supabase
+    .from('chat_messages')
+    .select('sender_id, attachment_path, attachment_bucket')
+    .eq('id', messageId)
+    .maybeSingle()
+
+  if (selErr) throw selErr
+  if (!row) throw new Error('Сообщение не найдено')
+  if (row.sender_id !== user.id) throw new Error('Можно удалить только свои сообщения')
+
+  const path = row.attachment_path as string | null
+  const bucket = (row.attachment_bucket as string | null)?.trim() || CHAT_ATTACHMENTS_BUCKET
+
+  const { error: delErr } = await supabase.from('chat_messages').delete().eq('id', messageId)
+  if (delErr) throw delErr
+
+  if (path) {
+    const { error: stErr } = await supabase.storage.from(bucket).remove([path])
+    if (stErr) console.warn('chat attachment storage remove', stErr.message)
+  }
+}
+
 export async function getOrCreateDmThread(otherUserId: string): Promise<string> {
   if (!supabase) throw new Error('Нет подключения')
   const { data, error } = await supabase.rpc('get_or_create_dm_thread', { p_other_user: otherUserId })
@@ -505,16 +537,18 @@ export async function fetchGroupThreadMembersDisplay(
 
 export function subscribeToThreadMessages(
   threadId: string,
-  onInsert: () => void,
+  onChange: () => void,
 ): { unsubscribe: () => void } {
   if (!supabase) return { unsubscribe: () => {} }
   const client = supabase
+  const filter = `thread_id=eq.${threadId}`
   const channel = client
     .channel(`chat-messages:${threadId}`)
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `thread_id=eq.${threadId}` },
-      () => onInsert(),
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter }, () =>
+      onChange(),
+    )
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'chat_messages', filter }, () =>
+      onChange(),
     )
     .subscribe()
   return {

@@ -139,5 +139,6 @@ npm run dev
 6. **Группы («Команды»)**: RPC `create_group_thread` — только для `profiles.role = 'manager'`.
 7. **Непрочитанные**: по полю `last_read_at` в `chat_thread_members`; бейдж в меню — RPC `chat_total_unread`.
 8. **Realtime**: миграция добавляет `chat_messages` в публикацию `supabase_realtime` (если таблица уже в публикации, блок в миграции просто пропустит ошибку).
-9. **Вложения в чате**: если бакет **`chat-attachments`** создали вручную в Dashboard, примените только **`supabase/migrations/add_chat_attachments_storage_policies_only.sql`** (политики RLS на `storage.objects`). Иначе целиком **`add_chat_attachments_storage.sql`** (бакет + политики). Лимит файла **10 МБ** (и в бакете, и на фронте). Если бакет уже был с другим лимитом — **`update_chat_attachments_bucket_10mb.sql`**. Поля `attachment_*` в `chat_messages` уже есть в базовой миграции чата.
+9. **Удаление своих сообщений**: миграция **`supabase/migrations/add_chat_messages_delete_policy.sql`** (RLS `DELETE` + `grant delete`).
+10. **Вложения в чате**: если бакет **`chat-attachments`** создали вручную в Dashboard, примените только **`supabase/migrations/add_chat_attachments_storage_policies_only.sql`** (политики RLS на `storage.objects`). Иначе целиком **`add_chat_attachments_storage.sql`** (бакет + политики). Лимит файла **10 МБ** (и в бакете, и на фронте). Если бакет уже был с другим лимитом — **`update_chat_attachments_bucket_10mb.sql`**. Поля `attachment_*` в `chat_messages` уже есть в базовой миграции чата.
 

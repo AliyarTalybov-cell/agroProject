@@ -2207,6 +2207,7 @@ function statusClass(s: Status) {
 
 .task-list-table-wrapper {
   overflow-x: auto;
+  padding-bottom: 52px;
 }
 
 .task-list-table {

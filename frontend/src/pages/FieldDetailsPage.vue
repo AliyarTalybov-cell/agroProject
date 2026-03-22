@@ -499,14 +499,7 @@ watch(() => props.id, loadData)
                 <button type="button" class="field-details-scheme-btn" :disabled="schemeUploading" @click="triggerSchemeUpload">
                   {{ schemeUploading ? 'Загрузка…' : 'Загрузить схему' }}
                 </button>
-                <UiDeleteButton
-                  v-if="editForm.scheme_file_url"
-                  size="xs"
-                  hover-label="Удалить схему"
-                  title="Удалить схему"
-                  aria-label="Удалить схему"
-                  @click="clearScheme"
-                />
+                <UiDeleteButton v-if="editForm.scheme_file_url" size="xs" @click="clearScheme" />
                 <span v-if="editForm.scheme_file_url" class="field-details-scheme-hint">Схема прикреплена</span>
               </div>
             </div>
@@ -612,7 +605,7 @@ watch(() => props.id, loadData)
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                 <span class="field-details-gallery-title">{{ item.title }}</span>
                 <div class="field-details-gallery-delete-wrap">
-                  <UiDeleteButton size="xs" hover-label="Удалить" title="Удалить" @click.prevent="removeScheme" />
+                  <UiDeleteButton size="xs" @click.prevent="removeScheme" />
                 </div>
               </a>
               <div v-else class="field-details-gallery-thumb">
@@ -624,12 +617,7 @@ watch(() => props.id, loadData)
                 />
                 <span class="field-details-gallery-title">{{ item.title }}</span>
                 <div class="field-details-gallery-delete-wrap">
-                  <UiDeleteButton
-                    size="xs"
-                    hover-label="Удалить"
-                    title="Удалить"
-                    @click="item.isScheme ? removeScheme() : removePhoto(item.id)"
-                  />
+                  <UiDeleteButton size="xs" @click="item.isScheme ? removeScheme() : removePhoto(item.id)" />
                 </div>
               </div>
             </div>

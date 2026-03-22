@@ -213,15 +213,7 @@ watch(
 
         <footer class="eem-footer">
           <div class="eem-footer-delete">
-            <UiDeleteButton
-              size="md"
-              wide
-              :disabled="busy"
-              hover-label="Удалить сотрудника"
-              title="Удалить сотрудника"
-              aria-label="Удалить сотрудника"
-              @click="confirmDelete = true"
-            />
+            <UiDeleteButton size="md" wide :disabled="busy" @click="confirmDelete = true" />
           </div>
           <div class="eem-actions">
             <button type="button" class="eem-btn eem-btn--ghost" :disabled="busy" @click="close">Закрыть</button>
@@ -546,17 +538,18 @@ watch(
   justify-content: space-between;
   gap: 16px;
   background: #f8faf9;
+  overflow: visible;
 }
 [data-theme='dark'] .eem-footer {
   background: rgba(18, 32, 20, 0.98);
   border-top-color: rgba(255, 255, 255, 0.12);
 }
 .eem-footer-delete {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: calc(100% - 12px);
+  flex: 0 0 auto;
+  min-width: auto;
   display: flex;
   align-items: center;
+  overflow: visible;
 }
 .eem-actions {
   display: flex;
