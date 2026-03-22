@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, useTemplateRef, watch } from 'vue'
 import { useAuth } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { formatSupabaseError } from '@/lib/formatSupabaseError'
@@ -7,20 +7,24 @@ import { loadEmployees, searchEmployees, type EmployeeRow } from '@/lib/employee
 import UiTrashIcon from '@/components/UiTrashIcon.vue'
 import {
   type AvatarTone,
+  CHAT_MESSAGES_PAGE_SIZE,
   type ChatFilterTab,
+  type ChatMessageRow,
+  type ThreadMessageRealtimePayload,
   type UiChatConversation,
   type UiChatMessage,
   createGroupThread,
   fetchChatThreadList,
   fetchPeerLastRead,
   fetchSenderMetaMap,
-  fetchThreadMessages,
+  fetchThreadMessagesPage,
   getOrCreateDmThread,
   mapMessagesForUi,
   mapThreadRow,
   matchesChatListSearch,
   markThreadAsRead,
   refreshChatTotalUnread,
+  CHAT_MESSAGE_MAX_CHARS,
   sendChatMessage,
   sendChatMessageWithFile,
   deleteChatMessage,
@@ -53,6 +57,10 @@ const activeId = ref<string | null>(null)
 const filterTab = ref<ChatFilterTab>('all')
 const searchLocal = ref('')
 const messages = ref<UiChatMessage[]>([])
+/** Есть ли ещё сообщения старее загруженных (страницы по CHAT_MESSAGES_PAGE_SIZE) */
+const hasMoreOlderMessages = ref(false)
+const olderLoading = ref(false)
+const messagesScrollEl = useTemplateRef<HTMLDivElement>('messagesScrollEl')
 const draft = ref('')
 const pendingAttachment = ref<File | null>(null)
 const attachBusy = ref(false)
@@ -128,6 +136,9 @@ function renderMessageBlocks(msgs: UiChatMessage[]) {
 
 const messageBlocks = computed(() => renderMessageBlocks(messages.value))
 
+const draftLength = computed(() => draft.value.length)
+const draftAtLimit = computed(() => draftLength.value >= CHAT_MESSAGE_MAX_CHARS)
+
 const onlineInGroupCount = computed(() => {
   void presenceClock.value
   return groupMembers.value.filter((m) => presenceFromLastActivity(m.lastActivityAt).online).length
@@ -198,9 +209,11 @@ async function reloadMessages() {
   const tid = activeId.value
   if (!tid || !uid) {
     messages.value = []
+    hasMoreOlderMessages.value = false
     return
   }
-  const rows = await fetchThreadMessages(tid)
+  const rows = await fetchThreadMessagesPage(tid, { limit: CHAT_MESSAGES_PAGE_SIZE, before: null })
+  hasMoreOlderMessages.value = rows.length >= CHAT_MESSAGES_PAGE_SIZE
   const conv = conversations.value.find((c) => c.id === tid)
   let peerRead: string | null = null
   if (conv?.kind === 'direct' && conv.peerUserId) {
@@ -212,6 +225,108 @@ async function reloadMessages() {
   messages.value = mapMessagesForUi(rows, uid, peerRead, conv?.kind === 'group' ? { isGroup: true, senderMeta: meta } : undefined)
 }
 
+async function loadOlderMessages() {
+  const tid = activeId.value
+  const uid = myId.value
+  if (!tid || !uid || olderLoading.value || !hasMoreOlderMessages.value) return
+  const oldest = messages.value[0]
+  if (!oldest) return
+
+  const el = messagesScrollEl.value
+  const prevScrollHeight = el?.scrollHeight ?? 0
+  const prevScrollTop = el?.scrollTop ?? 0
+
+  olderLoading.value = true
+  try {
+    const rows = await fetchThreadMessagesPage(tid, {
+      limit: CHAT_MESSAGES_PAGE_SIZE,
+      before: { createdAt: oldest.createdAt, id: oldest.id },
+    })
+    if (rows.length === 0) {
+      hasMoreOlderMessages.value = false
+      return
+    }
+    if (rows.length < CHAT_MESSAGES_PAGE_SIZE) {
+      hasMoreOlderMessages.value = false
+    }
+    const conv = conversations.value.find((c) => c.id === tid)
+    let peerRead: string | null = null
+    if (conv?.kind === 'direct' && conv.peerUserId) {
+      peerRead = await fetchPeerLastRead(tid, conv.peerUserId)
+    }
+    const incomingSenders = [...new Set(rows.filter((r) => r.sender_id !== uid).map((r) => r.sender_id))]
+    const meta =
+      conv?.kind === 'group' ? await fetchSenderMetaMap(incomingSenders) : new Map()
+    const olderUi = mapMessagesForUi(
+      rows,
+      uid,
+      peerRead,
+      conv?.kind === 'group' ? { isGroup: true, senderMeta: meta } : undefined,
+    )
+    const existingIds = new Set(messages.value.map((m) => m.id))
+    const toPrepend = olderUi.filter((m) => !existingIds.has(m.id))
+    messages.value = [...toPrepend, ...messages.value]
+
+    await nextTick()
+    if (el) {
+      el.scrollTop = el.scrollHeight - prevScrollHeight + prevScrollTop
+    }
+  } catch (e) {
+    error.value = formatSupabaseError(e) || 'Не удалось загрузить старые сообщения'
+  } finally {
+    olderLoading.value = false
+  }
+}
+
+async function appendIncomingMessage(row: ChatMessageRow) {
+  const tid = activeId.value
+  const uid = myId.value
+  if (!tid || !uid || row.thread_id !== tid) return
+  if (messages.value.some((m) => m.id === row.id)) return
+  const conv = conversations.value.find((c) => c.id === tid)
+  let peerRead: string | null = null
+  if (conv?.kind === 'direct' && conv.peerUserId) {
+    peerRead = await fetchPeerLastRead(tid, conv.peerUserId)
+  }
+  const meta =
+    conv?.kind === 'group'
+      ? await fetchSenderMetaMap(row.sender_id === uid ? [] : [row.sender_id])
+      : new Map()
+  const mapped = mapMessagesForUi(
+    [row],
+    uid,
+    peerRead,
+    conv?.kind === 'group' ? { isGroup: true, senderMeta: meta } : undefined,
+  )
+  const ui = mapped[0]
+  if (!ui) return
+  messages.value = [...messages.value, ui]
+}
+
+async function handleThreadMessagesRealtime(tid: string, payload: ThreadMessageRealtimePayload | null) {
+  if (!configured.value || activeId.value !== tid) return
+
+  if (payload?.kind === 'delete') {
+    messages.value = messages.value.filter((m) => m.id !== payload.messageId)
+    void refreshThreads()
+    void refreshChatTotalUnread()
+    return
+  }
+
+  if (payload?.kind === 'insert') {
+    await appendIncomingMessage(payload.record)
+    void refreshThreads()
+    void refreshChatTotalUnread()
+    return
+  }
+
+  if (!hasMoreOlderMessages.value) {
+    await reloadMessages()
+  }
+  void refreshThreads()
+  void refreshChatTotalUnread()
+}
+
 function stopRealtime() {
   rtStop?.()
   rtStop = null
@@ -221,10 +336,8 @@ function startRealtime() {
   stopRealtime()
   const tid = activeId.value
   if (!tid) return
-  const { unsubscribe } = subscribeToThreadMessages(tid, () => {
-    void reloadMessages()
-    void refreshThreads()
-    void refreshChatTotalUnread()
+  const { unsubscribe } = subscribeToThreadMessages(tid, (payload) => {
+    void handleThreadMessagesRealtime(tid, payload)
   })
   rtStop = unsubscribe
 }
@@ -286,6 +399,10 @@ async function onSend() {
   const text = draft.value.trim()
   const file = pendingAttachment.value
   if (!file && !text) return
+  if (text.length > CHAT_MESSAGE_MAX_CHARS) {
+    error.value = `Не больше ${CHAT_MESSAGE_MAX_CHARS} символов в сообщении`
+    return
+  }
   error.value = null
   attachBusy.value = true
   try {
@@ -295,7 +412,7 @@ async function onSend() {
       if (fileInputRef.value) fileInputRef.value.value = ''
       draft.value = ''
     } else {
-      await sendChatMessage(activeId.value, draft.value)
+      await sendChatMessage(activeId.value, text)
       draft.value = ''
     }
     await reloadMessages()
@@ -438,7 +555,8 @@ function deleteStripVisible(msgId: string): boolean {
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
-    if (!attachBusy.value) void onSend()
+    if (attachBusy.value || draftLength.value > CHAT_MESSAGE_MAX_CHARS) return
+    void onSend()
   }
 }
 
@@ -878,7 +996,19 @@ onUnmounted(() => {
               </ul>
             </div>
 
-            <div class="chat-page__messages">
+            <div ref="messagesScrollEl" class="chat-page__messages">
+              <div v-if="hasMoreOlderMessages" class="chat-page__load-older-wrap">
+                <button
+                  type="button"
+                  class="chat-page__load-older"
+                  :disabled="olderLoading"
+                  @click="loadOlderMessages"
+                >
+                  <span v-if="olderLoading" class="chat-page__spinner chat-page__spinner--sm" aria-hidden="true" />
+                  {{ olderLoading ? 'Загрузка…' : 'Ранее сообщения' }}
+                </button>
+              </div>
+
               <div class="chat-page__date-pill-wrap">
                 <span class="chat-page__date-pill">{{ todayLabel() }}</span>
               </div>
@@ -1064,6 +1194,7 @@ onUnmounted(() => {
               v-model="draft"
               class="chat-page__textarea"
               rows="1"
+              :maxlength="CHAT_MESSAGE_MAX_CHARS"
               :placeholder="pendingAttachment ? 'Подпись к файлу (необязательно)…' : composerPlaceholder"
               :disabled="chatLoading || attachBusy"
               @keydown="onKeydown"
@@ -1074,7 +1205,12 @@ onUnmounted(() => {
                 type="button"
                 class="chat-page__send"
                 aria-label="Отправить"
-                :disabled="chatLoading || attachBusy || (!pendingAttachment && !draft.trim())"
+                :disabled="
+                  chatLoading ||
+                  attachBusy ||
+                  (!pendingAttachment && !draft.trim()) ||
+                  draftLength > CHAT_MESSAGE_MAX_CHARS
+                "
                 @click="onSend"
               >
                 <div class="svg-wrapper-1">
@@ -1092,9 +1228,19 @@ onUnmounted(() => {
               </button>
             </div>
               </div>
-              <p class="chat-page__hint">
-                Enter — отправить, Shift+Enter — перенос. Файл до 10 МБ. Свои сообщения: ПКМ — меню, на телефоне — свайп влево.
-              </p>
+              <div class="chat-page__composer-meta">
+                <p class="chat-page__hint">
+                  Enter — отправить, Shift+Enter — перенос. До {{ CHAT_MESSAGE_MAX_CHARS }} символов. Файл до 10 МБ. Свои
+                  сообщения: ПКМ — меню, на телефоне — свайп влево.
+                </p>
+                <span
+                  class="chat-page__draft-count"
+                  :class="{ 'chat-page__draft-count--limit': draftAtLimit }"
+                  aria-live="polite"
+                >
+                  {{ draftLength }}/{{ CHAT_MESSAGE_MAX_CHARS }}
+                </span>
+              </div>
             </footer>
             </div>
           </template>
@@ -1859,6 +2005,41 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
+.chat-page__load-older-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.chat-page__load-older {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--chip-bg);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.chat-page__load-older:hover:not(:disabled) {
+  background: var(--row-hover-bg);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+}
+
+.chat-page__load-older:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .chat-page__messages {
   flex: 1;
   overflow-y: auto;
@@ -1895,7 +2076,9 @@ onUnmounted(() => {
 .chat-page__msg-row {
   display: flex;
   gap: 12px;
+  width: 100%;
   max-width: 48rem;
+  min-width: 0;
   margin-bottom: 24px;
   align-items: flex-start;
 }
@@ -1935,6 +2118,7 @@ onUnmounted(() => {
   gap: 4px;
   align-items: flex-start;
   min-width: 0;
+  max-width: 100%;
 }
 
 .chat-page__msg-col--out {
@@ -2171,10 +2355,17 @@ onUnmounted(() => {
   font-size: 15px;
   line-height: 1.625;
   box-shadow: var(--shadow-card);
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-page__bubble p {
   margin: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-page__bubble--in {
@@ -2570,10 +2761,33 @@ a.chat-page__attach {
   }
 }
 
+.chat-page__composer-meta {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 0 8px;
+}
+
 .chat-page__hint {
-  margin: 8px 8px 0;
+  margin: 0;
+  flex: 1;
+  min-width: 0;
   font-size: 0.75rem;
   color: var(--text-secondary);
+}
+
+.chat-page__draft-count {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.chat-page__draft-count--limit {
+  color: var(--accent-green);
 }
 
 .chat-page__warn,

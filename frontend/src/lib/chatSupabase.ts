@@ -224,6 +224,9 @@ export const CHAT_ATTACHMENTS_BUCKET = 'chat-attachments'
 /** Лимит размера файла на клиенте (сервер: file_size_limit в бакете) */
 export const CHAT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 
+/** Максимум символов в тексте сообщения и в подписи к файлу (сервер: check в миграции) */
+export const CHAT_MESSAGE_MAX_CHARS = 300
+
 export function getChatAttachmentPublicUrl(bucket: string | null | undefined, path: string | null | undefined): string | undefined {
   if (!supabase || !path) return undefined
   const b = bucket?.trim() || CHAT_ATTACHMENTS_BUCKET
@@ -231,18 +234,41 @@ export function getChatAttachmentPublicUrl(bucket: string | null | undefined, pa
   return data.publicUrl
 }
 
-export async function fetchThreadMessages(threadId: string): Promise<ChatMessageRow[]> {
+/** Размер страницы истории (сервер: list_chat_messages_page, макс. 100) */
+export const CHAT_MESSAGES_PAGE_SIZE = 30
+
+export type ChatMessagesPageCursor = { createdAt: string; id: string }
+
+/**
+ * Страница сообщений: сначала новые (сервер), возвращаем в хронологическом порядке (старые → новые).
+ * Без курсора — последние `limit` сообщений.
+ */
+export async function fetchThreadMessagesPage(
+  threadId: string,
+  opts?: { limit?: number; before?: ChatMessagesPageCursor | null },
+): Promise<ChatMessageRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase
-    .from('chat_messages')
-    .select(
-      'id, thread_id, sender_id, body, attachment_bucket, attachment_path, attachment_name, attachment_size, created_at',
-    )
-    .eq('thread_id', threadId)
-    .order('created_at', { ascending: true })
+  const limit = Math.min(Math.max(opts?.limit ?? CHAT_MESSAGES_PAGE_SIZE, 1), 100)
+  const before = opts?.before ?? null
+  const { data, error } = await supabase.rpc('list_chat_messages_page', {
+    p_thread: threadId,
+    p_limit: limit,
+    p_before_created_at: before?.createdAt ?? null,
+    p_before_id: before?.id ?? null,
+  })
   if (error) throw error
-  return (data ?? []) as ChatMessageRow[]
+  const rows = (data ?? []) as ChatMessageRow[]
+  return rows.slice().reverse()
 }
+
+/** @deprecated Используй fetchThreadMessagesPage — по умолчанию только последняя страница */
+export async function fetchThreadMessages(threadId: string): Promise<ChatMessageRow[]> {
+  return fetchThreadMessagesPage(threadId, { before: null })
+}
+
+export type ThreadMessageRealtimePayload =
+  | { kind: 'insert'; record: ChatMessageRow }
+  | { kind: 'delete'; messageId: string }
 
 export type SenderMeta = { initials: string; tone: AvatarTone }
 
@@ -351,6 +377,9 @@ export async function sendChatMessage(threadId: string, body: string): Promise<v
   if (!user) throw new Error('Требуется вход')
   const trimmed = body.trim()
   if (!trimmed) return
+  if (trimmed.length > CHAT_MESSAGE_MAX_CHARS) {
+    throw new Error(`Сообщение не длиннее ${CHAT_MESSAGE_MAX_CHARS} символов`)
+  }
   const { error } = await supabase.from('chat_messages').insert({
     thread_id: threadId,
     sender_id: user.id,
@@ -381,6 +410,9 @@ export async function sendChatMessageWithFile(threadId: string, file: File, body
     throw new Error(`Файл больше ${Math.round(CHAT_ATTACHMENT_MAX_BYTES / (1024 * 1024))} МБ`)
   }
   const caption = body?.trim() || null
+  if (caption && caption.length > CHAT_MESSAGE_MAX_CHARS) {
+    throw new Error(`Подпись к файлу не длиннее ${CHAT_MESSAGE_MAX_CHARS} символов`)
+  }
   const safe = sanitizeChatFileName(file.name)
   const objectPath = `${threadId}/${user.id}/${crypto.randomUUID()}_${safe}`
 
@@ -535,21 +567,51 @@ export async function fetchGroupThreadMembersDisplay(
   return result
 }
 
+function rowFromRealtimeNew(raw: Record<string, unknown>): ChatMessageRow | null {
+  const id = raw.id != null ? String(raw.id) : ''
+  const thread_id = raw.thread_id != null ? String(raw.thread_id) : ''
+  const sender_id = raw.sender_id != null ? String(raw.sender_id) : ''
+  const created_at = raw.created_at != null ? String(raw.created_at) : ''
+  if (!id || !thread_id || !sender_id || !created_at) return null
+  return {
+    id,
+    thread_id,
+    sender_id,
+    body: raw.body != null ? String(raw.body) : null,
+    attachment_bucket: raw.attachment_bucket != null ? String(raw.attachment_bucket) : null,
+    attachment_path: raw.attachment_path != null ? String(raw.attachment_path) : null,
+    attachment_name: raw.attachment_name != null ? String(raw.attachment_name) : null,
+    attachment_size: raw.attachment_size != null ? Number(raw.attachment_size) : null,
+    created_at,
+  }
+}
+
 export function subscribeToThreadMessages(
   threadId: string,
-  onChange: () => void,
+  onEvent: (payload: ThreadMessageRealtimePayload | null) => void,
 ): { unsubscribe: () => void } {
   if (!supabase) return { unsubscribe: () => {} }
   const client = supabase
   const filter = `thread_id=eq.${threadId}`
   const channel = client
     .channel(`chat-messages:${threadId}`)
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter }, () =>
-      onChange(),
-    )
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'chat_messages', filter }, () =>
-      onChange(),
-    )
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter }, (payload) => {
+      const rec = rowFromRealtimeNew((payload.new ?? {}) as Record<string, unknown>)
+      if (!rec || rec.thread_id !== threadId) {
+        onEvent(null)
+        return
+      }
+      onEvent({ kind: 'insert', record: rec })
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'chat_messages', filter }, (payload) => {
+      const old = (payload.old ?? {}) as Record<string, unknown>
+      const messageId = old.id != null ? String(old.id) : null
+      if (!messageId) {
+        onEvent(null)
+        return
+      }
+      onEvent({ kind: 'delete', messageId })
+    })
     .subscribe()
   return {
     unsubscribe: () => {
