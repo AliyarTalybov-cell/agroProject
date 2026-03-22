@@ -11,7 +11,6 @@ import {
   type UiChatMessage,
   createGroupThread,
   fetchChatThreadList,
-  fetchOnlineUserIds,
   fetchPeerLastRead,
   fetchSenderMetaMap,
   fetchThreadMessages,
@@ -24,6 +23,7 @@ import {
   sendChatMessage,
   subscribeToThreadMessages,
   fetchGroupThreadMembersDisplay,
+  presenceFromLastActivity,
   type GroupMemberDisplay,
 } from '@/lib/chatSupabase'
 
@@ -74,6 +74,9 @@ const groupBusy = ref(false)
 
 let dmSearchTimer: ReturnType<typeof setTimeout> | null = null
 let rtStop: (() => void) | null = null
+let presenceTicker: ReturnType<typeof setInterval> | null = null
+/** Инкремент раз в минуту — пересчёт «в сети» по last_activity без новых запросов */
+const presenceClock = ref(0)
 
 const active = computed(() => conversations.value.find((c) => c.id === activeId.value) ?? null)
 
@@ -108,7 +111,31 @@ function renderMessageBlocks(msgs: UiChatMessage[]) {
 
 const messageBlocks = computed(() => renderMessageBlocks(messages.value))
 
-const onlineInGroupCount = computed(() => groupMembers.value.filter((m) => m.online).length)
+const onlineInGroupCount = computed(() => {
+  void presenceClock.value
+  return groupMembers.value.filter((m) => presenceFromLastActivity(m.lastActivityAt).online).length
+})
+
+function livePresence(iso: string | null) {
+  void presenceClock.value
+  return presenceFromLastActivity(iso)
+}
+
+function convListPresence(c: UiChatConversation) {
+  if (c.kind !== 'direct') return { online: false, presenceLabel: '' }
+  return livePresence(c.peerLastActivityAt)
+}
+
+function groupMemberPresence(m: GroupMemberDisplay) {
+  return livePresence(m.lastActivityAt)
+}
+
+const activeDirectPresence = computed(() => {
+  void presenceClock.value
+  const a = active.value
+  if (!a || a.kind !== 'direct') return null
+  return presenceFromLastActivity(a.peerLastActivityAt)
+})
 
 function participantsLabel(n: number): string {
   const h = n % 100
@@ -146,17 +173,7 @@ const composerPlaceholder = computed(() => {
 async function refreshThreads() {
   if (!configured.value) return
   const rows = await fetchChatThreadList()
-  const ui = rows.map(mapThreadRow)
-  const peerIds = rows
-    .filter((r) => r.kind === 'direct' && r.peer_user_id)
-    .map((r) => r.peer_user_id as string)
-  const online = await fetchOnlineUserIds(peerIds)
-  for (const c of ui) {
-    if (c.kind === 'direct' && c.peerUserId) {
-      c.online = online.has(c.peerUserId)
-    }
-  }
-  conversations.value = ui
+  conversations.value = rows.map(mapThreadRow)
 }
 
 async function reloadMessages() {
@@ -377,6 +394,9 @@ async function submitGroup() {
 }
 
 onMounted(async () => {
+  presenceTicker = setInterval(() => {
+    presenceClock.value++
+  }, 60_000)
   if (!configured.value) return
   listLoading.value = true
   error.value = null
@@ -393,6 +413,10 @@ onMounted(async () => {
 onUnmounted(() => {
   stopRealtime()
   if (dmSearchTimer) clearTimeout(dmSearchTimer)
+  if (presenceTicker) {
+    clearInterval(presenceTicker)
+    presenceTicker = null
+  }
 })
 </script>
 
@@ -506,7 +530,7 @@ onUnmounted(() => {
             <div :class="toneClass(c.tone)">{{ c.initials }}</div>
             <span
               class="chat-page__online"
-              :class="c.online ? 'chat-page__online--on' : 'chat-page__online--off'"
+              :class="convListPresence(c).online ? 'chat-page__online--on' : 'chat-page__online--off'"
               aria-hidden="true"
             />
           </div>
@@ -558,7 +582,7 @@ onUnmounted(() => {
               <div :class="toneClass(active.tone)">{{ active.initials }}</div>
               <span
                 class="chat-page__online"
-                :class="active.online ? 'chat-page__online--on' : 'chat-page__online--off'"
+                :class="activeDirectPresence?.online ? 'chat-page__online--on' : 'chat-page__online--off'"
                 aria-hidden="true"
               />
             </div>
@@ -584,8 +608,11 @@ onUnmounted(() => {
               <p v-else class="chat-page__thread-meta">
                 {{ active.role }}
                 <span class="chat-page__dot" aria-hidden="true" />
-                <span :class="active.online ? 'chat-page__status-on' : 'chat-page__status-off'">
-                  {{ active.online ? 'В сети' : 'Не в сети' }}
+                <span
+                  v-if="activeDirectPresence"
+                  :class="activeDirectPresence.online ? 'chat-page__status-on' : 'chat-page__status-off'"
+                >
+                  {{ activeDirectPresence.presenceLabel }}
                 </span>
               </p>
             </div>
@@ -663,9 +690,9 @@ onUnmounted(() => {
                     <div :class="toneClass(m.tone)">{{ m.initials }}</div>
                     <span
                       class="chat-page__online"
-                      :class="m.online ? 'chat-page__online--on' : 'chat-page__online--off'"
-                      :title="m.online ? 'В сети (экран оператора)' : 'Не в сети'"
-                      :aria-label="m.online ? `${m.displayName}, в сети` : `${m.displayName}, не в сети`"
+                      :class="groupMemberPresence(m).online ? 'chat-page__online--on' : 'chat-page__online--off'"
+                      :title="groupMemberPresence(m).presenceLabel"
+                      :aria-label="`${m.displayName}, ${groupMemberPresence(m).presenceLabel}`"
                     />
                   </div>
                   <div class="chat-page__group-roster-text">
@@ -676,9 +703,9 @@ onUnmounted(() => {
                     <span class="chat-page__group-roster-role">{{ m.roleLabel }}</span>
                     <span
                       class="chat-page__group-roster-status"
-                      :class="m.online ? 'chat-page__group-roster-status--on' : 'chat-page__group-roster-status--off'"
+                      :class="groupMemberPresence(m).online ? 'chat-page__group-roster-status--on' : 'chat-page__group-roster-status--off'"
                     >
-                      {{ m.online ? 'В сети' : 'Не в сети' }}
+                      {{ groupMemberPresence(m).presenceLabel }}
                     </span>
                   </div>
                 </li>
@@ -1176,6 +1203,7 @@ onUnmounted(() => {
   color: var(--text-secondary);
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -1396,8 +1424,9 @@ onUnmounted(() => {
 .chat-page__group-roster-status {
   font-size: 0.6875rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
+  text-transform: none;
 }
 
 .chat-page__group-roster-status--on {

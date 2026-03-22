@@ -13,6 +13,8 @@ export type ProfileRow = {
   additional_info: string | null
   created_at: string
   updated_at: string
+  /** Редко обновляется клиентом (см. activityHeartbeat) */
+  last_activity_at?: string | null
 }
 
 export type TaskRow = {

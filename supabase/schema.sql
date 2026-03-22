@@ -104,6 +104,7 @@ create table if not exists public.profiles (
   phone text,
   position text,
   additional_info text,
+  last_activity_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );

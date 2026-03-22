@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import { useAuth } from '@/stores/auth'
 import { chatTotalUnread, refreshChatTotalUnread } from '@/lib/chatSupabase'
+import { startActivityHeartbeat, stopActivityHeartbeat } from '@/lib/activityHeartbeat'
 
 const route = useRoute()
 const router = useRouter()
@@ -76,6 +77,16 @@ onUnmounted(() => {
 watch(
   () => route.path,
   () => void refreshChatTotalUnread(),
+)
+
+/** Редкий пинг last_activity_at (не чаще ~5 мин), только вне экрана входа */
+watch(
+  [() => auth.user.value?.id, isAuthLayout],
+  ([uid, authLayout]) => {
+    stopActivityHeartbeat()
+    if (uid && !authLayout) startActivityHeartbeat(uid)
+  },
+  { immediate: true },
 )
 </script>
 

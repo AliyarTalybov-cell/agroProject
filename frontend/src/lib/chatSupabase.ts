@@ -37,6 +37,8 @@ export type ChatThreadListRow = {
   peer_display_name: string | null
   peer_email: string | null
   peer_position: string | null
+  /** Для «в сети» по last_activity_at (RPC list_my_chat_threads) */
+  peer_last_activity_at?: string | null
 }
 
 export type UiChatConversation = {
@@ -46,12 +48,13 @@ export type UiChatConversation = {
   role: string
   initials: string
   tone: AvatarTone
-  online: boolean
   lastPreview: string
   lastTime: string
   unread: number
   isTeam: boolean
   peerUserId: string | null
+  /** Для лички: profiles.last_activity_at; у группы null (присутствие не по собеседнику) */
+  peerLastActivityAt: string | null
   /** Для поиска: ФИО + email (личка) или название группы */
   searchHaystack: string
 }
@@ -110,6 +113,36 @@ export function formatMessageTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
 
+/** Порог «в сети» по last_activity_at (должен совпадать с продуктовой логикой на UI) */
+export const PRESENCE_ONLINE_WITHIN_MS = 15 * 60 * 1000
+
+/**
+ * Присутствие по полю last_activity_at: не позднее 15 мин — «В сети», иначе дата и время.
+ */
+export function presenceFromLastActivity(
+  iso: string | null | undefined,
+  nowMs: number = Date.now(),
+): { online: boolean; presenceLabel: string } {
+  if (!iso) {
+    return { online: false, presenceLabel: 'Нет данных об активности' }
+  }
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) {
+    return { online: false, presenceLabel: 'Нет данных об активности' }
+  }
+  if (nowMs - t <= PRESENCE_ONLINE_WITHIN_MS) {
+    return { online: true, presenceLabel: 'В сети' }
+  }
+  const formatted = new Date(iso).toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return { online: false, presenceLabel: `Был в сети ${formatted}` }
+}
+
 export function mapThreadRow(r: ChatThreadListRow): UiChatConversation {
   const isTeam = r.kind === 'group'
   const peerId = r.peer_user_id
@@ -132,12 +165,12 @@ export function mapThreadRow(r: ChatThreadListRow): UiChatConversation {
     role,
     initials,
     tone: avatarToneFromUserId(toneKey),
-    online: false,
     lastPreview: r.last_message_body || (isTeam ? 'Нет сообщений' : ''),
     lastTime: formatThreadListTime(r.last_message_at),
     unread: Number(r.unread_count) || 0,
     isTeam,
     peerUserId: peerId,
+    peerLastActivityAt: !isTeam ? (r.peer_last_activity_at ?? null) : null,
     searchHaystack,
   }
 }
@@ -336,27 +369,19 @@ export async function fetchPeerLastRead(threadId: string, peerUserId: string): P
   return data.last_read_at as string | null
 }
 
-/** Кто сейчас на экране оператора — считаем «в сети» для бейджа */
-export async function fetchOnlineUserIds(userIds: string[]): Promise<Set<string>> {
-  if (!supabase || userIds.length === 0) return new Set()
-  const { data, error } = await supabase.from('operator_status').select('user_id').in('user_id', userIds)
-  if (error || !data) return new Set()
-  return new Set(data.map((r) => r.user_id as string))
-}
-
 export type GroupMemberDisplay = {
   userId: string
   displayName: string
   roleLabel: string
   initials: string
   tone: AvatarTone
-  /** Есть строка в operator_status (экран оператора / активная смена) */
-  online: boolean
+  /** profiles.last_activity_at — текст «В сети» считается на клиенте по таймеру */
+  lastActivityAt: string | null
   isSelf: boolean
 }
 
 /**
- * Участники группового чата + «в сети» по таблице operator_status.
+ * Участники группового чата + присутствие по profiles.last_activity_at.
  */
 export async function fetchGroupThreadMembersDisplay(
   threadId: string,
@@ -368,12 +393,18 @@ export async function fetchGroupThreadMembersDisplay(
   const ids = rows.map((r) => r.user_id as string)
   const { data: profs, error: pErr } = await supabase
     .from('profiles')
-    .select('id, display_name, email, position, role')
+    .select('id, display_name, email, position, role, last_activity_at')
     .in('id', ids)
   if (pErr) throw pErr
-  type P = { id: string; display_name: string | null; email: string; position: string | null; role: string | null }
+  type P = {
+    id: string
+    display_name: string | null
+    email: string
+    position: string | null
+    role: string | null
+    last_activity_at: string | null
+  }
   const profMap = new Map((profs as P[] | null)?.map((p) => [p.id, p]) ?? [])
-  const online = await fetchOnlineUserIds(ids)
   const me = currentUserId ?? ''
   const result: GroupMemberDisplay[] = ids.map((id) => {
     const p = profMap.get(id)
@@ -389,7 +420,7 @@ export async function fetchGroupThreadMembersDisplay(
       roleLabel,
       initials: initialsFromProfile(p?.display_name, email),
       tone: avatarToneFromUserId(id),
-      online: online.has(id),
+      lastActivityAt: p?.last_activity_at ?? null,
       isSelf: Boolean(me && id === me),
     }
   })
