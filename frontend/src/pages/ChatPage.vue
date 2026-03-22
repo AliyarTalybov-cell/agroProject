@@ -420,13 +420,15 @@ async function onPick(c: UiChatConversation) {
   }
   activeId.value = c.id
   chatLoading.value = true
+  /* Сразу открыть экран чата на мобилке — иначе пользователь долго видит список без обратной связи */
+  if (isMobileChatLayout.value) mobileChatPanel.value = 'thread'
+  await nextTick()
   try {
     await markThreadAsRead(c.id)
     await refreshChatTotalUnread()
     await refreshThreads()
     await Promise.all([reloadMessages(), c.kind === 'group' ? loadGroupMembers() : Promise.resolve()])
     startRealtime()
-    if (isMobileChatLayout.value) mobileChatPanel.value = 'thread'
   } catch (e) {
     error.value = formatSupabaseError(e) || 'Не удалось открыть диалог'
   } finally {
