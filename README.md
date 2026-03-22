@@ -127,3 +127,16 @@ npm run dev
   - **Что это**: ещё один мобильный “logbook/operator” экран текущего задания + модалка “Select Reason”.
   - **К чему маппим**: сценарии задач/журнала работ (частично будущий `/tasks/:id` или `/tasks` с действиями “старт/пауза/простой”).
 
+## Чат (Supabase)
+
+Сообщения хранятся в БД, участники — реальные пользователи из `profiles` / `auth.users`.
+
+1. Примените `supabase/migrations/add_chat_threads_and_messages.sql` (в конце файла есть `mark_chat_thread_read`). Если чат вы добавляли раньше **без** этой функции — выполните отдельно `add_mark_chat_thread_read_rpc.sql`.
+2. Если в UI ошибка **`infinite recursion detected in policy for relation "chat_thread_members"`** — выполните **`supabase/migrations/fix_chat_thread_members_rls_recursion.sql`** (или заново примените обновлённый `add_chat_threads_and_messages.sql` на чистой БД).
+3. В проекте задайте `VITE_SUPABASE_URL` и `VITE_SUPABASE_ANON_KEY` для фронтенда.
+4. Маршрут **`/chat`** доступен всем авторизованным пользователям; пункт **«Сотрудники»** по-прежнему только у роли `manager`.
+5. **Личные диалоги**: RPC `get_or_create_dm_thread` создаёт поток `direct` между двумя пользователями.
+6. **Группы («Команды»)**: RPC `create_group_thread` — только для `profiles.role = 'manager'`.
+7. **Непрочитанные**: по полю `last_read_at` в `chat_thread_members`; бейдж в меню — RPC `chat_total_unread`.
+8. **Realtime**: миграция добавляет `chat_messages` в публикацию `supabase_realtime` (если таблица уже в публикации, блок в миграции просто пропустит ошибку).
+

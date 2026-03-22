@@ -13,6 +13,7 @@ import EquipmentPage from '@/pages/EquipmentPage.vue'
 import EquipmentDetailsPage from '@/pages/EquipmentDetailsPage.vue'
 import ProfilePage from '@/pages/ProfilePage.vue'
 import EmployeesPage from '@/pages/EmployeesPage.vue'
+import ChatPage from '@/pages/ChatPage.vue'
 import { getAuthUser, isAuthLoading } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
@@ -31,6 +32,7 @@ export const routes = [
   { path: '/reports', name: 'reports', component: ReportsPage, meta: { title: 'Аналитика' } },
   { path: '/profile', name: 'profile', component: ProfilePage, meta: { title: 'Настройки профиля' } },
   { path: '/employees', name: 'employees', component: EmployeesPage, meta: { title: 'Сотрудники' } },
+  { path: '/chat', name: 'chat', component: ChatPage, meta: { title: 'Сообщения' } },
 ] as const
 
 export const router = createRouter({

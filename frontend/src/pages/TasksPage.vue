@@ -751,26 +751,23 @@ async function confirmDeleteTask() {
             class="day-task"
             :class="{ 'day-task--completed': task.completedAt }"
           >
-            <button
-              type="button"
-              class="day-task-checkbox"
-              :aria-label="task.completedAt ? 'Снять отметку' : 'Отметить выполненным'"
-              @click.stop="toggleTaskCompleted(task)"
-            >
-              <svg
-                v-if="task.completedAt"
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M20 6L9 17l-5-5" />
-              </svg>
-              <span v-else class="day-task-checkbox-empty" />
-            </button>
+            <!-- Uiverse / JkHuger: анимация чекбокса + подпись (название задачи) -->
+            <div class="task-cal-head" @click.stop>
+              <div class="task-cal-checkbox-ui">
+                <!-- Галочка рисуется на .task-cal-mark: псевдоэлементы у <input> в браузерах часто не работают -->
+                <input
+                  type="checkbox"
+                  class="task-cal-input"
+                  :checked="!!task.completedAt"
+                  :aria-label="task.completedAt ? 'Снять отметку о выполнении' : 'Отметить выполненным'"
+                  @click.prevent="toggleTaskCompleted(task)"
+                />
+                <span class="task-cal-mark" aria-hidden="true" />
+              </div>
+              <span class="task-cal-label" @click.prevent="toggleTaskCompleted(task)">
+                {{ task.title }}
+              </span>
+            </div>
             <div
               class="day-task-main"
               role="button"
@@ -794,9 +791,6 @@ async function confirmDeleteTask() {
                 <span>
                   {{ task.startTime || '—' }}<span v-if="task.endTime"> – {{ task.endTime }}</span>
                 </span>
-              </div>
-              <div class="day-task-title">
-                {{ task.title }}
               </div>
               <div v-if="task.description" class="day-task-desc">
                 {{ task.description }}
@@ -1343,7 +1337,7 @@ async function confirmDeleteTask() {
     gap: 10px;
   }
 
-  .day-task-title {
+  .task-cal-label {
     font-size: 0.9rem;
   }
 
@@ -1471,16 +1465,6 @@ async function confirmDeleteTask() {
     gap: 8px;
   }
 
-  .day-task-checkbox {
-    width: 22px;
-    height: 22px;
-  }
-
-  .day-task-checkbox-empty {
-    width: 20px;
-    height: 20px;
-  }
-
   /* Модалка задачи: компактный вид на маленьких экранах */
   .modal-backdrop {
     padding: var(--space-sm);
@@ -1521,7 +1505,7 @@ async function confirmDeleteTask() {
     flex-wrap: wrap;
   }
 
-  .day-task-title {
+  .task-cal-label {
     font-size: 0.85rem;
   }
 
@@ -1950,12 +1934,17 @@ async function confirmDeleteTask() {
 }
 
 .day-task {
+  --task-cal-bg: var(--bg-panel);
+  --task-cal-text: var(--text-primary);
+  --task-cal-check: var(--accent-green);
+  --task-cal-disabled: var(--text-secondary);
   border-radius: 12px;
   border: 1px solid var(--border-color);
   padding: 14px 16px;
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: auto auto;
+  row-gap: 8px;
   background: var(--bg-panel);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -1965,47 +1954,134 @@ async function confirmDeleteTask() {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
 }
 
-.day-task-checkbox {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  margin-top: 2px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: var(--agro);
-  padding: 0;
-  display: flex;
+.task-cal-head {
+  display: grid;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  justify-content: center;
+  column-gap: 12px;
+  min-width: 0;
 }
 
-.day-task-checkbox-empty {
+/* ——— Квадратный чекбокс: невидимый input + видимая рамка и анимация галочки на span ——— */
+.task-cal-checkbox-ui {
+  position: relative;
   width: 18px;
   height: 18px;
-  border: 2px solid var(--border-color);
-  border-radius: 4px;
-  display: block;
+  flex-shrink: 0;
+  align-self: center;
 }
 
-.day-task-checkbox:hover .day-task-checkbox-empty {
-  border-color: var(--agro);
+.task-cal-input[type='checkbox'] {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  opacity: 0.001;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.task-cal-mark {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-sizing: border-box;
+  border-radius: 4px;
+  background: var(--task-cal-bg);
+  box-shadow: inset 0 0 0 2px var(--border-color);
+}
+
+.task-cal-mark::before,
+.task-cal-mark::after {
+  content: '';
+  position: absolute;
+  height: 2px;
+  top: auto;
+  background: var(--task-cal-check);
+  border-radius: 2px;
+}
+
+.task-cal-mark::before {
+  width: 0;
+  right: 60%;
+  transform-origin: right bottom;
+}
+
+.task-cal-mark::after {
+  width: 0;
+  left: 40%;
+  transform-origin: left bottom;
+}
+
+.task-cal-input[type='checkbox']:checked ~ .task-cal-mark::before {
+  animation: task-cal-check-01 0.4s ease forwards;
+}
+
+.task-cal-input[type='checkbox']:checked ~ .task-cal-mark::after {
+  animation: task-cal-check-02 0.4s ease forwards;
+}
+
+.task-cal-input[type='checkbox']:not(:checked) ~ .task-cal-mark::before,
+.task-cal-input[type='checkbox']:not(:checked) ~ .task-cal-mark::after {
+  width: 0 !important;
+  animation: none;
+  transform: none;
+  top: auto;
+}
+
+.task-cal-input[type='checkbox']:focus-visible ~ .task-cal-mark {
+  box-shadow:
+    inset 0 0 0 2px var(--border-color),
+    0 0 0 2px color-mix(in srgb, var(--task-cal-check) 45%, transparent);
+}
+
+.task-cal-label {
+  color: var(--task-cal-text);
+  position: relative;
+  cursor: pointer;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.3;
+  margin: 0;
+  padding-right: 4px;
+  text-decoration: none;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--task-cal-disabled);
+  transition:
+    color 0.25s ease,
+    text-decoration-color 0.25s ease;
+}
+
+.day-task--completed .task-cal-label {
+  color: var(--task-cal-disabled);
+  text-decoration: line-through;
+}
+
+.day-task:not(.day-task--completed) .task-cal-label {
+  color: var(--task-cal-text);
+  text-decoration: none;
 }
 
 .day-task-main {
+  grid-column: 1;
+  grid-row: 2;
   flex: 1;
   min-width: 0;
   cursor: pointer;
   text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .day-task-main:hover {
   outline: none;
-}
-
-.day-task--completed .day-task-title {
-  text-decoration: line-through;
-  color: var(--text-secondary);
 }
 
 .day-task--completed .day-task-time,
@@ -2013,10 +2089,72 @@ async function confirmDeleteTask() {
   opacity: 0.8;
 }
 
-.day-task-main {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+@keyframes task-cal-check-01 {
+  0% {
+    width: 4px;
+    top: auto;
+    transform: rotate(0);
+  }
+  50% {
+    width: 0;
+    top: auto;
+    transform: rotate(0);
+  }
+  51% {
+    width: 0;
+    top: 10px;
+    transform: rotate(45deg);
+  }
+  100% {
+    width: 5px;
+    top: 10px;
+    transform: rotate(45deg);
+  }
+}
+
+@keyframes task-cal-check-02 {
+  0% {
+    width: 4px;
+    top: auto;
+    transform: rotate(0);
+  }
+  50% {
+    width: 0;
+    top: auto;
+    transform: rotate(0);
+  }
+  51% {
+    width: 0;
+    top: 10px;
+    transform: rotate(-45deg);
+  }
+  100% {
+    width: 10px;
+    top: 10px;
+    transform: rotate(-45deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-cal-input[type='checkbox']:checked ~ .task-cal-mark::before,
+  .task-cal-input[type='checkbox']:checked ~ .task-cal-mark::after {
+    animation: none !important;
+  }
+
+  .task-cal-input[type='checkbox']:checked ~ .task-cal-mark::before {
+    width: 5px;
+    top: 10px;
+    right: auto;
+    left: 3px;
+    transform: rotate(45deg);
+  }
+
+  .task-cal-input[type='checkbox']:checked ~ .task-cal-mark::after {
+    width: 10px;
+    top: 10px;
+    left: 6px;
+    transform: rotate(-45deg);
+  }
 }
 
 .day-task-time {
@@ -2025,11 +2163,6 @@ async function confirmDeleteTask() {
   gap: 6px;
   font-size: 0.8rem;
   color: var(--text-secondary);
-}
-
-.day-task-title {
-  font-weight: 600;
-  font-size: 0.95rem;
 }
 
 .day-task-desc {

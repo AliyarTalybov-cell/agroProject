@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import { useAuth } from '@/stores/auth'
+import { chatTotalUnread, refreshChatTotalUnread } from '@/lib/chatSupabase'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,6 +29,9 @@ const userInitials = computed(() => {
   if (part.length >= 2) return part.slice(0, 2).toUpperCase()
   return part.slice(0, 1).toUpperCase() || '?'
 })
+
+/** Ref из chatSupabase: в шаблоне используем computed для гарантированной размотки */
+const chatUnreadDisplay = computed(() => Number(chatTotalUnread.value) || 0)
 async function handleLogout() {
   logoutConfirmOpen.value = true
 }
@@ -60,6 +64,19 @@ watch(route, closeMobileMenu)
 watch(mobileMenuOpen, (open) => {
   document.body.style.overflow = open ? 'hidden' : ''
 })
+
+let unreadPoll: ReturnType<typeof setInterval> | null = null
+onMounted(() => {
+  void refreshChatTotalUnread()
+  unreadPoll = setInterval(() => void refreshChatTotalUnread(), 45_000)
+})
+onUnmounted(() => {
+  if (unreadPoll) clearInterval(unreadPoll)
+})
+watch(
+  () => route.path,
+  () => void refreshChatTotalUnread(),
+)
 </script>
 
 <template>
@@ -159,10 +176,10 @@ watch(mobileMenuOpen, (open) => {
           </ul>
         </div>
 
-        <div v-if="auth.userRole.value === 'manager'" class="nav-section nav-section-secondary">
+        <div class="nav-section nav-section-secondary">
           <div class="nav-section-label">СВЯЗЬ</div>
           <ul class="nav-menu">
-            <li>
+            <li v-if="auth.userRole.value === 'manager'">
               <RouterLink class="nav-item" to="/employees">
                 <span class="nav-item-icon" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -173,6 +190,17 @@ watch(mobileMenuOpen, (open) => {
                   </svg>
                 </span>
                 Сотрудники
+              </RouterLink>
+            </li>
+            <li>
+              <RouterLink class="nav-item" to="/chat">
+                <span class="nav-item-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </span>
+                Чат
+                <span v-if="chatUnreadDisplay > 0" class="nav-item-badge">{{ chatUnreadDisplay > 99 ? '99+' : chatUnreadDisplay }}</span>
               </RouterLink>
             </li>
           </ul>

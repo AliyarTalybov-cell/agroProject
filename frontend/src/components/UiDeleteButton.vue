@@ -101,8 +101,9 @@ function tipTitle(title: string, hoverLabel: string, loading: boolean) {
 </template>
 
 <style scoped>
-/* Uiverse / vinodjangid07: только круг + красный hover + анимация крышки (без раскрытия по ширине) */
+/* Uiverse / vinodjangid07: круг в цветах портала + красный hover + крышка */
 .ui-del-btn {
+  --ui-del-bg: color-mix(in srgb, var(--accent-green) 82%, #121816);
   box-sizing: border-box;
   position: relative;
   display: inline-flex;
@@ -113,7 +114,7 @@ function tipTitle(title: string, hoverLabel: string, loading: boolean) {
   padding: 0;
   border: none;
   border-radius: 50%;
-  background-color: rgb(20, 20, 20);
+  background-color: var(--ui-del-bg);
   font-family: inherit;
   font-weight: 600;
   line-height: 1;
@@ -124,8 +125,9 @@ function tipTitle(title: string, hoverLabel: string, loading: boolean) {
 }
 
 [data-theme='dark'] .ui-del-btn {
-  background-color: rgba(30, 30, 30, 0.95);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  --ui-del-bg: color-mix(in srgb, var(--accent-green) 42%, #0c120e);
+  background-color: var(--ui-del-bg);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--accent-green) 22%, rgba(0, 0, 0, 0.5));
 }
 
 .ui-del-btn:is(:hover, :focus-visible):not(:disabled) {
@@ -189,49 +191,49 @@ function tipTitle(title: string, hoverLabel: string, loading: boolean) {
   --ui-bin-svg: 7px;
   width: 26px;
   height: 26px;
-  box-shadow: 0 0 12px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-green) 20%, rgba(0, 0, 0, 0.08));
 }
 .ui-del-btn--xs:is(:hover, :focus-visible):not(:disabled) {
-  box-shadow: 0 0 14px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 0 14px rgba(255, 69, 69, 0.35);
 }
 
 .ui-del-btn--sm {
   --ui-bin-svg: 9px;
   width: 32px;
   height: 32px;
-  box-shadow: 0 0 14px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent-green) 20%, rgba(0, 0, 0, 0.08));
 }
 .ui-del-btn--sm:is(:hover, :focus-visible):not(:disabled) {
-  box-shadow: 0 0 16px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 0 16px rgba(255, 69, 69, 0.38);
 }
 
 .ui-del-btn--md {
   --ui-bin-svg: 11px;
   width: 40px;
   height: 40px;
-  box-shadow: 0 0 16px rgba(0, 0, 0, 0.14);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent-green) 22%, rgba(0, 0, 0, 0.1));
 }
 .ui-del-btn--md:is(:hover, :focus-visible):not(:disabled) {
-  box-shadow: 0 0 18px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 0 18px rgba(255, 69, 69, 0.4);
 }
 
 .ui-del-btn--lg {
   --ui-bin-svg: 12px;
   width: 50px;
   height: 50px;
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.164);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--accent-green) 22%, rgba(0, 0, 0, 0.12));
 }
 .ui-del-btn--lg:is(:hover, :focus-visible):not(:disabled) {
-  box-shadow: 0 0 22px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 0 22px rgba(255, 69, 69, 0.42);
 }
 
 .ui-del-btn:disabled:hover,
 .ui-del-btn.ui-del-btn--loading:hover {
-  background-color: rgb(20, 20, 20);
+  background-color: var(--ui-del-bg);
 }
 [data-theme='dark'] .ui-del-btn:disabled:hover,
 [data-theme='dark'] .ui-del-btn.ui-del-btn--loading:hover {
-  background-color: rgba(30, 30, 30, 0.95);
+  background-color: var(--ui-del-bg);
 }
 
 .ui-del-btn--loading .ui-del-btn__icon-wrap {

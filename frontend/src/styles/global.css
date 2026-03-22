@@ -430,6 +430,23 @@ a {
   transform: scale(1.05);
 }
 
+/* Бейдж непрочитанных (чат) — как в design/chat.html */
+.nav-item-badge {
+  margin-left: auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--nav-active-bar);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
 .sidebar-footer {
   padding: 20px 24px;
   border-top: 1px solid var(--sidebar-border);
