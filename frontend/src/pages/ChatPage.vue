@@ -1069,6 +1069,7 @@ onUnmounted(() => {
               @keydown="onKeydown"
             />
             <div class="chat-page__composer-right">
+              <!-- From Uiverse.io by adamgiebl -->
               <button
                 type="button"
                 class="chat-page__send"
@@ -1076,9 +1077,18 @@ onUnmounted(() => {
                 :disabled="chatLoading || attachBusy || (!pendingAttachment && !draft.trim())"
                 @click="onSend"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
+                <div class="svg-wrapper-1">
+                  <div class="svg-wrapper">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                      <path fill="none" d="M0 0h24v24H0z"></path>
+                      <path
+                        fill="currentColor"
+                        d="M1.946 9.315c-.522-.174-.527-.455.01-.634l19.087-6.362c.529-.176.832.12.684.638l-5.454 19.086c-.15.529-.455.547-.679.045L12 14l6-8-8 6-8.054-2.685z"
+                      ></path>
+                    </svg>
+                  </div>
+                </div>
+                <span>Send</span>
               </button>
             </div>
               </div>
@@ -2361,7 +2371,8 @@ a.chat-page__attach {
 /* Uiverse.io / ilkhoeri — кнопка вложения файла */
 .chat-page__composer-attach.action_has {
   --color: 220 9% 46%;
-  --color-has: 211 100% 48%;
+  /* было синее (211°); под цвет акцента — тёмно-зелёный как --accent-green светлой темы */
+  --color-has: 146 33% 30%;
   --sz: 1rem;
   cursor: pointer;
   display: flex;
@@ -2379,7 +2390,8 @@ a.chat-page__attach {
 
 [data-theme='dark'] .chat-page__composer-attach.action_has {
   --color: 215 14% 55%;
-  --color-has: 211 100% 58%;
+  /* как --accent-green в тёмной теме (#68ad33) */
+  --color-has: 97 55% 52%;
 }
 
 .chat-page__composer-attach.has_saved:hover:not(:disabled) {
@@ -2496,24 +2508,66 @@ a.chat-page__attach {
   flex-shrink: 0;
 }
 
+/* From Uiverse.io by adamgiebl — как в сниппете, только селектор .chat-page__send вместо button */
 .chat-page__send {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  border: none;
+  font-family: inherit;
+  /* −15% к макету adamgiebl (20px → 17px) */
+  font-size: calc(20px * 0.85);
   background: var(--accent-green);
   color: #fff;
-  cursor: pointer;
+  padding: 0.7em 1em;
+  padding-left: 0.9em;
   display: flex;
   align-items: center;
-  justify-content: center;
+  border: none;
+  border-radius: calc(16px * 0.85);
+  overflow: hidden;
+  transition: all 0.2s;
+  cursor: pointer;
   margin-left: 4px;
-  transition: background 0.15s ease;
-  box-shadow: var(--shadow-card);
+  flex-shrink: 0;
 }
 
-.chat-page__send:hover {
+.chat-page__send span {
+  display: block;
+  margin-left: 0.3em;
+  transition: all 0.3s ease-in-out;
+}
+
+.chat-page__send svg {
+  display: block;
+  transform-origin: center center;
+  transition: transform 0.3s ease-in-out;
+}
+
+.chat-page__send:hover:not(:disabled) {
   background: var(--accent-green-hover);
+}
+
+.chat-page__send:hover .svg-wrapper {
+  animation: fly-1 0.6s ease-in-out infinite alternate;
+}
+
+.chat-page__send:hover svg {
+  transform: translateX(1.2em) rotate(45deg) scale(1.1);
+}
+
+.chat-page__send:hover span {
+  transform: translateX(5em);
+}
+
+.chat-page__send:active {
+  transform: scale(0.95);
+}
+
+@keyframes fly-1 {
+  from {
+    transform: translateY(0.1em);
+  }
+
+  to {
+    transform: translateY(-0.1em);
+  }
 }
 
 .chat-page__hint {
