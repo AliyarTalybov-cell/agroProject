@@ -368,46 +368,58 @@ export async function loadOperationsByFieldFromSupabase(
   if (!supabase) return { rows: [], total: 0 }
 
   const sb = supabase
-  const baseSelect = 'id, user_id, employee, operation, start_iso, end_iso, duration_minutes, notes, equipment_id, planned_hectares, processed_hectares'
+  const baseSelectWithHectares =
+    'id, user_id, employee, operation, start_iso, end_iso, duration_minutes, notes, equipment_id, planned_hectares, processed_hectares'
+  const baseSelectLegacy = 'id, user_id, employee, operation, start_iso, end_iso, duration_minutes, notes, equipment_id'
   const equipmentJoin = 'equipment:equipment_id(id, brand, model, license_plate)'
   const safePage = Math.max(1, Math.floor(page))
   const safePageSize = Math.min(100, Math.max(1, Math.floor(pageSize)))
   const from = (safePage - 1) * safePageSize
   const to = from + safePageSize - 1
 
-  let q = sb
-    .from('operations')
-    .select(`${baseSelect}, ${equipmentJoin}`, { count: 'exact' })
-    .eq('field_id', fieldId)
-    .order('start_iso', { ascending: false })
-    .range(from, to)
+  const runSelect = async (baseSelect: string): Promise<FieldOperationHistoryPage> => {
+    let q = sb
+      .from('operations')
+      .select(`${baseSelect}, ${equipmentJoin}`, { count: 'exact' })
+      .eq('field_id', fieldId)
+      .order('start_iso', { ascending: false })
+      .range(from, to)
 
-  if (onlyCurrentUser && userId) q = q.eq('user_id', userId)
+    if (onlyCurrentUser && userId) q = q.eq('user_id', userId)
 
-  const { data, count, error } = await q
-  if (error) throw error
+    const { data, count, error } = await q
+    if (error) throw error
 
-  const rows = (data ?? []).map((r: any) => {
-    const eq = r.equipment as { brand?: string | null; model?: string | null; license_plate?: string | null } | null
-    const equipmentLabel =
-      eq && (eq.brand || eq.model || eq.license_plate)
-        ? [eq.brand, eq.model, eq.license_plate].filter(Boolean).join(' • ')
-        : null
-    return {
-      id: r.id as number,
-      employee: r.employee as string,
-      operation: (r.operation ?? null) as string | null,
-      startISO: r.start_iso as string,
-      endISO: r.end_iso as string,
-      durationMinutes: r.duration_minutes as number,
-      notes: (r.notes ?? null) as string | null,
-      equipmentId: (r.equipment_id ?? null) as string | null,
-      plannedHectares: (r.planned_hectares ?? null) as number | null,
-      processedHectares: (r.processed_hectares ?? null) as number | null,
-      equipmentLabel,
-    }
-  })
-  return { rows, total: Number(count ?? 0) }
+    const rows = (data ?? []).map((r: any) => {
+      const eq = r.equipment as { brand?: string | null; model?: string | null; license_plate?: string | null } | null
+      const equipmentLabel =
+        eq && (eq.brand || eq.model || eq.license_plate)
+          ? [eq.brand, eq.model, eq.license_plate].filter(Boolean).join(' • ')
+          : null
+      return {
+        id: r.id as number,
+        employee: r.employee as string,
+        operation: (r.operation ?? null) as string | null,
+        startISO: r.start_iso as string,
+        endISO: r.end_iso as string,
+        durationMinutes: r.duration_minutes as number,
+        notes: (r.notes ?? null) as string | null,
+        equipmentId: (r.equipment_id ?? null) as string | null,
+        plannedHectares: (r.planned_hectares ?? null) as number | null,
+        processedHectares: (r.processed_hectares ?? null) as number | null,
+        equipmentLabel,
+      }
+    })
+    return { rows, total: Number(count ?? 0) }
+  }
+
+  try {
+    return await runSelect(baseSelectWithHectares)
+  } catch (e: unknown) {
+    if (!isMissingColumnError(e)) throw e
+    // Если миграция с planned/processed_hectares ещё не применена — показываем историю в legacy-режиме.
+    return runSelect(baseSelectLegacy)
+  }
 }
 
 export { isSupabaseConfigured }
