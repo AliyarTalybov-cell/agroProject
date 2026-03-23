@@ -1166,15 +1166,13 @@ onUnmounted(() => {
                       class="chat-page__msg-delete-strip"
                       :class="{ 'chat-page__msg-delete-strip--visible': deleteStripVisible(block.msg.id) }"
                     >
-                      <!-- From Uiverse.io by boryanakrasteva -->
                       <button
                         type="button"
-                        class="btn chat-page__msg-delete-strip-btn"
+                        class="chat-page__msg-delete-strip-btn"
                         aria-label="Удалить сообщение"
                         @click="stripDeleteClick(block.msg)"
                       >
-                        <span class="chat-page__del-pill" aria-hidden="true">Удалить</span>
-                        <UiTrashIcon class="icon" width="15.43" height="18" aria-hidden="true" />
+                        <UiTrashIcon class="chat-page__msg-delete-icon" aria-hidden="true" />
                       </button>
                     </div>
                     <div
@@ -2426,7 +2424,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #dc2626;
+  background: color-mix(in srgb, var(--bg-panel) 92%, var(--agri-bg));
+  border-left: 1px solid var(--border-color);
   z-index: 0;
   opacity: 0;
   visibility: hidden;
@@ -2484,14 +2483,6 @@ onUnmounted(() => {
   transform: translateX(-50%) translateY(-6px);
 }
 
-.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:hover .chat-page__del-pill,
-.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:focus-visible .chat-page__del-pill {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) translateY(0);
-  transition-delay: 0.15s;
-}
-
 .chat-page__ctx-menu .btn.chat-page__ctx-delete-btn:hover .chat-page__del-pill,
 .chat-page__ctx-menu .btn.chat-page__ctx-delete-btn:focus-visible .chat-page__del-pill {
   opacity: 1;
@@ -2500,7 +2491,7 @@ onUnmounted(() => {
   transition-delay: 0.15s;
 }
 
-.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn {
+.chat-page__msg-delete-strip-btn {
   background-color: transparent;
   position: relative;
   border: none;
@@ -2509,29 +2500,39 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--text-secondary);
   overflow: visible;
 }
 
-.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn .icon {
+.chat-page__msg-delete-icon {
+  width: 15.43px;
+  height: 18px;
+  flex-shrink: 0;
   transform: scale(1);
   transition: 0.2s linear;
   display: block;
 }
 
-.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn .icon path {
+.chat-page__msg-delete-icon :deep(path) {
   fill: currentColor;
 }
 
-.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:hover > .icon {
+.chat-page__msg-delete-strip-btn:hover .chat-page__msg-delete-icon,
+.chat-page__msg-delete-strip-btn:focus-visible .chat-page__msg-delete-icon {
   transform: scale(1.12);
 }
 
-.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:hover > .icon path {
-  fill: rgb(168, 7, 7);
+.chat-page__msg-delete-strip-btn:hover,
+.chat-page__msg-delete-strip-btn:focus-visible {
+  color: rgb(168, 7, 7);
 }
 
-.chat-page__msg-delete-strip .btn.chat-page__msg-delete-strip-btn:disabled {
+.chat-page__msg-delete-strip-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, rgb(168, 7, 7) 65%, white);
+  outline-offset: 2px;
+}
+
+.chat-page__msg-delete-strip-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
