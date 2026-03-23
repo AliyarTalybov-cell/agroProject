@@ -18,6 +18,8 @@ export type StoredOperation = {
 
 export type ActiveOperation = {
   startISO: string
+  pausedAt?: string | null
+  accumulatedPauseSeconds?: number
   fieldId?: string
   fieldName?: string
   operation?: string

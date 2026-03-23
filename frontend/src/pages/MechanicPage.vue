@@ -47,10 +47,30 @@ const timerStartISO = computed(() => {
   return null
 })
 
+function operationElapsedSeconds(now = Date.now()): number {
+  const op = activeOperation.value
+  if (!op?.startISO) return 0
+  const startMs = new Date(op.startISO).getTime()
+  if (Number.isNaN(startMs)) return 0
+  let pauseSeconds = Math.max(0, Math.floor(op.accumulatedPauseSeconds ?? 0))
+  if (op.pausedAt) {
+    const pausedAtMs = new Date(op.pausedAt).getTime()
+    if (!Number.isNaN(pausedAtMs) && now > pausedAtMs) {
+      pauseSeconds += Math.floor((now - pausedAtMs) / 1000)
+    }
+  }
+  return Math.max(0, Math.floor((now - startMs) / 1000) - pauseSeconds)
+}
+
 const elapsedSeconds = computed(() => {
-  if (!timerStartISO.value) return 0
-  const start = new Date(timerStartISO.value).getTime()
-  return Math.floor((Date.now() - start) / 1000) + timerTick.value
+  void timerTick.value
+  if (active.value?.startISO) {
+    const start = new Date(active.value.startISO).getTime()
+    if (Number.isNaN(start)) return 0
+    return Math.max(0, Math.floor((Date.now() - start) / 1000))
+  }
+  if (activeOperation.value?.startISO) return operationElapsedSeconds(Date.now())
+  return 0
 })
 
 const timerLabel = computed(() => {
@@ -220,10 +240,16 @@ const currentField = computed<MechanicField | null>(() => {
 })
 
 const statusText = computed(() => {
-  if (!active.value) return 'Работаем'
-  const reason = reasons.value.find((r) => r.category === active.value?.category)
-  return `Простой • ${reason?.label ?? active.value.reason}`
+  if (!active.value && !workStartedAt.value) return 'Готов к работе'
+  if (!active.value && workStartedAt.value && activeOperation.value?.pausedAt) return 'Операция на паузе'
+  if (!active.value && workStartedAt.value) return 'Идёт операция'
+  const down = active.value
+  if (!down) return 'Готов к работе'
+  const reason = reasons.value.find((r) => r.category === down.category)
+  return `Простой • ${reason?.label ?? down.reason}`
 })
+
+const isOperationPaused = computed(() => !!activeOperation.value?.pausedAt)
 
 const circleFieldLabel = computed(() => active.value?.fieldName ?? currentField.value?.name ?? 'Поле не выбрано')
 const circleTaskLabel = computed(
@@ -234,12 +260,6 @@ const taskTitle = computed(() => `${circleFieldLabel.value} — ${circleTaskLabe
 const progressPercent = 65
 const progressDone = 32
 const progressTotal = 50
-
-const queueTasks = computed(() => {
-  const list = fields.value.filter((f) => f.id !== currentField.value?.id).slice(0, 4)
-  const areas = [120, 85, 200, 60]
-  return list.map((f, i) => ({ id: f.id, name: f.name, operation: f.operation, area: areas[i] ?? 0 }))
-})
 
 const todayKey = computed(() => {
   const d = new Date()
@@ -390,8 +410,7 @@ function stopDowntimeWithNotes(notes?: string) {
 function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | null) {
   if (!workStartedAt.value) return
   const now = new Date()
-  const start = new Date(workStartedAt.value)
-  const durationMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60000))
+  const durationMinutes = Math.max(1, Math.round(operationElapsedSeconds(now.getTime()) / 60))
   const field = currentField.value
   const savedOp = activeOperation.value
   const hasEquipment = !!savedOp?.equipmentId
@@ -437,6 +456,29 @@ function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | nul
   if (uid && isSupabaseConfigured()) {
     void deleteOperatorStatus(uid)
   }
+}
+
+function pauseOperation() {
+  const op = activeOperation.value
+  if (!op || op.pausedAt) return
+  const next = { ...op, pausedAt: new Date().toISOString() }
+  activeOperation.value = next
+  saveActiveOperation(next)
+}
+
+function resumeOperation() {
+  const op = activeOperation.value
+  if (!op?.pausedAt) return
+  const pausedAtMs = new Date(op.pausedAt).getTime()
+  const nowMs = Date.now()
+  const delta = !Number.isNaN(pausedAtMs) && nowMs > pausedAtMs ? Math.floor((nowMs - pausedAtMs) / 1000) : 0
+  const next = {
+    ...op,
+    pausedAt: null,
+    accumulatedPauseSeconds: Math.max(0, Math.floor(op.accumulatedPauseSeconds ?? 0) + delta),
+  }
+  activeOperation.value = next
+  saveActiveOperation(next)
 }
 
 function setCurrentField(id: string) {
@@ -527,6 +569,8 @@ function startOperationConfirmedWithoutEquipment() {
   workStartedAt.value = startISO
   activeOperation.value = {
     startISO,
+    pausedAt: null,
+    accumulatedPauseSeconds: 0,
     fieldId: pending.fieldId,
     fieldName: pending.fieldName,
     operation: pending.operation,
@@ -567,6 +611,8 @@ function startOperationConfirmedWithEquipment() {
   workStartedAt.value = startISO
   activeOperation.value = {
     startISO,
+    pausedAt: null,
+    accumulatedPauseSeconds: 0,
     fieldId: pending.fieldId,
     fieldName: pending.fieldName,
     operation: pending.operation,
@@ -640,7 +686,7 @@ function addField() {
           <div class="mechanic-operator">{{ employeeDisplayName }}</div>
         </div>
         <div class="mechanic-status">
-          <span class="status-dot" :class="{ 'status-dot-active': !!active }" />
+          <span class="status-dot" :class="{ 'status-dot-active': !!active || !!workStartedAt }" />
           <span class="status-text">
             {{ statusText }}
           </span>
@@ -658,6 +704,26 @@ function addField() {
               <div class="mechanic-task-progress-fill" :style="{ width: progressPercent + '%' }" />
             </div>
             <div class="mechanic-task-progress-text">{{ progressPercent }}% ({{ progressDone }}/{{ progressTotal }} Га)</div>
+          </div>
+          <div class="mechanic-fields-header mechanic-fields-header--in-task">
+            <div class="type-label">Мои поля сегодня</div>
+            <div class="mechanic-fields-hint">Выберите поле для операции или простоя</div>
+          </div>
+          <div class="mechanic-fields-chips mechanic-fields-chips--in-task">
+            <button
+              v-for="field in fields"
+              :key="field.id"
+              class="field-chip"
+              :class="{ 'field-chip-active': currentField?.id === field.id }"
+              type="button"
+              @click="setCurrentField(field.id)"
+            >
+              <span class="field-chip-name">{{ field.name }}</span>
+              <span class="field-chip-op">{{ field.operation }}</span>
+            </button>
+            <button class="field-chip field-chip-add" type="button" @click="openAddField">
+              + Добавить поле
+            </button>
           </div>
           <div class="mechanic-task-actions">
             <template v-if="!active && !workStartedAt">
@@ -678,14 +744,31 @@ function addField() {
                 Начать операцию
               </button>
             </template>
-            <button
-              v-if="!active && workStartedAt"
-              class="btn-operation btn-operation-stop"
-              type="button"
-              @click="openFinishNotesModal('operation')"
-            >
-              Остановить операцию
-            </button>
+            <template v-if="!active && workStartedAt">
+              <button
+                v-if="!isOperationPaused"
+                class="btn-operation btn-operation-pause"
+                type="button"
+                @click="pauseOperation"
+              >
+                Пауза
+              </button>
+              <button
+                v-else
+                class="btn-operation btn-operation-resume"
+                type="button"
+                @click="resumeOperation"
+              >
+                Продолжить
+              </button>
+              <button
+                class="btn-operation btn-operation-stop"
+                type="button"
+                @click="openFinishNotesModal('operation')"
+              >
+                Остановить операцию
+              </button>
+            </template>
             <button
               v-if="active"
               class="btn-operation btn-operation-stop"
@@ -775,66 +858,12 @@ function addField() {
         </section>
 
         <section class="mechanic-cards page-enter-item" style="--enter-delay: 120ms">
-          <div class="mechanic-card mechanic-card-queue">
-            <div class="mechanic-card-header mechanic-card-header--stacked">
-              <div>
-                <div class="mechanic-card-title">Поля и задачи</div>
-                <div class="mechanic-card-subtitle">
-                  Выберите поле, затем начните простой или операцию выше
-                </div>
-              </div>
-              <button
-                type="button"
-                class="mechanic-card-link"
-                @click="router.push({ name: 'fields' })"
-              >
-                Все поля
-              </button>
-            </div>
-            <div class="mechanic-queue-list">
-              <button
-                v-for="t in queueTasks"
-                :key="t.id"
-                class="mechanic-queue-item"
-                type="button"
-                @click="setCurrentField(t.id)"
-              >
-                <span class="mechanic-queue-name">{{ t.name }}</span>
-                <span class="mechanic-queue-op">{{ t.operation }}</span>
-              </button>
-            </div>
-            <button class="mechanic-queue-add" type="button" @click="openAddField">+ Добавить поле</button>
-          </div>
-
           <div class="mechanic-card mechanic-card-weather">
             <div class="mechanic-card-title">Метеоусловия</div>
             <WeatherWidgetCompact />
             <div class="mechanic-weather-permit">
               Погодные условия оптимальны для пахоты. Влажность почвы в норме.
             </div>
-          </div>
-        </section>
-
-        <section class="mechanic-fields mechanic-fields-compact page-enter-item" style="--enter-delay: 180ms">
-          <div class="mechanic-fields-header">
-            <div class="type-label">Мои поля сегодня</div>
-            <div class="mechanic-fields-hint">Выберите, с каким полем вы сейчас работаете</div>
-          </div>
-          <div class="mechanic-fields-chips">
-            <button
-              v-for="field in fields"
-              :key="field.id"
-              class="field-chip"
-              :class="{ 'field-chip-active': currentField?.id === field.id }"
-              type="button"
-              @click="setCurrentField(field.id)"
-            >
-              <span class="field-chip-name">{{ field.name }}</span>
-              <span class="field-chip-op">{{ field.operation }}</span>
-            </button>
-            <button class="field-chip field-chip-add" type="button" @click="openAddField">
-              + Добавить поле
-            </button>
           </div>
         </section>
       </main>
@@ -1299,6 +1328,14 @@ function addField() {
   gap: var(--space-md);
 }
 
+.mechanic-fields-header--in-task {
+  margin: var(--space-md) 0 var(--space-xs);
+}
+
+.mechanic-fields-chips--in-task {
+  margin-bottom: var(--space-md);
+}
+
 .mechanic-today-tasks {
   background: var(--bg-panel);
   border: 1px solid var(--border-color);
@@ -1536,9 +1573,31 @@ function addField() {
   background: rgba(211, 60, 60, 0.08);
 }
 
+.btn-operation-pause {
+  background: transparent;
+  border-color: var(--warning-orange);
+  color: var(--warning-orange);
+}
+
+.btn-operation-pause:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: rgba(194, 65, 12, 0.1);
+}
+
+.btn-operation-resume {
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+  color: #fff;
+}
+
+.btn-operation-resume:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px -2px rgba(104, 173, 51, 0.4);
+}
+
 .mechanic-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: var(--space-md);
 }
 
