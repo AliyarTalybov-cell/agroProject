@@ -5,10 +5,12 @@ import { useAuth } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import {
   getEquipmentById,
+  loadEquipmentImplementsOptions,
   loadEquipmentPhotos,
   addEquipmentPhoto,
   deleteEquipmentPhoto,
   type EquipmentPhotoRow,
+  type EquipmentImplementRow,
   type EquipmentRow,
 } from '@/lib/equipmentSupabase'
 import { loadOperationsByEquipmentFromSupabase, type EquipmentOperationHistoryRow } from '@/lib/analyticsSupabase'
@@ -46,6 +48,7 @@ const photoUploading = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const profiles = ref<ProfileRow[]>([])
+const implementOptions = ref<EquipmentImplementRow[]>([])
 
 const historyLoading = ref(false)
 const history = ref<EquipmentOperationHistoryRow[]>([])
@@ -78,6 +81,13 @@ const responsibleLabel = computed(() => {
   if (!id) return 'Не назначен'
   const p = profilesMap.value.get(id)
   return p?.display_name?.trim() || p?.email || 'Неизвестно'
+})
+
+const implementLabel = computed(() => {
+  const id = equipment.value?.implement_id
+  if (!id) return 'Не выбрано'
+  const item = implementOptions.value.find((it) => it.id === id)
+  return item?.name ?? 'Неизвестно'
 })
 
 function employeeInitials(employee: string): string {
@@ -274,10 +284,16 @@ async function refreshAll() {
       return
     }
 
-    const [eq, ph, profileList] = await Promise.all([getEquipmentById(id), loadEquipmentPhotos(id), loadProfiles()])
+    const [eq, ph, profileList, implementList] = await Promise.all([
+      getEquipmentById(id),
+      loadEquipmentPhotos(id),
+      loadProfiles(),
+      loadEquipmentImplementsOptions(),
+    ])
     equipment.value = eq
     photos.value = ph
     profiles.value = profileList
+    implementOptions.value = implementList
 
     if (!eq) error.value = 'Техника не найдена'
 
@@ -411,6 +427,18 @@ onMounted(refreshAll)
               </span>
               <span class="field-details-item-label">Назначение / культура</span>
               <span class="field-details-item-value">{{ equipment.purpose_crop || '—' }}</span>
+            </li>
+
+            <li class="field-details-item">
+              <span class="field-details-item-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="8" width="18" height="8" rx="2" />
+                  <path d="M7 8V5" />
+                  <path d="M17 8V5" />
+                </svg>
+              </span>
+              <span class="field-details-item-label">Орудие</span>
+              <span class="field-details-item-value">{{ implementLabel }}</span>
             </li>
 
             <li class="field-details-item">

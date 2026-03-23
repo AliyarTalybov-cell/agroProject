@@ -140,6 +140,21 @@ create policy "Allow all for tasks" on public.tasks
   for all using (true) with check (true);
 
 -- Техника (справочник единиц техники)
+create table if not exists public.equipment_implements (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  purpose text,
+  description text,
+  "condition" text not null default 'operational' check ("condition" in ('operational', 'repair', 'decommissioned')),
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+alter table public.equipment_implements enable row level security;
+
+create policy "Allow all for equipment_implements" on public.equipment_implements
+  for all using (true) with check (true);
+
 create table if not exists public.equipment (
   id uuid primary key default gen_random_uuid(),
   brand text not null,
@@ -148,6 +163,7 @@ create table if not exists public.equipment (
   equipment_type text,
   year int check (year is null or (year >= 1900 and year <= 2100)),
   purpose_crop text,
+  implement_id uuid references public.equipment_implements(id) on delete set null,
   "condition" text not null default 'operational' check ("condition" in ('operational', 'repair', 'decommissioned')),
   notes text,
   created_at timestamptz default now(),

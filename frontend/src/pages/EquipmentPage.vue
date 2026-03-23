@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas'
 import {
   isSupabaseConfigured,
   loadEquipment,
+  loadEquipmentImplementsOptions,
+  loadEquipmentImplementsPage,
+  insertEquipmentImplement,
+  updateEquipmentImplement,
+  deleteEquipmentImplement,
   insertEquipment,
   updateEquipment,
   deleteEquipment,
   type EquipmentRow,
   type EquipmentCondition,
+  type EquipmentImplementRow,
 } from '@/lib/equipmentSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
@@ -31,6 +37,14 @@ const CONDITION_OPTIONS: { value: EquipmentCondition; label: string }[] = [
 ]
 
 const PAGE_SIZE = 6
+const IMPLEMENTS_PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
+
+type EquipmentPageTab = 'equipment' | 'implements'
+const activeTab = ref<EquipmentPageTab>('equipment')
+const TABS: { id: EquipmentPageTab; label: string }[] = [
+  { id: 'equipment', label: 'Техника' },
+  { id: 'implements', label: 'Орудия' },
+]
 
 const list = ref<EquipmentRow[]>([])
 const loading = ref(true)
@@ -39,6 +53,16 @@ const searchQuery = ref('')
 const currentPage = ref(1)
 const editingId = ref<string | null>(null)
 const profiles = ref<ProfileRow[]>([])
+const implementOptions = ref<EquipmentImplementRow[]>([])
+
+const implementsLoading = ref(false)
+const implementsSaving = ref(false)
+const implementsList = ref<EquipmentImplementRow[]>([])
+const implementsTotal = ref(0)
+const implementsPage = ref(1)
+const implementsPageSize = ref(10)
+const implementsSearch = ref('')
+const editingImplementId = ref<string | null>(null)
 
 const form = ref({
   brand: '',
@@ -47,32 +71,84 @@ const form = ref({
   equipment_type: '',
   year: null as number | null,
   purpose_crop: '',
+  implement_id: '' as string | null,
   condition: 'operational' as EquipmentCondition,
   responsible_id: '' as string | null,
   notes: '',
+})
+
+const implementForm = ref({
+  name: '',
+  purpose: '',
+  description: '',
+  condition: 'operational' as EquipmentCondition,
 })
 
 async function fetchList() {
   if (!isSupabaseConfigured()) {
     list.value = []
     profiles.value = []
+    implementOptions.value = []
     loading.value = false
     return
   }
   loading.value = true
   try {
-    const [rows, profileRows] = await Promise.all([loadEquipment(), loadProfiles()])
+    const [rows, profileRows, implementRows] = await Promise.all([
+      loadEquipment(),
+      loadProfiles(),
+      loadEquipmentImplementsOptions(),
+    ])
     list.value = rows
     profiles.value = profileRows
+    implementOptions.value = implementRows
   } catch {
     list.value = []
     profiles.value = []
+    implementOptions.value = []
   } finally {
     loading.value = false
   }
 }
 
-onMounted(fetchList)
+async function fetchImplementsPage() {
+  if (!isSupabaseConfigured()) {
+    implementsList.value = []
+    implementsTotal.value = 0
+    implementsLoading.value = false
+    return
+  }
+  implementsLoading.value = true
+  try {
+    const { rows, total } = await loadEquipmentImplementsPage(
+      implementsPage.value,
+      implementsPageSize.value,
+      implementsSearch.value,
+    )
+    implementsList.value = rows
+    implementsTotal.value = total
+    const maxPage = Math.max(1, Math.ceil(total / implementsPageSize.value))
+    if (implementsPage.value > maxPage) implementsPage.value = maxPage
+  } catch {
+    implementsList.value = []
+    implementsTotal.value = 0
+  } finally {
+    implementsLoading.value = false
+  }
+}
+
+watch([implementsPage, implementsPageSize], () => {
+  void fetchImplementsPage()
+})
+
+watch(implementsSearch, () => {
+  implementsPage.value = 1
+  void fetchImplementsPage()
+})
+
+onMounted(async () => {
+  await Promise.all([fetchList(), fetchImplementsPage()])
+})
 
 const filteredList = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
@@ -135,6 +211,38 @@ const paginationEnd = computed(() =>
   Math.min(currentPage.value * PAGE_SIZE, totalCount.value),
 )
 
+const implementsTotalPages = computed(() =>
+  Math.max(1, Math.ceil(implementsTotal.value / implementsPageSize.value)),
+)
+const implementsPageStart = computed(() =>
+  implementsTotal.value ? (implementsPage.value - 1) * implementsPageSize.value + 1 : 0,
+)
+const implementsPageEnd = computed(() =>
+  Math.min(implementsPage.value * implementsPageSize.value, implementsTotal.value),
+)
+const implementsPageNumbers = computed(() => {
+  const total = implementsTotalPages.value
+  const current = implementsPage.value
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+  const pages: (number | 'ellipsis')[] = [1]
+  if (current <= 4) {
+    for (let p = 2; p <= 5; p += 1) pages.push(p)
+    pages.push('ellipsis')
+    pages.push(total)
+    return pages
+  }
+  if (current >= total - 3) {
+    pages.push('ellipsis')
+    for (let p = total - 4; p <= total; p += 1) pages.push(p)
+    return pages
+  }
+  pages.push('ellipsis')
+  for (let p = current - 1; p <= current + 1; p += 1) pages.push(p)
+  pages.push('ellipsis')
+  pages.push(total)
+  return pages
+})
+
 function equipmentTypeLabel(value: string | null): string {
   if (!value) return '—'
   const opt = EQUIPMENT_TYPES.find((o) => o.value === value)
@@ -149,6 +257,12 @@ function conditionClass(c: EquipmentCondition): string {
   return c === 'operational' ? 'equipment-condition-ok' : c === 'repair' ? 'equipment-condition-repair' : 'equipment-condition-out'
 }
 
+function implementLabelById(id: string | null): string {
+  if (!id) return 'Не выбрано'
+  const item = implementOptions.value.find((it) => it.id === id)
+  return item?.name ?? 'Неизвестно'
+}
+
 function clearForm() {
   form.value = {
     brand: '',
@@ -157,6 +271,7 @@ function clearForm() {
     equipment_type: '',
     year: null,
     purpose_crop: '',
+    implement_id: '',
     condition: 'operational',
     responsible_id: '',
     notes: '',
@@ -173,6 +288,7 @@ function startEdit(row: EquipmentRow) {
     equipment_type: row.equipment_type ?? '',
     year: row.year,
     purpose_crop: row.purpose_crop ?? '',
+    implement_id: row.implement_id ?? '',
     condition: row.condition,
     responsible_id: row.responsible_id ?? '',
     notes: row.notes ?? '',
@@ -194,6 +310,7 @@ async function saveEquipment() {
         equipment_type: form.value.equipment_type || null,
         year: form.value.year ?? null,
         purpose_crop: form.value.purpose_crop.trim() || null,
+        implement_id: form.value.implement_id || null,
         condition: form.value.condition,
         responsible_id: form.value.responsible_id || null,
         notes: form.value.notes.trim() || null,
@@ -206,6 +323,7 @@ async function saveEquipment() {
         equipment_type: form.value.equipment_type || null,
         year: form.value.year ?? null,
         purpose_crop: form.value.purpose_crop.trim() || null,
+        implement_id: form.value.implement_id || null,
         condition: form.value.condition,
         responsible_id: form.value.responsible_id || null,
         notes: form.value.notes.trim() || null,
@@ -230,8 +348,73 @@ async function removeEquipment(row: EquipmentRow) {
   }
 }
 
+function clearImplementForm() {
+  editingImplementId.value = null
+  implementForm.value = {
+    name: '',
+    purpose: '',
+    description: '',
+    condition: 'operational',
+  }
+}
+
+function startEditImplement(row: EquipmentImplementRow) {
+  editingImplementId.value = row.id
+  implementForm.value = {
+    name: row.name,
+    purpose: row.purpose ?? '',
+    description: row.description ?? '',
+    condition: row.condition,
+  }
+}
+
+async function saveImplement() {
+  const name = implementForm.value.name.trim()
+  if (!name) return
+  if (!isSupabaseConfigured()) return
+  implementsSaving.value = true
+  try {
+    if (editingImplementId.value) {
+      await updateEquipmentImplement(editingImplementId.value, {
+        name,
+        purpose: implementForm.value.purpose.trim() || null,
+        description: implementForm.value.description.trim() || null,
+        condition: implementForm.value.condition,
+      })
+    } else {
+      await insertEquipmentImplement({
+        name,
+        purpose: implementForm.value.purpose.trim() || null,
+        description: implementForm.value.description.trim() || null,
+        condition: implementForm.value.condition,
+      })
+    }
+    await Promise.all([fetchImplementsPage(), fetchList()])
+    clearImplementForm()
+  } finally {
+    implementsSaving.value = false
+  }
+}
+
+async function removeImplement(row: EquipmentImplementRow) {
+  if (!confirm(`Удалить орудие «${row.name}»?`)) return
+  if (!isSupabaseConfigured()) return
+  try {
+    await deleteEquipmentImplement(row.id)
+    if (editingImplementId.value === row.id) clearImplementForm()
+    if (form.value.implement_id === row.id) form.value.implement_id = ''
+    await Promise.all([fetchImplementsPage(), fetchList()])
+  } catch {
+    // show error in UI if needed
+  }
+}
+
 function goToPage(page: number) {
   currentPage.value = Math.max(1, Math.min(page, totalPages.value))
+}
+
+function goToImplementsPage(page: number) {
+  implementsPage.value = Math.max(1, Math.min(page, implementsTotalPages.value))
 }
 
 const CSV_SEP = '\t'
@@ -333,8 +516,21 @@ async function exportToPdf() {
       <h1 class="page-title">Управление техникой</h1>
     </header>
 
+    <nav class="equipment-tabs" aria-label="Разделы">
+      <button
+        v-for="tab in TABS"
+        :key="tab.id"
+        type="button"
+        class="equipment-tab"
+        :class="{ 'equipment-tab--active': activeTab === tab.id }"
+        @click="activeTab = tab.id"
+      >
+        {{ tab.label }}
+      </button>
+    </nav>
+
     <!-- Новая единица техники -->
-    <div class="equipment-form-card card-rounded">
+    <div v-show="activeTab === 'equipment'" class="equipment-form-card card-rounded">
       <div class="equipment-section-head">
         <h2 class="equipment-form-title">
           <svg class="equipment-section-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
@@ -409,6 +605,19 @@ async function exportToPdf() {
           />
         </div>
         <div class="equipment-form-field">
+          <label class="equipment-label" for="eq-implement">Орудие</label>
+          <select id="eq-implement" v-model="form.implement_id" class="equipment-input equipment-select">
+            <option value="">Не выбрано</option>
+            <option
+              v-for="opt in implementOptions"
+              :key="opt.id"
+              :value="opt.id"
+            >
+              {{ opt.name }}
+            </option>
+          </select>
+        </div>
+        <div class="equipment-form-field">
           <label class="equipment-label" for="eq-responsible">Ответственный</label>
           <select
             id="eq-responsible"
@@ -467,7 +676,7 @@ async function exportToPdf() {
     </div>
 
     <!-- Список техники -->
-    <div class="equipment-list-card card-rounded">
+    <div v-show="activeTab === 'equipment'" class="equipment-list-card card-rounded">
       <div class="equipment-list-header">
         <h2 class="equipment-list-title">
           <svg class="equipment-section-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
@@ -506,6 +715,7 @@ async function exportToPdf() {
               <th>Марка / Модель</th>
               <th>Гос. номер</th>
               <th>Тип техники</th>
+              <th>Орудие</th>
               <th>Ответственный</th>
               <th>Состояние</th>
               <th class="equipment-th-actions">Действия</th>
@@ -528,6 +738,7 @@ async function exportToPdf() {
                 <span class="equipment-plate-badge">{{ row.license_plate }}</span>
               </td>
               <td>{{ equipmentTypeLabel(row.equipment_type) }}</td>
+              <td>{{ implementLabelById(row.implement_id) }}</td>
               <td>
                 <span class="equipment-responsible-pill">{{ responsibleLabel(row.responsible_id) }}</span>
               </td>
@@ -550,7 +761,7 @@ async function exportToPdf() {
               </td>
             </tr>
             <tr v-if="!paginatedList.length">
-              <td colspan="6" class="equipment-empty">Нет записей</td>
+              <td colspan="7" class="equipment-empty">Нет записей</td>
             </tr>
           </tbody>
         </table>
@@ -594,6 +805,151 @@ async function exportToPdf() {
         </div>
       </div>
     </div>
+
+    <div v-show="activeTab === 'implements'" class="equipment-list-card card-rounded">
+      <div class="equipment-list-header">
+        <h2 class="equipment-list-title">
+          <svg class="equipment-section-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          Орудия
+        </h2>
+        <span class="equipment-list-count">{{ implementsTotal }} {{ implementsTotal === 1 ? 'позиция' : implementsTotal < 5 ? 'позиции' : 'позиций' }}</span>
+        <div class="equipment-list-toolbar">
+          <div class="equipment-search-wrap">
+            <svg class="equipment-search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input
+              v-model="implementsSearch"
+              type="search"
+              class="equipment-search-input"
+              placeholder="Поиск по названию или назначению..."
+              autocomplete="off"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="equipment-form-grid equipment-form-grid--implements">
+        <div class="equipment-form-field">
+          <label class="equipment-label" for="impl-name">Название <span class="equipment-required-star">*</span></label>
+          <input id="impl-name" v-model="implementForm.name" type="text" class="equipment-input" placeholder="Например: Плуг ПЛН-5-35" />
+        </div>
+        <div class="equipment-form-field">
+          <label class="equipment-label" for="impl-purpose">Предназначение</label>
+          <input id="impl-purpose" v-model="implementForm.purpose" type="text" class="equipment-input" placeholder="Например: Вспашка почвы" />
+        </div>
+        <div class="equipment-form-field">
+          <label class="equipment-label" for="impl-condition">Состояние</label>
+          <select id="impl-condition" v-model="implementForm.condition" class="equipment-input equipment-select">
+            <option v-for="opt in CONDITION_OPTIONS" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </div>
+        <div class="equipment-form-field equipment-form-field--full">
+          <label class="equipment-label" for="impl-description">Описание</label>
+          <input id="impl-description" v-model="implementForm.description" type="text" class="equipment-input" placeholder="Дополнительная информация по орудию" />
+        </div>
+      </div>
+      <div class="equipment-form-actions equipment-form-actions--implements">
+        <button type="button" class="equipment-btn equipment-btn-clear" @click="clearImplementForm">
+          <UiTrashIcon class="equipment-btn-icon" aria-hidden="true" />
+          Очистить
+        </button>
+        <button type="button" class="equipment-btn equipment-btn-save" :disabled="implementsSaving || !implementForm.name.trim()" @click="saveImplement">
+          <svg class="equipment-btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          {{ editingImplementId ? 'Сохранить изменения' : 'Добавить орудие' }}
+        </button>
+      </div>
+
+      <div v-if="implementsLoading" class="equipment-loading" role="status" aria-live="polite">
+        <UiLoadingBar />
+      </div>
+      <div v-else class="table-wrapper">
+        <table class="equipment-table" aria-label="Список орудий">
+          <thead>
+            <tr>
+              <th>Название</th>
+              <th>Предназначение</th>
+              <th>Описание</th>
+              <th>Состояние</th>
+              <th class="equipment-th-actions">Действия</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in implementsList" :key="row.id">
+              <td>{{ row.name }}</td>
+              <td>{{ row.purpose || '—' }}</td>
+              <td>{{ row.description || '—' }}</td>
+              <td>
+                <span :class="['equipment-condition-badge', conditionClass(row.condition)]">{{ conditionLabel(row.condition) }}</span>
+              </td>
+              <td class="equipment-td-actions">
+                <div class="equipment-actions">
+                  <button
+                    type="button"
+                    class="equipment-action-btn"
+                    aria-label="Редактировать орудие"
+                    title="Редактировать"
+                    @click="startEditImplement(row)"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                  </button>
+                  <UiDeleteButton size="sm" @click="removeImplement(row)" />
+                </div>
+              </td>
+            </tr>
+            <tr v-if="!implementsList.length">
+              <td colspan="5" class="equipment-empty">Нет записей</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="implementsTotal > 0" class="equipment-pagination">
+        <span class="equipment-pagination-info">
+          Показано {{ implementsPageStart }}-{{ implementsPageEnd }} из {{ implementsTotal }}
+        </span>
+        <div class="equipment-pagination-right">
+          <label class="equipment-pagination-size">
+            <span class="equipment-pagination-size-label">На странице</span>
+            <select v-model.number="implementsPageSize" class="equipment-pagination-select">
+              <option v-for="size in IMPLEMENTS_PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
+            </select>
+          </label>
+          <div class="equipment-pagination-btns">
+            <button
+              type="button"
+              class="equipment-page-btn"
+              :disabled="implementsPage <= 1"
+              aria-label="Предыдущая страница"
+              @click="goToImplementsPage(implementsPage - 1)"
+            >
+              &lt;
+            </button>
+            <template v-for="(p, i) in implementsPageNumbers" :key="p === 'ellipsis' ? `impl-e-${i}` : p">
+              <button
+                v-if="p !== 'ellipsis'"
+                type="button"
+                class="equipment-page-btn"
+                :class="{ 'equipment-page-btn--active': p === implementsPage }"
+                @click="goToImplementsPage(p)"
+              >
+                {{ p }}
+              </button>
+              <span v-else class="equipment-pagination-dots">…</span>
+            </template>
+            <button
+              type="button"
+              class="equipment-page-btn"
+              :disabled="implementsPage >= implementsTotalPages"
+              aria-label="Следующая страница"
+              @click="goToImplementsPage(implementsPage + 1)"
+            >
+              &gt;
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -607,6 +963,36 @@ async function exportToPdf() {
 
 .equipment-header {
   margin-bottom: var(--space-xl);
+}
+
+.equipment-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-bottom: var(--space-lg);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.equipment-tab {
+  padding: 10px 16px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.equipment-tab:hover {
+  color: var(--text-primary);
+}
+
+.equipment-tab--active {
+  color: var(--accent-green);
+  border-bottom-color: var(--accent-green);
 }
 
 .equipment-form-card,
@@ -682,6 +1068,15 @@ async function exportToPdf() {
   gap: 4px;
 }
 
+.equipment-form-field--full {
+  grid-column: 1 / -1;
+}
+
+.equipment-form-grid--implements {
+  margin-top: var(--space-lg);
+  margin-bottom: var(--space-md);
+}
+
 .equipment-required-star {
   color: var(--danger-red);
 }
@@ -740,6 +1135,10 @@ async function exportToPdf() {
   gap: 12px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.equipment-form-actions--implements {
+  margin-bottom: var(--space-lg);
 }
 
 .equipment-btn {
@@ -1087,6 +1486,36 @@ async function exportToPdf() {
   gap: 4px;
 }
 
+.equipment-pagination-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.equipment-pagination-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.equipment-pagination-size-label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.equipment-pagination-select {
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fafafa;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+[data-theme='dark'] .equipment-pagination-select {
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .equipment-page-btn {
   min-width: 36px;
   padding: 8px 10px;
@@ -1175,6 +1604,11 @@ async function exportToPdf() {
   .equipment-pagination {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .equipment-pagination-right {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 </style>
