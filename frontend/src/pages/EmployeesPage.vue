@@ -75,7 +75,7 @@ async function refresh() {
     }
     const q = search.value.trim()
     const pos = positionFilter.value.trim() || null
-    employees.value = q ? await searchEmployees(q, 80, pos) : await loadEmployees(80, pos)
+    employees.value = q ? await searchEmployees(q, 200, pos) : await loadEmployees(200, pos)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Не удалось загрузить сотрудников.'
   } finally {
