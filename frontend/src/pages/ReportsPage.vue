@@ -1010,8 +1010,7 @@ onUnmounted(() => {
 
 <style scoped>
 .dash-page {
-  max-width: 1400px;
-  margin: 0 auto;
+  width: 100%;
   padding-bottom: var(--space-xl);
   display: flex;
   flex-direction: column;

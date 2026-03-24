@@ -205,8 +205,7 @@ function openEmployee(e: EmployeeRow) {
 
 <style scoped>
 .emp-page {
-  max-width: 1400px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .emp-header {

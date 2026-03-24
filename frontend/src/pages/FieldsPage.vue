@@ -1820,8 +1820,7 @@ onMounted(async () => {
   padding: 0;
 }
 .fields-page-inner {
-  max-width: 1400px;
-  margin: 0 auto;
+  width: 100%;
 }
 .fields-header {
   display: flex;
