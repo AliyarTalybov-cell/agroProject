@@ -2,7 +2,7 @@
  * Yandex Weather GraphQL API (Spectaql)
  */
 
-const YANDEX_PROXY = '/yandex-api-v2/graphql/query'
+const YANDEX_PROXY = '/api/weather'
 
 export type WeatherData = {
   cityName: string
