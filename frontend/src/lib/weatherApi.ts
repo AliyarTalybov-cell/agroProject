@@ -108,18 +108,12 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
     }
   }
 
-  const key = import.meta.env.VITE_YANDEX_WEATHER_KEY
-
-  if (!key) {
-    console.error("VITE_YANDEX_WEATHER_KEY не найден в .env.local")
-    return null
-  }
-
+  // Ключ на фронтенде больше не нужен, он подставляется в Serverless Function на Vercel
   try {
     const response = await fetch(YANDEX_PROXY, {
       method: 'POST',
       headers: {
-        'X-Yandex-Weather-Key': key,
+        // 'X-Yandex-Weather-Key': key, // Ключ подставляется на сервере
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -219,18 +213,15 @@ const GQL_FORECAST_QUERY = `
           }
         }
       }
-    }
   }
 `
 
 export async function fetchForecast5(lat: number, lon: number): Promise<ForecastDayItem[]> {
-  const key = import.meta.env.VITE_YANDEX_WEATHER_KEY
-
   try {
     const response = await fetch(YANDEX_PROXY, {
       method: 'POST',
       headers: {
-        'X-Yandex-Weather-Key': key,
+        // 'X-Yandex-Weather-Key': key, // Ключ подставляется на сервере
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
