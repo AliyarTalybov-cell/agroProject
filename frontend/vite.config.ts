@@ -15,7 +15,7 @@ export default defineConfig({
       '/api/weather': {
         target: 'https://api.weather.yandex.ru',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/weather/, ''),
+        rewrite: (path) => path.replace(/^\/api\/weather/, '/graphql/query'),
       },
     },
   },
