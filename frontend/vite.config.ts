@@ -12,10 +12,10 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/proxy/weather': {
+      '/api/weather': {
         target: 'https://api.weather.yandex.ru',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/proxy\/weather/, ''),
+        rewrite: (path) => path.replace(/^\/api\/weather/, ''),
       },
     },
   },
