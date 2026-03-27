@@ -53,12 +53,36 @@ function parseCondition(c: string): string {
 
 function parseWindDir(dir: string): string {
   const dirs: Record<string, string> = {
-    nw: 'СЗ', n: 'С', ne: 'СВ', e: 'В',
-    se: 'ЮВ', s: 'Ю', sw: 'ЮЗ', w: 'З', c: 'Штиль',
-    NW: 'СЗ', N: 'С', NE: 'СВ', E: 'В',
-    SE: 'ЮВ', S: 'Ю', SW: 'ЮЗ', W: 'З', C: 'Штиль'
+    nw: 'СЗ',
+    n: 'С',
+    ne: 'СВ',
+    e: 'В',
+    se: 'ЮВ',
+    s: 'Ю',
+    sw: 'ЮЗ',
+    w: 'З',
+    c: 'Штиль',
+    NW: 'СЗ',
+    N: 'С',
+    NE: 'СВ',
+    E: 'В',
+    SE: 'ЮВ',
+    S: 'Ю',
+    SW: 'ЮЗ',
+    W: 'З',
+    C: 'Штиль',
+    NORTH_WEST: 'СЗ',
+    NORTH: 'С',
+    NORTH_EAST: 'СВ',
+    EAST: 'В',
+    SOUTH_EAST: 'ЮВ',
+    SOUTH: 'Ю',
+    SOUTH_WEST: 'ЮЗ',
+    WEST: 'З',
+    CALM: 'Штиль',
   }
-  return dirs[dir] || dir
+  const key = (dir || '').trim()
+  return dirs[key] || dirs[key.toUpperCase()] || dir
 }
 
 const GQL_NOW_QUERY = `
@@ -179,6 +203,19 @@ export function getWeatherIconUrl(iconOrUrl: string): string {
     return iconOrUrl
   }
   return `https://yastatic.net/weather/i/icons/funky/dark/${iconOrUrl}.svg`
+}
+
+/** Короткая подпись погоды для компактных карточек (категория после parseCondition). */
+export function conditionCategoryLabelRu(category: string): string {
+  const c = (category || 'clear').toLowerCase()
+  const map: Record<string, string> = {
+    clear: 'Ясно',
+    clouds: 'Облачно',
+    rain: 'Дождь',
+    snow: 'Снег',
+    thunderstorm: 'Гроза',
+  }
+  return map[c] ?? '—'
 }
 
 // ——— Прогноз на 5 дней (по дням) ———

@@ -3,7 +3,15 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { loadCrops, type CropRow } from '@/lib/landTypesAndCrops'
 import { isSupabaseConfigured } from '@/lib/supabase'
-import { fetchWeather, fetchForecast5, getWeatherIconUrl, type WeatherData, type ForecastDayItem } from '@/lib/weatherApi'
+import {
+  fetchWeather,
+  fetchForecast5,
+  getWeatherIconUrl,
+  conditionCategoryLabelRu,
+  type WeatherData,
+  type ForecastDayItem,
+} from '@/lib/weatherApi'
+import { parseLatLonFromGeolocationString } from '@/lib/yandexGeocode'
 import { RUSSIAN_CITIES } from '@/lib/cities'
 import { useWeatherCity } from '@/composables/useWeatherCity'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
@@ -17,6 +25,10 @@ const crops = ref<CropRow[]>([])
 const loading = ref(true)
 const error = ref(false)
 const pickedCoords = ref<{ lat: number; lon: number } | null>(null)
+
+/** Погода по точке поля (ключ — id поля); null в значении = нет данных / ошибка */
+const fieldWeatherById = ref<Record<string, WeatherData | null>>({})
+const fieldsLocationWeatherLoading = ref(false)
 
 async function load() {
   loading.value = true
@@ -34,11 +46,43 @@ async function load() {
 watch(cityValue, () => load())
 
 function refresh() {
-  load()
+  void load().then(() => {
+    void loadFieldsLocationWeather()
+  })
+}
+
+/** Погода для карточек полей: по геолокации (+ при необходимости адрес для привязки участка к земле). */
+async function loadFieldsLocationWeather() {
+  if (!fields.value.length) {
+    fieldWeatherById.value = {}
+    return
+  }
+  fieldsLocationWeatherLoading.value = true
+  const next: Record<string, WeatherData | null> = {}
+  try {
+    await Promise.all(
+      fields.value.map(async (f) => {
+        const coords = parseLatLonFromGeolocationString(f.geolocation)
+        const hasAddress = (f.address ?? '').trim().length > 0
+        if (!coords || !hasAddress) {
+          next[f.id] = null
+          return
+        }
+        next[f.id] = await fetchWeather(coords.lat, coords.lon)
+      }),
+    )
+    fieldWeatherById.value = next
+  } finally {
+    fieldsLocationWeatherLoading.value = false
+  }
 }
 
 onMounted(() => {
   void Promise.all([load(), loadFieldsData()])
+})
+
+watch(fields, () => {
+  void loadFieldsLocationWeather()
 })
 
 const updatedAt = computed(() => {
@@ -135,25 +179,101 @@ const heroRecommendation = computed(() => {
 })
 
 const fieldsWithWeather = computed(() => {
-  const data = weather.value
-  const temp = data?.temp ?? 0
-  const wind = data?.windSpeed ?? 0
-  const icon = data?.icon ?? '01d'
+  const city = weather.value
   const cropMap = new Map(crops.value.map((c) => [c.key, c.label]))
+  const cityTemp = city?.temp ?? 0
+  const cityWind = Math.max(0, city?.windSpeed ?? 0)
+  const cityIcon = city?.icon ?? '01d'
+  const loading = fieldsLocationWeatherLoading.value
+
   return fields.value.map((f) => {
     const cropName = cropMap.get(f.crop_key) ?? f.crop_key ?? '—'
     const fieldName = f.number ? `Поле №${f.number}` : f.name
-    const w = Math.max(0, wind)
+    const coords = parseLatLonFromGeolocationString(f.geolocation)
+    const hasAddress = (f.address ?? '').trim().length > 0
+    const eligible = coords != null && hasAddress
+    const local = eligible ? fieldWeatherById.value[f.id] : undefined
+
+    let temp: number | null
+    let wind: number
+    let icon: string
+    let windStrong: boolean
+    let wx: WeatherData | null = null
+
+    if (eligible && local) {
+      temp = local.temp
+      wind = Math.max(0, local.windSpeed ?? 0)
+      icon = local.icon || cityIcon
+      windStrong = wind > 5
+      wx = local
+    } else if (eligible && loading) {
+      temp = null
+      wind = 0
+      icon = cityIcon
+      windStrong = false
+      wx = null
+    } else {
+      temp = cityTemp
+      wind = cityWind
+      icon = cityIcon
+      windStrong = wind > 5
+      wx = city ?? null
+    }
+
+    const humidity = wx?.humidity ?? null
+    const precProbability = wx?.precProbability ?? null
+    const pressure = wx?.pressure ?? null
+    const visibilityKm =
+      wx?.visibility != null ? Number((wx.visibility / 1000).toFixed(1)) : null
+    const kpIndex = wx?.kpIndex ?? null
+    const conditionLabel = wx ? conditionCategoryLabelRu(wx.condition) : ''
+    const windDir = wx?.windDirection?.trim() ? wx.windDirection : ''
+    const loadingCard = Boolean(eligible && loading && !local)
+
+    const hasExtras =
+      !loadingCard &&
+      (Boolean(conditionLabel && conditionLabel !== '—') ||
+        humidity != null ||
+        precProbability != null ||
+        pressure != null ||
+        visibilityKm != null ||
+        kpIndex != null)
+
     return {
       id: f.id,
       name: fieldName,
       cropName,
       temp,
-      wind: w,
-      windStrong: w > 5,
+      wind,
+      windStrong,
       icon,
+      windDir,
+      humidity,
+      precProbability,
+      pressure,
+      visibilityKm,
+      kpIndex,
+      conditionLabel,
+      hasExtras,
+      loading: loadingCard,
     }
   })
+})
+
+/** Метки полей на карте наблюдения (только с валидной геолокацией) */
+const weatherMapFieldMarkers = computed(() => {
+  const cropMap = new Map(crops.value.map((c) => [c.key, c.label]))
+  const result: { id: string; lat: number; lon: number; title: string; subtitle?: string }[] = []
+  for (const f of fields.value) {
+    const coords = parseLatLonFromGeolocationString(f.geolocation)
+    if (!coords) continue
+    const title = f.number ? `Поле №${f.number}` : f.name
+    const cropName = cropMap.get(f.crop_key) ?? f.crop_key ?? ''
+    const addr = (f.address ?? '').trim()
+    const subtitle = [cropName, addr].filter(Boolean).join(' · ') || undefined
+    result.push({ id: f.id, lat: coords.lat, lon: coords.lon, title, subtitle })
+  }
+  return result
 })
 </script>
 
@@ -169,7 +289,7 @@ const fieldsWithWeather = computed(() => {
         >
           <option v-for="c in RUSSIAN_CITIES" :key="c.value" :value="c.value">{{ c.label }}</option>
         </select>
-        <button type="button" class="btn btn-ghost" aria-label="Обновить" @click="refresh">Обновить</button>
+        <button type="button" class="weather-refresh-btn" aria-label="Обновить" @click="refresh">Обновить</button>
       </div>
     </header>
 
@@ -362,12 +482,18 @@ const fieldsWithWeather = computed(() => {
       </div>
 
       <!-- Карта -->
-      <h2 class="weather-section-title page-enter-item" style="--enter-delay: 360ms">Карта наблюдения</h2>
-      <div class="page-enter-item" style="--enter-delay: 400ms">
+      <h2 class="weather-section-title page-enter-item" style="--enter-delay: 360ms">Карта наблюдения полей</h2>
+      <p class="weather-map-hint page-enter-item" style="--enter-delay: 375ms">
+        Зелёными метками на карте отмечены поля, заведённые в системе (по сохранённым координатам). Красная метка —
+        точка, которую вы выбрали на карте или в поиске.
+      </p>
+      <div class="page-enter-item weather-map-wrap" style="--enter-delay: 400ms">
         <YandexMap
           :lat="weather.coord?.lat ?? 55.7558"
           :lon="weather.coord?.lon ?? 37.6176"
           :zoom="10"
+          :field-markers="weatherMapFieldMarkers"
+          :fit-field-markers="weatherMapFieldMarkers.length > 0"
           @pick="(c) => pickedCoords = c"
         />
         <div v-if="pickedCoords" class="ymap-picked-coords">
@@ -424,14 +550,26 @@ const fieldsWithWeather = computed(() => {
             :to="{ name: 'field-details', params: { id: f.id } }"
             :style="{ '--anim-delay': 600 + idx * 60 + 'ms' }"
           >
-            <div>
-              <div class="weather-field-mini-name">{{ f.name }}</div>
-              <div class="weather-field-mini-crop">{{ f.cropName }}</div>
+            <div class="weather-field-mini-main">
+              <div>
+                <div class="weather-field-mini-name">{{ f.name }}</div>
+                <div class="weather-field-mini-crop">{{ f.cropName }}</div>
+              </div>
+              <div class="weather-field-mini-weather" :class="{ 'weather-field-mini-weather--loading': f.loading }">
+                <img :src="getWeatherIconUrl(f.icon)" alt="" width="28" height="28" />
+                <span class="weather-field-mini-temp">{{ f.loading ? '…' : f.temp != null ? `${f.temp}°C` : '—' }}</span>
+                <span class="weather-field-mini-wind" :class="{ 'wind-strong': f.windStrong && !f.loading }">{{
+                  f.loading ? '…' : `Ветер ${f.wind} м/с${f.windDir ? ', ' + f.windDir : ''}`
+                }}</span>
+              </div>
             </div>
-            <div class="weather-field-mini-weather">
-              <img :src="getWeatherIconUrl(f.icon)" alt="" width="28" height="28" />
-              <span class="weather-field-mini-temp">{{ f.temp }}°C</span>
-              <span class="weather-field-mini-wind" :class="{ 'wind-strong': f.windStrong }">Ветер {{ f.wind }} м/с</span>
+            <div v-if="f.hasExtras" class="weather-field-mini-extras" aria-label="Дополнительно по погоде">
+              <span v-if="f.conditionLabel && f.conditionLabel !== '—'" class="weather-field-mini-extra-em">{{ f.conditionLabel }}</span>
+              <span v-if="f.humidity != null" class="weather-field-mini-extra">Влажность {{ f.humidity }}%</span>
+              <span v-if="f.precProbability != null" class="weather-field-mini-extra">Осадки {{ f.precProbability }}%</span>
+              <span v-if="f.pressure != null" class="weather-field-mini-extra">Давл. {{ f.pressure }} мм</span>
+              <span v-if="f.visibilityKm != null" class="weather-field-mini-extra">Видимость {{ f.visibilityKm }} км</span>
+              <span v-if="f.kpIndex != null" class="weather-field-mini-extra">Kp {{ f.kpIndex }}</span>
             </div>
           </RouterLink>
         </div>
@@ -444,36 +582,291 @@ const fieldsWithWeather = computed(() => {
 .weather-page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xl);
+  gap: var(--space-md);
+}
+
+/* Компактная верхняя полоса (город / обновить): без лишних отступов от .header-area */
+.weather-page > .header-weather.header-area {
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+  gap: 8px;
+}
+
+/* Чуть плотнее блоки погоды (контент тот же) */
+.weather-page :deep(.weather-hero) {
+  margin-bottom: 14px;
+  border-radius: 18px;
+}
+
+.weather-page :deep(.weather-hero-inner) {
+  padding: 22px;
+  gap: 20px;
+}
+
+.weather-page :deep(.weather-hero-temp-block) {
+  padding: 14px 0;
+  gap: 16px;
+}
+
+@media (min-width: 1024px) {
+  .weather-page :deep(.weather-hero-temp-block) {
+    padding: 0 22px;
+  }
+}
+
+.weather-page :deep(.weather-hero-temp-wrap) {
+  gap: 16px;
+}
+
+.weather-page :deep(.weather-hero-temp) {
+  font-size: 3.35rem;
+}
+
+.weather-page :deep(.weather-hero-city) {
+  font-size: 1.65rem;
+}
+
+.weather-page :deep(.weather-hero-desc) {
+  font-size: 1.08rem;
+}
+
+.weather-page :deep(.weather-recommendation-inline) {
+  padding: 16px;
+  border-radius: 14px;
+}
+
+.weather-page :deep(.weather-recommendation-inline h3) {
+  margin-bottom: 8px;
+  font-size: 1.05rem;
+  gap: 10px;
+}
+
+.weather-page :deep(.weather-recommendation-inline p) {
+  margin-bottom: 8px;
+  font-size: 0.94rem;
+}
+
+.weather-page :deep(.weather-recommendation-inline ul) {
+  gap: 6px;
+}
+
+.weather-page :deep(.weather-section-title) {
+  margin: 18px 0 10px;
+  font-size: 1.05rem;
+}
+
+.weather-page :deep(.weather-indicators-grid) {
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .weather-page :deep(.weather-indicators-grid) {
+    gap: 16px;
+  }
+}
+
+.weather-page :deep(.weather-indicator-card) {
+  padding: 14px 15px;
+  gap: 12px;
+  border-radius: 12px;
+}
+
+.weather-page :deep(.weather-indicator-icon) {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+}
+
+.weather-page :deep(.weather-indicator-value) {
+  font-size: 1.28rem;
+}
+
+.weather-page :deep(.weather-indicator-label) {
+  font-size: 0.8125rem;
+  margin-bottom: 2px;
+}
+
+.weather-page :deep(.weather-forecast-strip) {
+  gap: 12px;
+  padding-bottom: 10px;
+  margin-top: 10px;
+}
+
+.weather-page :deep(.weather-forecast-card) {
+  padding: 14px 14px;
+  border-radius: 12px;
+  min-width: 128px;
+}
+
+.weather-page :deep(.weather-current-icon) {
+  width: 80px;
+  height: 80px;
+}
+
+.weather-page :deep(.card-rounded) {
+  padding: var(--space-md);
+}
+
+.weather-page :deep(.weather-block-title) {
+  margin-bottom: 6px;
+  font-size: 1.05rem;
+}
+
+.weather-page :deep(.weather-block-subtitle) {
+  margin-bottom: 10px;
+  font-size: 0.8125rem;
+}
+
+.weather-page :deep(.weather-fields-list) {
+  gap: 10px;
+}
+
+.weather-page :deep(.weather-field-mini) {
+  padding: 12px 14px;
+  gap: 8px;
+}
+
+.weather-page :deep(.weather-field-mini-extras) {
+  padding-top: 8px;
+}
+
+.weather-map-hint {
+  margin: -2px 0 8px;
+  padding: 0 4px;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  max-width: 48rem;
+}
+
+.weather-map-wrap :deep(.ymap-container) {
+  height: 360px;
+}
+
+.ymap-picked-coords {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  background: var(--chip-bg);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
 }
 
 .header-weather {
   flex-wrap: wrap;
-  gap: var(--space-md);
+  gap: 8px;
 }
 
 .weather-header-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: 10px;
   flex-wrap: wrap;
 }
 
+/* Селект и кнопка: свои стили (классы .btn в проекте заданы только в других страницах со scoped) */
 .weather-city-select {
-  min-width: 160px;
-  padding: 10px 14px;
-  border-radius: 8px;
+  min-width: 168px;
+  max-width: 100%;
+  padding: 9px 36px 9px 14px;
+  border-radius: 10px;
   border: 1px solid var(--border-color);
-  background: var(--chip-bg);
+  background-color: var(--bg-panel);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25;
   cursor: pointer;
+  min-height: 40px;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
 }
 
-.weather-header-actions .btn {
-  min-height: 44px;
-  padding: 10px 18px;
+.weather-city-select:hover {
+  border-color: color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+  background-color: var(--bg-panel-hover);
+}
+
+.weather-city-select:focus {
+  outline: none;
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 22%, transparent);
+}
+
+.weather-city-select:focus-visible {
+  outline: none;
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 22%, transparent);
+}
+
+[data-theme='dark'] .weather-city-select {
+  background-color: color-mix(in srgb, var(--bg-panel) 86%, black);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-opacity='0.65'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+[data-theme='dark'] .weather-city-select:hover {
+  background-color: color-mix(in srgb, var(--bg-panel) 92%, white);
+}
+
+.weather-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 18px;
+  min-height: 40px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
   white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid var(--accent-green);
+  background: var(--accent-green);
+  color: #fff;
+  box-shadow: var(--shadow-card);
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    filter 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.weather-refresh-btn:hover {
+  background: var(--accent-green-hover);
+  border-color: var(--accent-green-hover);
+  filter: brightness(1.03);
+}
+
+.weather-refresh-btn:focus {
+  outline: none;
+}
+
+.weather-refresh-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    var(--shadow-card),
+    0 0 0 3px color-mix(in srgb, var(--accent-green) 28%, transparent);
+}
+
+.weather-refresh-btn:active {
+  filter: brightness(0.96);
 }
 
 .weather-forecast5 {
@@ -854,6 +1247,13 @@ const fieldsWithWeather = computed(() => {
   border-radius: 10px;
   padding: var(--space-md);
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.weather-field-mini-main {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm);
@@ -888,6 +1288,10 @@ const fieldsWithWeather = computed(() => {
   gap: var(--space-sm);
 }
 
+.weather-field-mini-weather--loading {
+  opacity: 0.88;
+}
+
 .weather-field-mini-temp {
   font-size: 1.1rem;
   font-weight: 700;
@@ -902,6 +1306,24 @@ const fieldsWithWeather = computed(() => {
 .weather-field-mini-wind.wind-strong {
   color: var(--warning-orange);
   font-weight: 700;
+}
+
+.weather-field-mini-extras {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.weather-field-mini-extra-em {
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .weather-page .weather-sky {
@@ -949,18 +1371,5 @@ const fieldsWithWeather = computed(() => {
     flex: 1;
     min-width: 0;
   }
-}
-
-.ymap-picked-coords {
-  margin-top: 10px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  padding: 8px 14px;
-  background: var(--chip-bg);
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
 }
 </style>
