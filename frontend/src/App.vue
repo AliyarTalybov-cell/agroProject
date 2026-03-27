@@ -10,7 +10,19 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuth()
 const isAuthLayout = computed(() => route.name === 'login')
-const pageTitle = computed(() => (route.meta?.title as string) || 'Обзор')
+const pageTitle = computed(() => {
+  if (route.name === 'dashboard' && route.query.tab === 'about') return 'О сервисе'
+  return (route.meta?.title as string) || 'Обзор'
+})
+
+const dashboardHomeActive = computed(
+  () => route.name === 'dashboard' && route.query.tab !== 'about',
+)
+
+function goDashboardHome() {
+  closeMobileMenu()
+  void router.push({ path: '/dashboard', query: {} })
+}
 const { theme, setTheme } = useTheme()
 /** checked = светлая тема (Uiverse Creatlydev: солнце); не отмечено = луна / тёмная */
 const themeIsLight = computed({
@@ -99,7 +111,12 @@ watch(
     <div class="sidebar-overlay" aria-hidden="true" @click="closeMobileMenu"></div>
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <RouterLink class="sidebar-brand-link" to="/dashboard" data-text="АГРОСИСТЕМА" aria-label="АГРОСИСТЕМА">
+        <RouterLink
+          class="sidebar-brand-link"
+          :to="{ path: '/dashboard', query: {} }"
+          data-text="АГРОСИСТЕМА"
+          aria-label="АГРОСИСТЕМА"
+        >
           <span class="sidebar-brand-title-wrap">
             <span class="actual-text"><span>АГРО</span><span class="actual-text-accent">СИСТЕМА</span></span>
             <span aria-hidden="true" class="hover-text"><span>АГРО</span><span>СИСТЕМА</span></span>
@@ -110,12 +127,17 @@ watch(
         <div class="nav-section">
           <ul class="nav-menu">
             <li>
-              <RouterLink class="nav-item" to="/dashboard">
+              <a
+                href="/dashboard"
+                class="nav-item"
+                :class="{ 'router-link-active': dashboardHomeActive }"
+                @click.prevent="goDashboardHome"
+              >
                 <span class="nav-item-icon" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
                 </span>
                 Обзор
-              </RouterLink>
+              </a>
             </li>
             <li>
               <RouterLink class="nav-item" to="/weather">

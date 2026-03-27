@@ -33,6 +33,7 @@ export const routes = [
   { path: '/profile', name: 'profile', component: ProfilePage, meta: { title: 'Настройки профиля' } },
   { path: '/employees', name: 'employees', component: EmployeesPage, meta: { title: 'Сотрудники' } },
   { path: '/chat', name: 'chat', component: ChatPage, meta: { title: 'Сообщения' } },
+  { path: '/about', redirect: { name: 'dashboard', query: { tab: 'about' } } },
 ] as const
 
 export const router = createRouter({
