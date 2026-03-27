@@ -139,15 +139,38 @@ async function submit() {
 
 <style scoped>
 .login-layout {
+  position: relative;
+  isolation: isolate;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
   box-sizing: border-box;
+  background-color: #1c2e18;
+  background-image: url('/photo-1500382017468-9049fed747ef.jpeg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.login-layout::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    rgba(20, 35, 18, 0.72) 0%,
+    rgba(12, 22, 10, 0.55) 50%,
+    rgba(18, 30, 14, 0.65) 100%
+  );
 }
 
 .form_container {
+  position: relative;
+  z-index: 1;
   width: fit-content;
   min-width: min(100%, 360px);
   max-width: 410px;
