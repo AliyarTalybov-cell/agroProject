@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onActivated, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onActivated, onUnmounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useSupabaseCheck } from '@/composables/useSupabaseCheck'
 import { useAuth } from '@/stores/auth'
@@ -12,11 +12,17 @@ import {
   type TaskRow,
   type TaskStatus,
 } from '@/lib/tasksSupabase'
-import { loadDowntimesFromSupabase, loadOperationsFromSupabase } from '@/lib/analyticsSupabase'
+import {
+  loadDowntimesFromSupabase,
+  loadOperationsFromSupabase,
+  fetchOperationEmployeeStatsPage,
+  loadOperationsForEmployeeInDateRange,
+} from '@/lib/analyticsSupabase'
 import { loadOperatorStatusesFromSupabase, type OperatorStatusRow } from '@/lib/operatorStatusSupabase'
 import { loadEquipment, type EquipmentRow } from '@/lib/equipmentSupabase'
 import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
+import type { StoredOperation } from '@/lib/operationStorage'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const UUID_RE =
@@ -647,6 +653,257 @@ const equipmentRows = computed(() => {
   return rows
 })
 
+type OperationStatSortKey = 'ended' | 'duration' | 'employee' | 'field' | 'operation'
+
+type OperationStatRow = {
+  id: number
+  employee: string
+  fieldLabel: string
+  fieldRouteId: string | null
+  operationLabel: string
+  durationMinutes: number
+  endedAt: string
+}
+
+type OperationStatGroup = {
+  key: string
+  employee: string
+  totalMinutes: number
+  operationCount: number
+  fieldsCount: number
+  latestEndedAt: string
+}
+
+function fieldLabelForOperationRow(op: StoredOperation): string {
+  if (op.fieldName?.trim()) return op.fieldName.trim()
+  if (op.fieldId && isLikelyUuid(op.fieldId)) {
+    const f = fieldsCatalog.value.find((x) => x.id === op.fieldId)
+    if (f) return `Поле №${f.number} — ${f.name}`
+    return 'Поле'
+  }
+  return '—'
+}
+
+function fieldRouteIdForOperation(op: StoredOperation): string | null {
+  if (op.fieldId && isLikelyUuid(op.fieldId)) return op.fieldId
+  const name = op.fieldName?.trim()
+  if (name) {
+    const id = resolveFieldIdByTaskField(name)
+    if (id) return id
+  }
+  return null
+}
+
+function formatDurationMinutesShort(m: number): string {
+  const n = Math.max(0, Math.floor(m))
+  if (n < 60) return `${n} мин`
+  const h = Math.floor(n / 60)
+  const min = n % 60
+  if (min === 0) return `${h} ч`
+  return `${h} ч ${min} мин`
+}
+
+function formatOperationEndedAt(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function operationsCountLabelRu(n: number): string {
+  const k = Math.abs(n) % 100
+  const k1 = k % 10
+  if (k >= 11 && k <= 14) return `${n} операций`
+  if (k1 === 1) return `${n} операция`
+  if (k1 >= 2 && k1 <= 4) return `${n} операции`
+  return `${n} операций`
+}
+
+function fieldsCountLabelRu(n: number): string {
+  const k = Math.abs(n) % 100
+  const k1 = k % 10
+  if (k >= 11 && k <= 14) return `${n} полей`
+  if (k1 === 1) return `${n} поле`
+  if (k1 >= 2 && k1 <= 4) return `${n} поля`
+  return `${n} полей`
+}
+
+const operationStatsSortKey = ref<OperationStatSortKey>('ended')
+const operationStatsSortDir = ref<'asc' | 'desc'>('desc')
+
+function setOperationStatsSort(key: OperationStatSortKey) {
+  if (operationStatsSortKey.value === key) {
+    operationStatsSortDir.value = operationStatsSortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    operationStatsSortKey.value = key
+    operationStatsSortDir.value = key === 'ended' || key === 'duration' ? 'desc' : 'asc'
+  }
+  operationStatsPage.value = 1
+}
+
+function operationStatsSortMark(key: OperationStatSortKey): string {
+  if (operationStatsSortKey.value !== key) return ''
+  return operationStatsSortDir.value === 'asc' ? '↑' : '↓'
+}
+
+const operationStatsSummaries = ref<OperationStatGroup[]>([])
+const operationStatsTotal = ref(0)
+const operationStatsPage = ref(1)
+const operationStatsPageSize = ref(15)
+const operationStatsListLoading = ref(false)
+const operationStatsDetailByEmployee = ref<Record<string, OperationStatRow[]>>({})
+const operationStatsDetailTotalByEmployee = ref<Record<string, number>>({})
+const operationStatsDetailLoading = ref<Record<string, boolean>>({})
+const operationStatsDetailLoadingMore = ref<Record<string, boolean>>({})
+
+/** Размер порции при раскрытии сводки по сотруднику (операции по полям). */
+const OPERATION_DETAIL_PAGE_SIZE = 10
+
+const operationStatsTotalPages = computed(() =>
+  Math.max(1, Math.ceil(operationStatsTotal.value / operationStatsPageSize.value)),
+)
+
+const expandedOperationGroupKey = ref<string | null>(null)
+
+async function loadOperationStatsSummariesPage() {
+  operationStatsListLoading.value = true
+  try {
+    if (!isSupabaseConfigured() || !auth.user.value) {
+      operationStatsSummaries.value = []
+      operationStatsTotal.value = 0
+      return
+    }
+    const { start, end } = rangeBounds.value
+    const uid = auth.user.value.id
+    const onlyMine = !isManager.value
+    let empFilter: string | null = null
+    if (selectedEmployeeId.value) {
+      const p = profileById.value.get(selectedEmployeeId.value)
+      empFilter = p ? (p.display_name || p.email).trim() || null : null
+    }
+    const { rows, total } = await fetchOperationEmployeeStatsPage({
+      endFromIso: start.toISOString(),
+      endToIso: end.toISOString(),
+      onlyMine,
+      userId: uid,
+      employeeFilter: empFilter,
+      sort: operationStatsSortKey.value,
+      desc: operationStatsSortDir.value === 'desc',
+      page: operationStatsPage.value,
+      pageSize: operationStatsPageSize.value,
+    })
+    operationStatsTotal.value = total
+    operationStatsSummaries.value = rows.map((r) => ({
+      key: r.employee,
+      employee: r.employee,
+      totalMinutes: r.total_duration_minutes,
+      operationCount: r.operation_count,
+      fieldsCount: r.distinct_fields,
+      latestEndedAt: r.latest_end_iso,
+    }))
+  } finally {
+    operationStatsListLoading.value = false
+  }
+}
+
+function clearOperationStatsExpansion() {
+  expandedOperationGroupKey.value = null
+  operationStatsDetailByEmployee.value = {}
+  operationStatsDetailTotalByEmployee.value = {}
+  operationStatsDetailLoading.value = {}
+  operationStatsDetailLoadingMore.value = {}
+}
+
+function operationDetailRemaining(employeeKey: string): number {
+  const loaded = operationStatsDetailByEmployee.value[employeeKey]?.length ?? 0
+  const total = operationStatsDetailTotalByEmployee.value[employeeKey] ?? 0
+  return Math.max(0, total - loaded)
+}
+
+async function loadOperationDetailsPage(employeeKey: string, reset: boolean) {
+  if (!isSupabaseConfigured() || !auth.user.value) return
+  const prev = operationStatsDetailByEmployee.value[employeeKey] ?? []
+  const offset = reset ? 0 : prev.length
+
+  if (reset) {
+    operationStatsDetailLoading.value = { ...operationStatsDetailLoading.value, [employeeKey]: true }
+  } else {
+    operationStatsDetailLoadingMore.value = {
+      ...operationStatsDetailLoadingMore.value,
+      [employeeKey]: true,
+    }
+  }
+  try {
+    const { start, end } = rangeBounds.value
+    const uid = auth.user.value.id
+    const onlyMine = !isManager.value
+    const { rows: ops, total } = await loadOperationsForEmployeeInDateRange(
+      employeeKey,
+      start.toISOString(),
+      end.toISOString(),
+      onlyMine,
+      uid,
+      { limit: OPERATION_DETAIL_PAGE_SIZE, offset },
+    )
+    const mapped: OperationStatRow[] = ops.map((o) => ({
+      id: o.id,
+      employee: (o.employee || '—').trim(),
+      fieldLabel: fieldLabelForOperationRow(o),
+      fieldRouteId: fieldRouteIdForOperation(o),
+      operationLabel: (o.operation || '—').trim(),
+      durationMinutes: o.durationMinutes,
+      endedAt: o.endISO,
+    }))
+    operationStatsDetailByEmployee.value = {
+      ...operationStatsDetailByEmployee.value,
+      [employeeKey]: reset ? mapped : [...prev, ...mapped],
+    }
+    operationStatsDetailTotalByEmployee.value = {
+      ...operationStatsDetailTotalByEmployee.value,
+      [employeeKey]: total,
+    }
+  } finally {
+    if (reset) {
+      const next = { ...operationStatsDetailLoading.value }
+      delete next[employeeKey]
+      operationStatsDetailLoading.value = next
+    } else {
+      const next = { ...operationStatsDetailLoadingMore.value }
+      delete next[employeeKey]
+      operationStatsDetailLoadingMore.value = next
+    }
+  }
+}
+
+async function toggleOperationGroup(employeeKey: string) {
+  if (expandedOperationGroupKey.value === employeeKey) {
+    expandedOperationGroupKey.value = null
+    return
+  }
+  expandedOperationGroupKey.value = employeeKey
+  if ((operationStatsDetailByEmployee.value[employeeKey]?.length ?? 0) > 0) return
+  await loadOperationDetailsPage(employeeKey, true)
+}
+
+function goOperationStatsPage(delta: number) {
+  const next = operationStatsPage.value + delta
+  if (next < 1 || next > operationStatsTotalPages.value) return
+  operationStatsPage.value = next
+}
+
+watch(
+  [operationStatsPage, operationStatsSortKey, operationStatsSortDir, dateFrom, dateTo, selectedEmployeeId],
+  () => {
+    clearOperationStatsExpansion()
+    void loadOperationStatsSummariesPage()
+  },
+)
+
 async function loadDashboard() {
   loading.value = true
   try {
@@ -658,6 +915,8 @@ async function loadDashboard() {
       downtimes.value = []
       operations.value = []
       fieldsCatalog.value = []
+      operationStatsSummaries.value = []
+      operationStatsTotal.value = 0
       return
     }
     const uid = auth.user.value.id
@@ -682,6 +941,7 @@ async function loadDashboard() {
     console.error(e)
   } finally {
     loading.value = false
+    void loadOperationStatsSummariesPage()
   }
 }
 
@@ -1115,6 +1375,197 @@ onUnmounted(() => {
           <p v-else class="dash-empty">Нет завершённых задач в периоде.</p>
         </div>
       </div>
+    </section>
+
+    <section
+      class="dash-ops-stats dash-ops-stats--accordion page-enter-item"
+      style="--enter-delay: 220ms"
+      aria-labelledby="dash-ops-stats-title"
+    >
+      <div class="dash-ops-stats-intro">
+        <h2 id="dash-ops-stats-title" class="dash-section-title dash-ops-stats-title">Операции на полях</h2>
+        <p class="dash-ops-stats-hint dash-muted">
+          Завершённые операции за выбранный период (по дате окончания). Сводка по сотрудникам подгружается с сервера
+          постранично; нажмите строку, чтобы загрузить и показать операции по полям. Учитываются «С — По» и выбор
+          сотрудника. Для работы списка в Supabase должна быть применена миграция
+          <code class="dash-ops-code">operation_stats_employees_page.sql</code>.
+        </p>
+      </div>
+
+      <p v-if="operationStatsListLoading && !operationStatsSummaries.length" class="dash-ops-list-loading dash-muted">
+        Загрузка сводки…
+      </p>
+
+      <template v-else-if="operationStatsSummaries.length">
+        <div class="dash-ops-sort-bar" role="toolbar" aria-label="Сортировка сводки по сотрудникам">
+          <span class="dash-ops-sort-bar-label">Сортировка</span>
+          <button
+            type="button"
+            :class="['dash-ops-sort-pill', { 'dash-ops-sort-pill--active': operationStatsSortKey === 'employee' }]"
+            @click="setOperationStatsSort('employee')"
+          >
+            Сотрудник <span class="dash-ops-sort-pill-mark">{{ operationStatsSortMark('employee') }}</span>
+          </button>
+          <button
+            type="button"
+            :class="['dash-ops-sort-pill', { 'dash-ops-sort-pill--active': operationStatsSortKey === 'operation' }]"
+            @click="setOperationStatsSort('operation')"
+          >
+            Число операций <span class="dash-ops-sort-pill-mark">{{ operationStatsSortMark('operation') }}</span>
+          </button>
+          <button
+            type="button"
+            :class="['dash-ops-sort-pill', { 'dash-ops-sort-pill--active': operationStatsSortKey === 'field' }]"
+            @click="setOperationStatsSort('field')"
+          >
+            Полей задействовано <span class="dash-ops-sort-pill-mark">{{ operationStatsSortMark('field') }}</span>
+          </button>
+          <button
+            type="button"
+            :class="['dash-ops-sort-pill', { 'dash-ops-sort-pill--active': operationStatsSortKey === 'duration' }]"
+            @click="setOperationStatsSort('duration')"
+          >
+            Всего времени <span class="dash-ops-sort-pill-mark">{{ operationStatsSortMark('duration') }}</span>
+          </button>
+          <button
+            type="button"
+            :class="['dash-ops-sort-pill', { 'dash-ops-sort-pill--active': operationStatsSortKey === 'ended' }]"
+            @click="setOperationStatsSort('ended')"
+          >
+            Последняя операция <span class="dash-ops-sort-pill-mark">{{ operationStatsSortMark('ended') }}</span>
+          </button>
+        </div>
+
+        <div class="dash-ops-accordion">
+          <div
+            v-for="(g, gi) in operationStatsSummaries"
+            :key="g.key"
+            class="dash-ops-card"
+            :class="{ 'dash-ops-card--open': expandedOperationGroupKey === g.key }"
+          >
+            <button
+              type="button"
+              class="dash-ops-card-head"
+              :aria-expanded="expandedOperationGroupKey === g.key"
+              :aria-controls="'dash-ops-detail-' + gi"
+              :id="'dash-ops-head-' + gi"
+              @click="toggleOperationGroup(g.key)"
+            >
+              <div class="dash-ops-head-text">
+                <span class="dash-ops-head-name">{{ g.employee }}</span>
+                <span class="dash-ops-head-summary">
+                  {{ operationsCountLabelRu(g.operationCount) }} · {{ fieldsCountLabelRu(g.fieldsCount) }} · суммарно
+                  <strong>{{ formatDurationMinutesShort(g.totalMinutes) }}</strong>
+                </span>
+              </div>
+              <div class="dash-ops-head-aside">
+                <span class="dash-ops-head-last-label">Последняя</span>
+                <span class="dash-ops-head-last-value">{{ formatOperationEndedAt(g.latestEndedAt) }}</span>
+              </div>
+            </button>
+            <div
+              v-show="expandedOperationGroupKey === g.key"
+              :id="'dash-ops-detail-' + gi"
+              class="dash-ops-card-detail"
+              role="region"
+              :aria-labelledby="'dash-ops-head-' + gi"
+            >
+              <table class="dash-ops-detail-table">
+                <thead>
+                  <tr>
+                    <th>Поле</th>
+                    <th>Операция</th>
+                    <th>Длительность</th>
+                    <th>Завершено</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="operationStatsDetailLoading[g.key]">
+                    <td colspan="4" class="dash-ops-detail-loading">Загрузка операций…</td>
+                  </tr>
+                  <template v-else>
+                    <tr v-for="row in operationStatsDetailByEmployee[g.key] || []" :key="row.id">
+                      <td>
+                        <RouterLink
+                          v-if="row.fieldRouteId"
+                          :to="{ name: 'field-details', params: { id: row.fieldRouteId } }"
+                          class="dash-ops-detail-link"
+                          @click.stop
+                        >
+                          {{ row.fieldLabel }}
+                        </RouterLink>
+                        <span v-else>{{ row.fieldLabel }}</span>
+                      </td>
+                      <td>{{ row.operationLabel }}</td>
+                      <td>{{ formatDurationMinutesShort(row.durationMinutes) }}</td>
+                      <td class="dash-ops-detail-nowrap">{{ formatOperationEndedAt(row.endedAt) }}</td>
+                    </tr>
+                    <tr
+                      v-if="
+                        (operationStatsDetailByEmployee[g.key]?.length ?? 0) === 0 &&
+                        operationStatsDetailTotalByEmployee[g.key] === 0
+                      "
+                    >
+                      <td colspan="4" class="dash-ops-detail-empty">Нет операций в выбранном периоде.</td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div
+                v-if="
+                  !operationStatsDetailLoading[g.key] &&
+                  operationDetailRemaining(g.key) > 0
+                "
+                class="dash-ops-detail-more"
+              >
+                <button
+                  type="button"
+                  class="dash-ops-detail-more-btn"
+                  :disabled="!!operationStatsDetailLoadingMore[g.key]"
+                  @click="loadOperationDetailsPage(g.key, false)"
+                >
+                  {{
+                    operationStatsDetailLoadingMore[g.key]
+                      ? 'Загрузка…'
+                      : `Показать ещё ${Math.min(OPERATION_DETAIL_PAGE_SIZE, operationDetailRemaining(g.key))}`
+                  }}
+                </button>
+                <span class="dash-ops-detail-more-meta dash-muted">
+                  Показано {{ operationStatsDetailByEmployee[g.key]?.length ?? 0 }} из
+                  {{ operationStatsDetailTotalByEmployee[g.key] ?? 0 }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="operationStatsTotalPages > 1" class="dash-ops-pager">
+          <button
+            type="button"
+            class="dash-ops-pager-btn"
+            :disabled="operationStatsPage <= 1 || operationStatsListLoading"
+            @click="goOperationStatsPage(-1)"
+          >
+            Назад
+          </button>
+          <span class="dash-ops-pager-meta">
+            Страница {{ operationStatsPage }} из {{ operationStatsTotalPages }}
+            <span class="dash-ops-pager-dot" aria-hidden="true">·</span>
+            всего в периоде: {{ operationStatsTotal }}
+          </span>
+          <button
+            type="button"
+            class="dash-ops-pager-btn"
+            :disabled="operationStatsPage >= operationStatsTotalPages || operationStatsListLoading"
+            @click="goOperationStatsPage(1)"
+          >
+            Вперёд
+          </button>
+        </div>
+      </template>
+      <p v-else-if="!operationStatsListLoading" class="dash-empty dash-ops-empty">
+        Нет операций за выбранный период или не применена миграция RPC в Supabase.
+      </p>
     </section>
   </section>
 </template>
@@ -1699,6 +2150,400 @@ onUnmounted(() => {
   padding: 14px 16px;
   border-bottom: 1px solid var(--border-color);
   vertical-align: middle;
+}
+
+.dash-ops-stats--accordion {
+  padding: 20px 22px 22px;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-card);
+}
+
+.dash-ops-stats-intro {
+  margin-bottom: 18px;
+}
+
+.dash-ops-stats-title {
+  margin-bottom: 8px;
+}
+
+.dash-ops-stats-hint {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  max-width: 52rem;
+}
+
+.dash-ops-sort-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--chip-bg);
+  border: 1px solid var(--border-color);
+}
+
+.dash-ops-sort-bar-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  width: 100%;
+}
+
+@media (min-width: 720px) {
+  .dash-ops-sort-bar-label {
+    width: auto;
+    margin-right: 6px;
+  }
+}
+
+.dash-ops-sort-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.dash-ops-sort-pill:hover {
+  border-color: color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-green) 8%, var(--bg-panel));
+}
+
+.dash-ops-sort-pill--active {
+  border-color: color-mix(in srgb, var(--accent-green) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-green) 14%, var(--bg-panel));
+}
+
+.dash-ops-sort-pill-mark {
+  font-weight: 800;
+  color: var(--accent-green, #2d5a3d);
+  font-size: 0.72rem;
+}
+
+.dash-ops-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dash-ops-card {
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--agri-bg, var(--bg-base));
+  overflow: hidden;
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.dash-ops-card--open {
+  border-color: color-mix(in srgb, var(--accent-green) 28%, var(--border-color));
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent-green) 12%, transparent);
+}
+
+.dash-ops-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  margin: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: background 0.15s ease;
+}
+
+.dash-ops-card-head:hover {
+  background: color-mix(in srgb, var(--accent-green) 6%, transparent);
+}
+
+.dash-ops-card-head:focus-visible {
+  outline: 2px solid var(--accent-green, #2d5a3d);
+  outline-offset: 2px;
+}
+
+.dash-ops-head-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-ops-head-name {
+  display: block;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.dash-ops-head-summary {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.dash-ops-head-summary strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.dash-ops-head-aside {
+  flex-shrink: 0;
+  text-align: right;
+  padding-left: 8px;
+}
+
+.dash-ops-head-last-label {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.dash-ops-head-last-value {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-ops-card-detail {
+  padding: 0 16px 14px;
+  border-top: 1px dashed var(--border-color);
+  background: color-mix(in srgb, var(--bg-panel) 88%, var(--agri-bg, var(--bg-base)));
+}
+
+.dash-ops-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.dash-ops-detail-table th {
+  text-align: left;
+  padding: 10px 12px 8px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dash-ops-detail-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 85%, transparent);
+  vertical-align: top;
+  color: var(--text-primary);
+}
+
+.dash-ops-detail-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.dash-ops-detail-link {
+  color: var(--accent-green, #2d5a3d);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-green) 35%, transparent);
+}
+
+.dash-ops-detail-link:hover {
+  border-bottom-color: var(--accent-green, #2d5a3d);
+}
+
+.dash-ops-detail-nowrap {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.dash-ops-empty {
+  border-radius: 12px;
+  border: 1px dashed var(--border-color);
+  background: var(--chip-bg);
+}
+
+.dash-ops-code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.78em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--chip-bg);
+}
+
+.dash-ops-list-loading {
+  margin: 12px 0;
+  font-size: 0.88rem;
+}
+
+.dash-ops-detail-loading {
+  padding: 16px 12px !important;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.dash-ops-detail-empty {
+  padding: 14px 12px !important;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.dash-ops-detail-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.dash-ops-detail-more-btn {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.dash-ops-detail-more-btn:hover:not(:disabled) {
+  border-color: var(--primary-color);
+  background: var(--chip-bg);
+}
+
+.dash-ops-detail-more-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.dash-ops-detail-more-meta {
+  font-size: 0.78rem;
+}
+
+.dash-ops-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px 20px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.dash-ops-pager-btn {
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.dash-ops-pager-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-green) 8%, var(--bg-panel));
+}
+
+.dash-ops-pager-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dash-ops-pager-meta {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.dash-ops-pager-dot {
+  margin: 0 6px;
+}
+
+@media (max-width: 640px) {
+  .dash-ops-card-head {
+    flex-wrap: wrap;
+  }
+
+  .dash-ops-head-aside {
+    width: 100%;
+    text-align: left;
+    padding-left: 0;
+    padding-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    margin-top: 4px;
+  }
+}
+
+.dash-th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+}
+.dash-th-sort:hover {
+  color: var(--accent-green, #2d5a3d);
+}
+.dash-th-sort-mark {
+  font-weight: 800;
+  color: var(--accent-green, #2d5a3d);
+}
+.dash-td-nowrap {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .dash-td-main {

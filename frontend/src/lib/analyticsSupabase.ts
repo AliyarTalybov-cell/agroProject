@@ -287,6 +287,132 @@ export async function loadOperationsFromSupabase(
   }
 }
 
+/** Строка сводки по одному сотруднику (ответ RPC). */
+export type OperationEmployeeStatSummaryRow = {
+  employee: string
+  operation_count: number
+  distinct_fields: number
+  total_duration_minutes: number
+  latest_end_iso: string
+  total_groups: number
+}
+
+/** Постраничная сводка операций по сотрудникам за интервал [end_from, end_to] по дате окончания. */
+export async function fetchOperationEmployeeStatsPage(params: {
+  endFromIso: string
+  endToIso: string
+  onlyMine: boolean
+  userId: string | null
+  employeeFilter: string | null
+  sort: 'employee' | 'operation' | 'field' | 'duration' | 'ended'
+  desc: boolean
+  page: number
+  pageSize: number
+}): Promise<{ rows: OperationEmployeeStatSummaryRow[]; total: number }> {
+  if (!supabase) return { rows: [], total: 0 }
+  const pageSize = Math.min(100, Math.max(1, Math.floor(params.pageSize)))
+  const page = Math.max(1, Math.floor(params.page))
+  const offset = (page - 1) * pageSize
+
+  const { data, error } = await supabase.rpc('operation_stats_employees_page', {
+    p_end_from: params.endFromIso,
+    p_end_to: params.endToIso,
+    p_only_mine: params.onlyMine,
+    p_user_id: params.onlyMine ? params.userId : null,
+    p_employee_filter: params.employeeFilter?.trim() || null,
+    p_sort: params.sort,
+    p_desc: params.desc,
+    p_limit: pageSize,
+    p_offset: offset,
+  })
+
+  if (error) {
+    console.warn('operation_stats_employees_page', error.message ?? error)
+    return { rows: [], total: 0 }
+  }
+
+  type RpcRow = {
+    employee: string
+    operation_count: number | string
+    distinct_fields: number | string
+    total_duration_minutes: number | string
+    latest_end_iso: string
+    total_groups: number | string
+  }
+
+  const raw = (data ?? []) as RpcRow[]
+  const rows: OperationEmployeeStatSummaryRow[] = raw.map((r) => ({
+    employee: r.employee,
+    operation_count: Number(r.operation_count),
+    distinct_fields: Number(r.distinct_fields),
+    total_duration_minutes: Number(r.total_duration_minutes),
+    latest_end_iso: r.latest_end_iso,
+    total_groups: Number(r.total_groups),
+  }))
+  const total = rows.length > 0 ? rows[0]!.total_groups : 0
+  return { rows, total }
+}
+
+export type EmployeeOperationsPageResult = {
+  rows: StoredOperation[]
+  total: number
+}
+
+/** Детальные операции одного сотрудника за период (по дате окончания), с пагинацией. */
+export async function loadOperationsForEmployeeInDateRange(
+  employeeExact: string,
+  endFromIso: string,
+  endToIso: string,
+  onlyCurrentUser: boolean,
+  userId: string | null,
+  options?: { limit?: number; offset?: number },
+): Promise<EmployeeOperationsPageResult> {
+  if (!supabase) return { rows: [], total: 0 }
+  const sb = supabase
+  const baseSelect =
+    'id, user_id, employee, field_id, field_name, operation, start_iso, end_iso, duration_minutes, notes'
+  const equipmentSelect =
+    'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes, planned_hectares, processed_hectares'
+  const equipmentFuelLeftSelect = 'equipment_fuel_left_percent'
+
+  const limit = Math.min(100, Math.max(1, Math.floor(options?.limit ?? 10)))
+  const offset = Math.max(0, Math.floor(options?.offset ?? 0))
+  const rangeTo = offset + limit - 1
+
+  const attempt = async (select: string): Promise<EmployeeOperationsPageResult> => {
+    let q = sb
+      .from('operations')
+      .select(select, { count: 'exact' })
+      .eq('employee', employeeExact)
+      .gte('end_iso', endFromIso)
+      .lte('end_iso', endToIso)
+      .order('end_iso', { ascending: false })
+      .range(offset, rangeTo)
+    if (onlyCurrentUser && userId) q = q.eq('user_id', userId)
+    const { data, error, count } = await q
+    if (error) throw error
+    const rows = (data ?? []).map((r) => rowToOperation(r as unknown as OperationRow))
+    return { rows, total: count ?? rows.length }
+  }
+
+  try {
+    if (fuelLeftColumnAvailable === false) {
+      return await attempt(`${baseSelect}, ${equipmentSelect}`)
+    }
+    return await attempt(`${baseSelect}, ${equipmentSelect}, ${equipmentFuelLeftSelect}`)
+  } catch (e: unknown) {
+    if (!isMissingColumnError(e)) throw e
+    if (isFuelLeftColumnMissingError(e)) fuelLeftColumnAvailable = false
+    try {
+      return await attempt(`${baseSelect}, ${equipmentSelect}`)
+    } catch (e2: unknown) {
+      if (!isMissingColumnError(e2)) throw e2
+      if (isFuelLeftColumnMissingError(e2)) fuelLeftColumnAvailable = false
+      return attempt(baseSelect)
+    }
+  }
+}
+
 export async function loadOperationsByEquipmentFromSupabase(
   equipmentId: string,
   onlyCurrentUser: boolean,
