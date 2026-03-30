@@ -38,11 +38,15 @@ function goAboutTab() {
         :id="'dashboard-tab-about'"
         :aria-selected="isAboutTab"
         :tabindex="isAboutTab ? 0 : -1"
-        class="dashboard-tab"
+        class="dashboard-tab dashboard-tab--about-pulse"
         :class="{ 'dashboard-tab--active': isAboutTab }"
         @click="goAboutTab"
       >
-        О сервисе
+        <span class="dashboard-tab-pulse-line" aria-hidden="true" />
+        <span class="dashboard-tab-pulse-line" aria-hidden="true" />
+        <span class="dashboard-tab-pulse-line" aria-hidden="true" />
+        <span class="dashboard-tab-pulse-line" aria-hidden="true" />
+        <span class="dashboard-tab-pulse-label">О сервисе</span>
       </button>
     </div>
 
@@ -193,6 +197,121 @@ function goAboutTab() {
   color: var(--text-primary);
   background: color-mix(in srgb, var(--accent-green) 10%, var(--bg-panel));
   border-color: color-mix(in srgb, var(--accent-green) 40%, var(--border-color));
+}
+
+/* «О сервисе» как «Обзор» + чуть ярче пульсация; по hover — тонкая линия по периметру */
+.dashboard-tab--about-pulse {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dashboard-tab--about-pulse .dashboard-tab-pulse-label {
+  position: relative;
+  z-index: 2;
+}
+
+.dashboard-tab--about-pulse .dashboard-tab-pulse-line {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* верх: слева направо */
+.dashboard-tab--about-pulse .dashboard-tab-pulse-line:nth-child(1) {
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent-green));
+}
+
+.dashboard-tab--about-pulse:hover .dashboard-tab-pulse-line:nth-child(1) {
+  left: 100%;
+  transition: left 0.65s ease;
+}
+
+/* справа: сверху вниз */
+.dashboard-tab--about-pulse .dashboard-tab-pulse-line:nth-child(2) {
+  top: -100%;
+  right: 0;
+  width: 2px;
+  height: 100%;
+  background: linear-gradient(180deg, transparent, var(--accent-green));
+}
+
+.dashboard-tab--about-pulse:hover .dashboard-tab-pulse-line:nth-child(2) {
+  top: 100%;
+  transition: top 0.65s ease 0.14s;
+}
+
+/* низ: справа налево */
+.dashboard-tab--about-pulse .dashboard-tab-pulse-line:nth-child(3) {
+  bottom: 0;
+  right: -100%;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(
+    270deg,
+    transparent,
+    color-mix(in srgb, var(--accent-green) 88%, var(--agri-primary))
+  );
+}
+
+.dashboard-tab--about-pulse:hover .dashboard-tab-pulse-line:nth-child(3) {
+  right: 100%;
+  transition: right 0.65s ease 0.3s;
+}
+
+/* слева: снизу вверх */
+.dashboard-tab--about-pulse .dashboard-tab-pulse-line:nth-child(4) {
+  bottom: -100%;
+  left: 0;
+  width: 2px;
+  height: 100%;
+  background: linear-gradient(
+    0deg,
+    transparent,
+    color-mix(in srgb, var(--accent-green) 75%, white)
+  );
+}
+
+.dashboard-tab--about-pulse:hover .dashboard-tab-pulse-line:nth-child(4) {
+  bottom: 100%;
+  transition: bottom 0.65s ease 0.46s;
+}
+
+.dashboard-tab--about-pulse:not(.dashboard-tab--active) {
+  animation: dashboard-tab-about-pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes dashboard-tab-about-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+
+  50% {
+    /* ≈ на 20% сильнее прежних 36% / 20% и размытия */
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent-green) 43%, transparent),
+      0 0 17px color-mix(in srgb, var(--accent-green) 24%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-tab--about-pulse:not(.dashboard-tab--active) {
+    animation: none;
+  }
+
+  .dashboard-tab--about-pulse:hover .dashboard-tab-pulse-line:nth-child(1),
+  .dashboard-tab--about-pulse:hover .dashboard-tab-pulse-line:nth-child(2),
+  .dashboard-tab--about-pulse:hover .dashboard-tab-pulse-line:nth-child(3),
+  .dashboard-tab--about-pulse:hover .dashboard-tab-pulse-line:nth-child(4) {
+    transition: none !important;
+  }
 }
 
 .dashboard-wip {
