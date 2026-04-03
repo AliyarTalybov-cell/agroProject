@@ -146,11 +146,19 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
       })
     })
 
-    if (!response.ok) return null
+    if (!response.ok) {
+      throw new Error(`Yandex HTTP Error: ${response.status}`);
+    }
     const result = await response.json()
     
+    if (result?.errors?.length) {
+      throw new Error(`Yandex GraphQL error: ${JSON.stringify(result.errors)}`)
+    }
+
     const weatherData = result.data?.weatherByPoint
-    if (!weatherData || !weatherData.now) return null
+    if (!weatherData || !weatherData.now) {
+      throw new Error('Yandex Missing Data')
+    }
 
     const now = weatherData.now
     const loc = weatherData.location || {}
@@ -192,8 +200,8 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
       pressureNorm: loc.pressureNorm ?? null,
     }
   } catch (e) {
-    console.error('Yandex Weather GraphQL error:', e)
-    return null
+    console.warn('Yandex Weather error, trying OpenWeather fallback:', e)
+    return fetchWeatherFallback(lat, lon, label)
   }
 }
 
@@ -268,14 +276,16 @@ export async function fetchForecast5(lat: number, lon: number): Promise<Forecast
       })
     })
 
-    if (!response.ok) return []
+    if (!response.ok) {
+      throw new Error(`Yandex HTTP Error: ${response.status}`)
+    }
     const result = await response.json()
     if (result?.errors?.length) {
-      console.error('Forecast GraphQL response errors:', result.errors)
-      return []
+      throw new Error(`Forecast GraphQL response errors: ${JSON.stringify(result.errors)}`)
     }
     
-    const days = result.data?.weatherByPoint?.forecast?.days || []
+    const days = result.data?.weatherByPoint?.forecast?.days
+    if (!days) throw new Error('Yandex missing forecast days')
     
     const dayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
     const monthNames: Record<number, string> = { 1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр', 5: 'Май', 6: 'Июн', 7: 'Июл', 8: 'Авг', 9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек' }
@@ -304,7 +314,143 @@ export async function fetchForecast5(lat: number, lon: number): Promise<Forecast
       }
     })
   } catch (e) {
-    console.error('Forecast GraphQL API error:', e)
+    console.warn('Forecast GraphQL API error, trying OpenWeather fallback:', e)
+    return fetchForecast5Fallback(lat, lon)
+  }
+}
+
+// ——— OpenWeather Возвратный фукнционал на случай отказа Yandex ———
+
+const OPENWEATHER_BASE = 'https://api.openweathermap.org/data/2.5/weather'
+const OPENWEATHER_FORECAST = 'https://api.openweathermap.org/data/2.5/forecast'
+const APPID = 'f8a7bf6a4c76418c05f1f818fd12375f' // Предыдущий ключ для OpenWeatherMap
+const UNITS = 'metric'
+const LANG = 'ru'
+const WIND_DIRECTIONS = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ']
+
+function windDegToLabel(deg: number | null | undefined): string {
+  if (deg == null) return '—'
+  const index = Math.round(((deg % 360) + 360) / 45) % 8
+  return WIND_DIRECTIONS[index]
+}
+
+async function fetchWeatherFallback(lat: number, lon: number, cityName: string): Promise<WeatherData | null> {
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+    appid: APPID,
+    units: UNITS,
+    lang: LANG,
+  })
+  try {
+    const response = await fetch(`${OPENWEATHER_BASE}?${params.toString()}`)
+    if (!response.ok) return null
+    const raw = await response.json()
+    const weather = raw.weather?.[0]
+    const main = raw.main ?? {}
+    const wind = raw.wind ?? {}
+    const sys = raw.sys ?? {}
+    const clouds = raw.clouds ?? {}
+    const tz = raw.timezone ?? 0
+
+    const formatTime = (ts: number | null | undefined) => 
+      ts ? new Date((ts + tz) * 1000).toISOString().substring(11, 16) : '—'
+
+    return {
+      cityName: cityName || (raw.name ?? '—'),
+      condition: parseCondition(weather?.main || 'clear'),
+      coord: { lon, lat },
+      temp: main.temp != null ? Math.round(main.temp) : null,
+      feelsLike: main.feels_like != null ? Math.round(main.feels_like) : null,
+      description: weather?.description ?? '—',
+      icon: `https://openweathermap.org/img/wn/${weather?.icon ?? '01d'}@2x.png`,
+      humidity: main.humidity ?? null,
+      pressure: main.pressure ?? null,
+      seaLevel: main.sea_level ?? null,
+      grndLevel: main.grnd_level ?? null,
+      visibility: raw.visibility ?? null,
+      windSpeed: wind.speed ?? null,
+      windDeg: wind.deg ?? null,
+      windDirection: windDegToLabel(wind.deg),
+      clouds: clouds.all ?? null,
+      precProbability: 0,
+      sunrise: formatTime(sys.sunrise),
+      sunset: formatTime(sys.sunset),
+      dt: raw.dt ?? Math.floor(Date.now() / 1000),
+      timezone: tz,
+    }
+  } catch (e) {
+    console.error('OpenWeather Fallback error:', e)
+    return null
+  }
+}
+
+async function fetchForecast5Fallback(lat: number, lon: number): Promise<ForecastDayItem[]> {
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+    appid: APPID,
+    units: UNITS,
+    lang: LANG,
+    cnt: '40',
+  })
+  try {
+    const response = await fetch(`${OPENWEATHER_FORECAST}?${params.toString()}`)
+    if (!response.ok) return []
+    const raw = await response.json()
+    const list = raw?.list ?? []
+    const timezone = raw?.city?.timezone ?? 0
+
+    const byDay = new Map<string, any>()
+    for (const item of list) {
+      const d = new Date((item.dt + timezone) * 1000)
+      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+      const tempMin = item.main?.temp_min ?? item.main?.temp_max ?? 0
+      const tempMax = item.main?.temp_max ?? item.main?.temp_min ?? 0
+      if (!byDay.has(key)) {
+        byDay.set(key, { min: tempMin, max: tempMax, icons: [], conditions: [], wind: [], pop: [] })
+      }
+      const row = byDay.get(key)!
+      row.min = Math.min(row.min, tempMin)
+      row.max = Math.max(row.max, tempMax)
+      const icon = item.weather?.[0]?.icon ?? '01d'
+      row.icons.push(`https://openweathermap.org/img/wn/${icon}@2x.png`)
+      row.conditions.push(item.weather?.[0]?.main ?? '')
+      if (item.wind?.speed != null) row.wind.push(item.wind.speed)
+      if (item.pop != null) row.pop.push(item.pop)
+    }
+    
+    const dayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
+    const monthNames: Record<number, string> = { 1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр', 5: 'Май', 6: 'Июн', 7: 'Июл', 8: 'Авг', 9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек' }
+    const sorted = Array.from(byDay.entries()).sort((a, b) => a[0].localeCompare(b[0])).slice(0, 5)
+
+    return sorted.map(([dateStr, row]) => {
+      const d = new Date(dateStr + 'T12:00:00Z')
+      const dayLabel = dayLabels[d.getUTCDay()]
+      const dateLabel = `${d.getUTCDate()} ${monthNames[d.getUTCMonth() + 1]}`
+      const mid = Math.floor(row.icons.length / 2)
+      const icon = row.icons[mid] ?? row.icons[0]
+      const condition = parseCondition(row.conditions[mid] ?? row.conditions[0])
+      const windAvg = row.wind.length ? row.wind.reduce((a: number, b: number) => a + b, 0) / row.wind.length : null
+      const popMax = row.pop.length ? Math.max(...row.pop) : 0
+      let alert: string | undefined
+      if (windAvg != null && windAvg > 12) alert = 'СИЛЬНЫЙ ВЕТЕР ОТЛОЖИТЕ УБОРКУ'
+      return {
+        date: dateStr,
+        dayLabel,
+        dateLabel,
+        tempMin: Math.round(row.min),
+        tempMax: Math.round(row.max),
+        icon,
+        condition,
+        windSpeed: windAvg,
+        pop: popMax,
+        alert,
+      }
+    })
+  } catch (e) {
+    console.error('Forecast Fallback API error:', e)
     return []
   }
 }
+
