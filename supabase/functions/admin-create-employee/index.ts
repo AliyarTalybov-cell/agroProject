@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
 
   const url = Deno.env.get('SUPABASE_URL')
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
-  const serviceRoleKey = Deno.env.get('SERVICE_ROLE_KEY')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SERVICE_ROLE_KEY')
   if (!url || !anonKey || !serviceRoleKey) {
     return json({ error: 'Missing SUPABASE_URL or SUPABASE_ANON_KEY or SERVICE_ROLE_KEY' }, { status: 500 })
   }
