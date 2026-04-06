@@ -2264,7 +2264,7 @@ onMounted(async () => {
 .fields-td-area { width: 100px; min-width: 100px; text-align: right; }
 .fields-td-area { font-variant-numeric: tabular-nums; font-weight: 500; color: var(--text-primary); }
 .fields-th-crop,
-.fields-td-crop { min-width: 120px; }
+.fields-td-crop { min-width: 180px; }
 .fields-th-land,
 .fields-td-land { min-width: 100px; color: var(--text-secondary); font-size: 0.875rem; }
 .fields-th-location,
@@ -2392,12 +2392,18 @@ onMounted(async () => {
 .fields-crop-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 4px;
+  max-width: 220px;
+  padding: 3px 10px;
   border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 500;
+  font-size: 0.72rem;
+  font-weight: 600;
   border: 1px solid;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+  vertical-align: middle;
 }
 .fields-crop-pill--wheat {
   background: #fffbeb;
