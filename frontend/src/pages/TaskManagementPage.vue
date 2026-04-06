@@ -1123,28 +1123,28 @@ function statusClass(s: Status) {
               class="task-list-row"
               @click="openTask(task.id)"
             >
-              <td class="task-list-cell-num">{{ getTaskNumber(task.id) }}</td>
-              <td class="task-list-cell-title">{{ task.title }}</td>
-              <td class="task-list-cell-assignee">
+              <td class="task-list-cell-num" data-label="№">{{ getTaskNumber(task.id) }}</td>
+              <td class="task-list-cell-title" data-label="Название задачи">{{ task.title }}</td>
+              <td class="task-list-cell-assignee" data-label="Исполнитель">
                 <span class="task-list-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
-                {{ task.assignee.name }}
+                <span class="task-list-assignee-name">{{ task.assignee.name }}</span>
               </td>
-              <td>
+              <td data-label="Приоритет">
                 <span class="task-pill" :class="priorityClass(task.priority)">
                   {{ task.priority === 'high' ? 'Высокий' : task.priority === 'medium' ? 'Средний' : 'Низкий' }}
                 </span>
               </td>
-              <td>
+              <td class="task-list-cell-field" data-label="Объект / поле">
                 <span class="task-pill task-pill-field">{{ task.field }}</span>
               </td>
-              <td :class="{ 'task-cell-overdue': task.description === 'Просрочено' }">
+              <td data-label="Срок" :class="{ 'task-cell-overdue': task.description === 'Просрочено' }">
                 <template v-if="task.description === 'Просрочено'">
                   <span class="task-overdue-icon" aria-hidden="true">△</span>
                   {{ task.dueDate }}
                 </template>
                 <template v-else>{{ task.dueDate }}</template>
               </td>
-              <td>
+              <td data-label="Статус">
                 <span
                   class="task-pill task-pill-status"
                   :class="statusClass(task.status)"
@@ -2162,11 +2162,23 @@ function statusClass(s: Status) {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  line-height: 1.2;
 }
 
 .task-pill-field {
   background: #5a7c5e;
   color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.task-list-cell-field {
+  min-width: 130px;
 }
 
 .priority-high {
@@ -2279,6 +2291,7 @@ function statusClass(s: Status) {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.875rem;
+  min-width: 980px;
 }
 
 .task-list-table th {
@@ -2315,12 +2328,24 @@ function statusClass(s: Status) {
 }
 .task-list-cell-title {
   font-weight: 500;
+  min-width: 240px;
+  line-height: 1.35;
 }
 
 .task-list-cell-assignee {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 220px;
+}
+
+.task-list-assignee-name {
+  display: inline-block;
+  min-width: 0;
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .task-list-avatar {
@@ -3113,6 +3138,7 @@ function statusClass(s: Status) {
 
 .task-pill-status {
   color: #fff;
+  white-space: nowrap;
 }
 
 .task-pill-status.status-todo { background: #9ca3af; }
@@ -3370,6 +3396,29 @@ function statusClass(s: Status) {
   }
 }
 
+@media (max-width: 1024px) {
+  .task-list-table {
+    min-width: 900px;
+  }
+
+  .task-list-wrap {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .task-list-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0;
+  }
+
+  .task-list-assignee-name {
+    max-width: 170px;
+  }
+}
+
 @media (max-width: 900px) {
   .task-header {
     flex-direction: column;
@@ -3529,15 +3578,99 @@ function statusClass(s: Status) {
     justify-content: center;
   }
 
+  .task-list-wrap {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    overflow: visible;
+  }
+
   .task-list-table-wrapper {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
+    overflow: visible;
+    padding-bottom: 0;
+    border: none;
   }
 
   .task-list-table {
-    min-width: 560px;
+    min-width: 0;
+  }
+
+  .task-list-table thead {
+    display: none;
+  }
+
+  .task-list-table,
+  .task-list-table tbody,
+  .task-list-table tr,
+  .task-list-table td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .task-list-row {
+    grid-template-columns: 1fr;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-panel);
+    margin-bottom: var(--space-sm);
+    padding: 6px 0;
+  }
+
+  .task-list-row:hover td {
+    background: transparent;
+  }
+
+  .task-list-table td {
+    border-bottom: 1px solid var(--border-color);
+    padding: 10px 12px;
+    text-align: left;
+  }
+
+  .task-list-table td:last-child {
+    border-bottom: none;
+  }
+
+  .task-list-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 5px;
+    font-size: 0.64rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary);
+  }
+
+  .task-list-cell-num {
+    text-align: left;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .task-list-cell-title {
+    font-size: 0.95rem;
+    line-height: 1.35;
+  }
+
+  .task-list-cell-assignee {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .task-list-avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 0.72rem;
+  }
+
+  .task-pill {
+    display: inline-flex;
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
   }
 
   .task-card {
@@ -3559,6 +3692,28 @@ function statusClass(s: Status) {
 }
 
 @media (max-width: 480px) {
+  .task-list-row {
+    margin-bottom: 10px;
+    border-radius: 10px;
+  }
+
+  .task-list-table td {
+    padding: 9px 10px;
+  }
+
+  .task-list-table td::before {
+    font-size: 0.6rem;
+    margin-bottom: 4px;
+  }
+
+  .task-list-cell-title {
+    font-size: 0.9rem;
+  }
+
+  .task-list-cell-assignee {
+    gap: 8px;
+  }
+
   .task-filter-tabs {
     grid-template-columns: 1fr;
   }
