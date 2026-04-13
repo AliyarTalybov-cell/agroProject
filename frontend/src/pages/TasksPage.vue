@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useAuth } from '@/stores/auth'
 import {
   loadCalendarTasks,
+  loadCalendarTasksPage,
   loadTaskAssignees,
   loadTaskFiles,
   uploadTaskFile,
@@ -33,6 +34,10 @@ type CalendarTask = {
   completedAt: string | null
   createdAt: string
 }
+
+type RepeatRule = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly'
+type RepeatEndMode = 'never' | 'after' | 'on_date'
+type RepeatApplyMode = 'only_this' | 'this_and_following'
 
 function rowToTask(r: CalendarTaskRow): CalendarTask {
   return {
@@ -89,6 +94,7 @@ const today = new Date()
 const currentYear = ref(today.getFullYear())
 const currentMonth = ref(today.getMonth())
 const selectedDate = ref(formatDateKey(today))
+const calendarViewMode = ref<'day' | 'week' | 'month' | 'schedule'>('day')
 
 const tasks = ref<CalendarTask[]>([])
 const tasksLoading = ref(false)
@@ -106,10 +112,18 @@ const successModalMessage = ref('')
 
 const taskTitle = ref('')
 const taskDescription = ref('')
-const taskDate = ref('')
+const taskStartDate = ref('')
+const taskEndDate = ref('')
 const taskStartTime = ref('09:00')
 const taskEndTime = ref('11:30')
 const taskPriority = ref<'low' | 'normal' | 'high'>('normal')
+const taskRepeatRule = ref<RepeatRule>('none')
+const taskRepeatEvery = ref(1)
+const taskRepeatEndMode = ref<RepeatEndMode>('after')
+const taskRepeatCount = ref(10)
+const taskRepeatUntil = ref('')
+const taskRepeatWeekDays = ref<number[]>([])
+const taskRepeatApplyMode = ref<RepeatApplyMode>('only_this')
 const taskAssignees = ref<string[]>([])
 const taskFiles = ref<CalendarTaskFileRow[]>([])
 const fileUploading = ref(false)
@@ -117,7 +131,17 @@ const assigneePickerOpen = ref(false)
 const assigneeSearch = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const taskFilesByTaskId = ref<Record<string, CalendarTaskFileRow[]>>({})
-const taskToggleLoadingIds = ref<string[]>([])
+const taskAssigneeIdsByTaskId = ref<Record<string, string[]>>({})
+const dayEventsScrollRef = ref<HTMLElement | null>(null)
+const monthDragTaskId = ref<string | null>(null)
+const monthDropTargetDate = ref<string | null>(null)
+const scheduleTasks = ref<CalendarTask[]>([])
+const scheduleLoading = ref(false)
+const scheduleLoadingMore = ref(false)
+const scheduleHasMore = ref(true)
+const schedulePage = ref(1)
+const scheduleListRef = ref<HTMLElement | null>(null)
+const schedulePageSize = 30
 
 function shortTaskId(id: string): string {
   return id.replace(/-/g, '').slice(-8).toUpperCase()
@@ -172,12 +196,93 @@ const monthsShort = [
 ]
 
 const weekdaysShort = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС']
+const dayStartHour = 8
+const dayEndHour = 22
+const dayViewportEndHour = 16
+const daySlotMinutes = 30
+const daySlotHeight = 44
+const dayGridTopPadding = 14
+const dayGridBottomPadding = 10
+const nowMarkerMinutes = ref<number | null>(null)
+const nowMarkerLabel = ref('')
+let nowMarkerTimer: ReturnType<typeof setInterval> | null = null
 
 function formatDateKey(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+function weekdayMon1Sun7(dateKey: string): number {
+  const d = new Date(dateKey + 'T12:00:00')
+  const day = d.getDay()
+  return day === 0 ? 7 : day
+}
+
+function addDaysToKey(dateKey: string, days: number): string {
+  const d = new Date(dateKey + 'T12:00:00')
+  d.setDate(d.getDate() + days)
+  return formatDateKey(d)
+}
+
+function addMonthsToKey(dateKey: string, months: number): string {
+  const d = new Date(dateKey + 'T12:00:00')
+  const day = d.getDate()
+  d.setDate(1)
+  d.setMonth(d.getMonth() + months)
+  const maxDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+  d.setDate(Math.min(day, maxDay))
+  return formatDateKey(d)
+}
+
+function buildRecurringDates(
+  startDate: string,
+  rule: RepeatRule,
+  every: number,
+  endMode: RepeatEndMode,
+  count: number,
+  untilDate: string,
+  weekDays: number[],
+): string[] {
+  if (rule === 'none') return [startDate]
+  const safeEvery = Math.max(1, Math.min(365, Math.floor(every || 1)))
+  const safeCount = Math.max(1, Math.min(500, Math.floor(count || 1)))
+  const maxOccurrences = endMode === 'never' ? 120 : endMode === 'after' ? safeCount : 500
+  const dates: string[] = []
+  const startWeekday = weekdayMon1Sun7(startDate)
+  const weeklyDays = weekDays.length ? [...new Set(weekDays)].sort((a, b) => a - b) : [startWeekday]
+
+  if (rule === 'daily' || rule === 'monthly' || rule === 'yearly') {
+    let cursor = startDate
+    while (dates.length < maxOccurrences) {
+      if (endMode === 'on_date' && untilDate && cursor > untilDate) break
+      dates.push(cursor)
+      if (rule === 'daily') cursor = addDaysToKey(cursor, safeEvery)
+      else if (rule === 'monthly') cursor = addMonthsToKey(cursor, safeEvery)
+      else cursor = addMonthsToKey(cursor, safeEvery * 12)
+    }
+    return dates
+  }
+
+  // Weekly: by selected weekdays and weekly interval
+  const startMonday = addDaysToKey(startDate, 1 - startWeekday)
+  let cursor = startDate
+  let guard = 0
+  while (dates.length < maxOccurrences && guard < 5000) {
+    guard += 1
+    const cursorWeekday = weekdayMon1Sun7(cursor)
+    const weekDiff = Math.floor((parseDateKey(cursor).getTime() - parseDateKey(startMonday).getTime()) / (7 * 24 * 3600 * 1000))
+    const inInterval = weekDiff % safeEvery === 0
+    const allowedDay = weeklyDays.includes(cursorWeekday)
+    if (cursor >= startDate && inInterval && allowedDay) {
+      if (endMode === 'on_date' && untilDate && cursor > untilDate) break
+      dates.push(cursor)
+    }
+    cursor = addDaysToKey(cursor, 1)
+    if (endMode === 'on_date' && untilDate && cursor > untilDate) break
+  }
+  return dates
 }
 
 const todayKey = formatDateKey(today)
@@ -265,6 +370,335 @@ const tasksForSelectedDate = computed(() =>
     .filter((t) => t.date === selectedDate.value)
     .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || '')),
 )
+
+const isDayView = computed(() => calendarViewMode.value === 'day')
+const isWeekView = computed(() => calendarViewMode.value === 'week')
+const isMonthView = computed(() => calendarViewMode.value === 'month')
+const isScheduleView = computed(() => calendarViewMode.value === 'schedule')
+
+const scheduleGroups = computed(() => {
+  const map = new Map<string, CalendarTask[]>()
+  for (const task of scheduleTasks.value) {
+    const list = map.get(task.date) ?? []
+    list.push(task)
+    map.set(task.date, list)
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, dayTasks]) => ({
+      date,
+      label: new Date(date + 'T12:00:00').toLocaleDateString('ru-RU', {
+        day: 'numeric',
+        month: 'long',
+        weekday: 'long',
+      }),
+      tasks: [...dayTasks].sort((a, b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99')),
+    }))
+})
+
+const recurringScheduleSignatures = computed(() => {
+  const counts = new Map<string, number>()
+  for (const task of scheduleTasks.value) {
+    const key = `${task.title.trim().toLowerCase()}|${task.startTime || ''}|${task.endTime || ''}`
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return new Set(Array.from(counts.entries()).filter(([, count]) => count > 1).map(([key]) => key))
+})
+
+function isTaskRecurringInSchedule(task: CalendarTask): boolean {
+  const key = `${task.title.trim().toLowerCase()}|${task.startTime || ''}|${task.endTime || ''}`
+  return recurringScheduleSignatures.value.has(key)
+}
+
+function priorityClass(priority: CalendarTask['priority']): string {
+  return `priority-${priority || 'normal'}`
+}
+
+function parseDateKey(value: string): Date {
+  return new Date(value + 'T12:00:00')
+}
+
+function isWeekendDateKey(value: string): boolean {
+  const day = parseDateKey(value).getDay()
+  return day === 0 || day === 6
+}
+
+const weekDays = computed(() => {
+  const anchor = parseDateKey(selectedDate.value)
+  const day = anchor.getDay()
+  const monOffset = day === 0 ? -6 : 1 - day
+  const mon = new Date(anchor)
+  mon.setDate(anchor.getDate() + monOffset)
+  return Array.from({ length: 7 }, (_, idx) => {
+    const d = new Date(mon)
+    d.setDate(mon.getDate() + idx)
+    const key = formatDateKey(d)
+    return {
+      key,
+      date: d.getDate(),
+      weekDay: weekdaysShort[idx],
+      isToday: key === todayKey,
+      isSelected: key === selectedDate.value,
+      isWeekend: isWeekendDateKey(key),
+    }
+  })
+})
+
+const tasksForSelectedWeek = computed(() => {
+  const keys = new Set(weekDays.value.map((x) => x.key))
+  return tasks.value
+    .filter((t) => keys.has(t.date))
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''))
+})
+
+const weekEventsTimed = computed(() => {
+  const start = dayStartHour * 60
+  const end = dayEndHour * 60
+  return tasksForSelectedWeek.value
+    .filter((task) => !!task.startTime)
+    .map((task) => {
+      const dayIndex = weekDays.value.findIndex((d) => d.key === task.date)
+      if (dayIndex < 0) return null
+      const rawStart = hhmmToMinutes(task.startTime)
+      const rawEnd = hhmmToMinutes(task.endTime)
+      if (rawStart == null) return null
+      const eventStart = Math.max(start, Math.min(end - 15, rawStart))
+      const fallbackEnd = eventStart + 60
+      const eventEnd = Math.max(eventStart + 30, Math.min(end, rawEnd ?? fallbackEnd))
+      const top = dayGridTopPadding + ((eventStart - start) / daySlotMinutes) * daySlotHeight
+      const height = Math.max(36, ((eventEnd - eventStart) / daySlotMinutes) * daySlotHeight - 4)
+      return { task, dayIndex, top, height, start: eventStart, end: eventEnd }
+    })
+    .filter((x): x is NonNullable<typeof x> => !!x)
+})
+
+const tasksByDate = computed(() => {
+  const map = new Map<string, CalendarTask[]>()
+  for (const task of tasks.value) {
+    const list = map.get(task.date) ?? []
+    list.push(task)
+    map.set(task.date, list)
+  }
+  for (const [k, list] of map.entries()) {
+    map.set(
+      k,
+      list.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || '')),
+    )
+  }
+  return map
+})
+
+const monthCells = computed(() =>
+  calendarWeeks.value.flat().map((day) => {
+    const dayTasks = tasksByDate.value.get(day.key) ?? []
+    return {
+      ...day,
+      tasks: dayTasks.slice(0, 3),
+      more: Math.max(0, dayTasks.length - 3),
+      isWeekend: isWeekendDateKey(day.key),
+    }
+  }),
+)
+
+const tasksForCurrentMonth = computed(() => {
+  const monthPrefix = `${currentYear.value}-${String(currentMonth.value + 1).padStart(2, '0')}-`
+  return tasks.value.filter((t) => t.date.startsWith(monthPrefix))
+})
+
+function setCalendarView(mode: 'day' | 'week' | 'month' | 'schedule') {
+  calendarViewMode.value = mode
+}
+
+async function loadSchedulePage(append: boolean) {
+  const uid = effectiveCalendarUserId.value
+  if (!isSupabaseConfigured() || !uid) {
+    scheduleTasks.value = []
+    scheduleHasMore.value = false
+    return
+  }
+  const pageToLoad = append ? schedulePage.value + 1 : 1
+  if (append && (!scheduleHasMore.value || scheduleLoadingMore.value)) return
+  if (!append && scheduleLoading.value) return
+  if (append) scheduleLoadingMore.value = true
+  else scheduleLoading.value = true
+  try {
+    const rows = await loadCalendarTasksPage({
+      userId: uid,
+      fromDate: todayKey,
+      page: pageToLoad,
+      pageSize: schedulePageSize,
+    })
+    const nextTasks = rows.map(rowToTask)
+    if (append) {
+      const byId = new Map(scheduleTasks.value.map((t) => [t.id, t] as const))
+      for (const task of nextTasks) byId.set(task.id, task)
+      scheduleTasks.value = Array.from(byId.values()).sort((a, b) => {
+        const d = a.date.localeCompare(b.date)
+        if (d !== 0) return d
+        return (a.startTime || '99:99').localeCompare(b.startTime || '99:99')
+      })
+    } else {
+      scheduleTasks.value = nextTasks
+    }
+    schedulePage.value = pageToLoad
+    scheduleHasMore.value = rows.length === schedulePageSize
+  } catch (err) {
+    if (!append) scheduleTasks.value = []
+    scheduleHasMore.value = false
+    console.error(err)
+  } finally {
+    if (append) scheduleLoadingMore.value = false
+    else scheduleLoading.value = false
+  }
+}
+
+function onScheduleScroll() {
+  const el = scheduleListRef.value
+  if (!el || scheduleLoading.value || scheduleLoadingMore.value || !scheduleHasMore.value) return
+  const distanceToBottom = el.scrollHeight - (el.scrollTop + el.clientHeight)
+  if (distanceToBottom < 220) {
+    void loadSchedulePage(true)
+  }
+}
+
+function onMonthCellClick(dateKey: string) {
+  selectedDate.value = dateKey
+  openNewTaskModal('09:00')
+}
+
+function onMonthEventDragStart(taskId: string, e: DragEvent) {
+  monthDragTaskId.value = taskId
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', taskId)
+  }
+}
+
+function onMonthEventDragEnd() {
+  monthDragTaskId.value = null
+  monthDropTargetDate.value = null
+}
+
+function onMonthCellDragOver(dateKey: string, e: DragEvent) {
+  if (!monthDragTaskId.value) return
+  e.preventDefault()
+  monthDropTargetDate.value = dateKey
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+function onMonthCellDragLeave(dateKey: string) {
+  if (monthDropTargetDate.value === dateKey) monthDropTargetDate.value = null
+}
+
+async function onMonthCellDrop(dateKey: string, e: DragEvent) {
+  e.preventDefault()
+  const taskId = monthDragTaskId.value || e.dataTransfer?.getData('text/plain')
+  monthDropTargetDate.value = null
+  monthDragTaskId.value = null
+  if (!taskId || !isSupabaseConfigured()) return
+  const task = tasks.value.find((t) => t.id === taskId)
+  if (!task || task.date === dateKey) return
+  const prevDate = task.date
+  // Оптимистично обновляем локально, чтобы не было резкого мигания сетки.
+  task.date = dateKey
+  try {
+    await updateCalendarTask(taskId, { date: dateKey })
+  } catch (err) {
+    task.date = prevDate
+    console.error(err)
+  }
+}
+
+function hhmmToMinutes(value: string | null): number | null {
+  if (!value) return null
+  const match = value.match(/^(\d{2}):(\d{2})/)
+  if (!match) return null
+  return Number(match[1]) * 60 + Number(match[2])
+}
+
+function minutesToHhmm(value: number): string {
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, value))
+  const h = String(Math.floor(clamped / 60)).padStart(2, '0')
+  const m = String(clamped % 60).padStart(2, '0')
+  return `${h}:${m}`
+}
+
+const daySlots = computed(() => {
+  const start = dayStartHour * 60
+  const end = dayEndHour * 60
+  const slots: { key: string; label: string; minutes: number }[] = []
+  for (let m = start; m <= end; m += daySlotMinutes) {
+    slots.push({ key: `slot-${m}`, label: minutesToHhmm(m), minutes: m })
+  }
+  return slots
+})
+
+const dayEventsTimed = computed(() => {
+  const start = dayStartHour * 60
+  const end = dayEndHour * 60
+  return tasksForSelectedDate.value
+    .filter((task) => !!task.startTime)
+    .map((task) => {
+      const rawStart = hhmmToMinutes(task.startTime)
+      const rawEnd = hhmmToMinutes(task.endTime)
+      if (rawStart == null) return null
+      const eventStart = Math.max(start, Math.min(end - 15, rawStart))
+      const fallbackEnd = eventStart + 60
+      const eventEnd = Math.max(eventStart + 30, Math.min(end, rawEnd ?? fallbackEnd))
+      const top = dayGridTopPadding + ((eventStart - start) / daySlotMinutes) * daySlotHeight
+      const height = Math.max(44, ((eventEnd - eventStart) / daySlotMinutes) * daySlotHeight - 6)
+      return { task, top, height, start: eventStart, end: eventEnd }
+    })
+    .filter((x): x is NonNullable<typeof x> => !!x)
+})
+
+const dayEventsUntimed = computed(() =>
+  tasksForSelectedDate.value.filter((task) => !task.startTime),
+)
+
+const dayGridHeight = computed(
+  () => dayGridTopPadding + (daySlots.value.length - 1) * daySlotHeight + dayGridBottomPadding,
+)
+
+const dayGridViewportHeight = computed(
+  () =>
+    dayGridTopPadding +
+    ((dayViewportEndHour * 60 - dayStartHour * 60) / daySlotMinutes) * daySlotHeight +
+    dayGridBottomPadding,
+)
+
+const showNowMarker = computed(() => {
+  if (isDayView.value && selectedDate.value !== todayKey) return false
+  if (isWeekView.value && !weekDays.value.some((d) => d.key === todayKey)) return false
+  const now = nowMarkerMinutes.value
+  if (now == null) return false
+  return now >= dayStartHour * 60 && now <= dayEndHour * 60
+})
+
+const nowMarkerTop = computed(() => {
+  const now = nowMarkerMinutes.value ?? dayStartHour * 60
+  return dayGridTopPadding + ((now - dayStartHour * 60) / daySlotMinutes) * daySlotHeight
+})
+
+function refreshNowMarker() {
+  const now = new Date()
+  nowMarkerMinutes.value = now.getHours() * 60 + now.getMinutes()
+  nowMarkerLabel.value = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+}
+
+function scrollDayViewportToNow(force = false) {
+  const container = dayEventsScrollRef.value
+  if (!container) return
+  if (selectedDate.value !== todayKey) {
+    if (force) container.scrollTop = 0
+    return
+  }
+  const now = nowMarkerMinutes.value
+  if (now == null) return
+  const top = dayGridTopPadding + ((now - dayStartHour * 60) / daySlotMinutes) * daySlotHeight
+  const target = Math.max(0, top - container.clientHeight * 0.35)
+  container.scrollTo({ top: target, behavior: force ? 'auto' : 'smooth' })
+}
 
 function getWeekRange(dateKey: string): { start: string; end: string } {
   const d = new Date(dateKey + 'T12:00:00')
@@ -406,8 +840,30 @@ async function loadFilesForVisibleTasks() {
   }
 }
 
-function getTaskFiles(taskId: string): CalendarTaskFileRow[] {
-  return taskFilesByTaskId.value[taskId] ?? []
+async function loadAssigneesForVisibleTasks() {
+  const ids = tasksForSelectedDate.value.map((t) => t.id)
+  if (ids.length === 0 || !isSupabaseConfigured()) {
+    taskAssigneeIdsByTaskId.value = {}
+    return
+  }
+  const next: Record<string, string[]> = {}
+  await Promise.all(
+    ids.map(async (taskId) => {
+      try {
+        next[taskId] = await loadTaskAssignees(taskId)
+      } catch {
+        next[taskId] = []
+      }
+    }),
+  )
+  taskAssigneeIdsByTaskId.value = next
+}
+
+function dayEventAssignees(taskId: string): ProfileRow[] {
+  const ids = taskAssigneeIdsByTaskId.value[taskId] ?? []
+  return ids
+    .map((id) => profileById(id))
+    .filter((p): p is ProfileRow => !!p)
 }
 
 function prevMonth() {
@@ -456,9 +912,20 @@ async function loadProfilesOnce() {
 
 watch(
   () => [tasksForSelectedDate.value.length, selectedDate.value] as const,
-  () => loadFilesForVisibleTasks(),
+  () => {
+    void loadFilesForVisibleTasks()
+    void loadAssigneesForVisibleTasks()
+    void nextTick(() => scrollDayViewportToNow(true))
+  },
   { immediate: true },
 )
+
+watch(taskRepeatRule, (rule) => {
+  if (rule !== 'weekly') return
+  if (taskRepeatWeekDays.value.length > 0) return
+  const base = taskStartDate.value || selectedDate.value
+  taskRepeatWeekDays.value = [weekdayMon1Sun7(base)]
+})
 
 watch(
   () => [auth.user.value?.id, isManager.value] as const,
@@ -474,25 +941,50 @@ watch(
   (uid) => {
     if (!uid) {
       tasks.value = []
+      scheduleTasks.value = []
       return
     }
     void loadTasksFromDb()
+    if (isScheduleView.value) void loadSchedulePage(false)
   },
   { immediate: true },
 )
 
+watch(
+  isScheduleView,
+  (active) => {
+    if (!active) return
+    void loadSchedulePage(false)
+  },
+)
+
 onMounted(() => {
   loadProfilesOnce()
+  refreshNowMarker()
+  nowMarkerTimer = setInterval(refreshNowMarker, 30_000)
+  void nextTick(() => scrollDayViewportToNow(true))
 })
 
-function openNewTaskModal() {
+onUnmounted(() => {
+  if (nowMarkerTimer) clearInterval(nowMarkerTimer)
+})
+
+function openNewTaskModal(startTime?: string) {
   editingTaskId.value = null
   taskTitle.value = ''
   taskDescription.value = ''
-  taskDate.value = selectedDate.value
-  taskStartTime.value = '09:00'
-  taskEndTime.value = '11:30'
+  taskStartDate.value = selectedDate.value
+  taskEndDate.value = selectedDate.value
+  taskStartTime.value = startTime ?? '09:00'
+  taskEndTime.value = minutesToHhmm((hhmmToMinutes(taskStartTime.value) ?? 540) + 60)
   taskPriority.value = 'normal'
+  taskRepeatRule.value = 'none'
+  taskRepeatEvery.value = 1
+  taskRepeatEndMode.value = 'after'
+  taskRepeatCount.value = 10
+  taskRepeatUntil.value = selectedDate.value
+  taskRepeatWeekDays.value = [weekdayMon1Sun7(selectedDate.value)]
+  taskRepeatApplyMode.value = 'only_this'
   const owner = effectiveCalendarUserId.value
   taskAssignees.value = owner ? [owner] : auth.user.value?.id ? [auth.user.value.id] : []
   taskFiles.value = []
@@ -500,14 +992,42 @@ function openNewTaskModal() {
   isTaskModalOpen.value = true
 }
 
+function onDayGridClick(e: MouseEvent) {
+  const target = e.target as HTMLElement | null
+  if (target?.closest('.day-event-card')) return
+  const grid = e.currentTarget as HTMLElement | null
+  if (!grid) return
+  const rect = grid.getBoundingClientRect()
+  const y = Math.max(dayGridTopPadding, Math.min(grid.scrollHeight, e.clientY - rect.top))
+  const minutesFromStart = Math.floor((y - dayGridTopPadding) / daySlotHeight) * daySlotMinutes
+  const startMinutes = dayStartHour * 60 + minutesFromStart
+  if (isWeekView.value) {
+    const gutter = 66
+    const usableWidth = Math.max(1, rect.width - gutter)
+    const relativeX = Math.max(0, Math.min(usableWidth - 1, e.clientX - rect.left - gutter))
+    const dayIndex = Math.max(0, Math.min(6, Math.floor((relativeX / usableWidth) * 7)))
+    const pickedDay = weekDays.value[dayIndex]
+    if (pickedDay) selectedDate.value = pickedDay.key
+  }
+  openNewTaskModal(minutesToHhmm(startMinutes))
+}
+
 async function openEditTaskModal(task: CalendarTask) {
   editingTaskId.value = task.id
   taskTitle.value = task.title
   taskDescription.value = task.description
-  taskDate.value = task.date
+  taskStartDate.value = task.date
+  taskEndDate.value = task.date
   taskStartTime.value = task.startTime ?? '09:00'
   taskEndTime.value = task.endTime ?? '11:30'
   taskPriority.value = task.priority
+  taskRepeatRule.value = 'none'
+  taskRepeatEvery.value = 1
+  taskRepeatEndMode.value = 'after'
+  taskRepeatCount.value = 10
+  taskRepeatUntil.value = task.date
+  taskRepeatWeekDays.value = [weekdayMon1Sun7(task.date)]
+  taskRepeatApplyMode.value = 'only_this'
   taskFiles.value = []
   assigneePickerOpen.value = false
   isTaskModalOpen.value = true
@@ -582,36 +1102,89 @@ async function onSubmitTask() {
   taskSaveLoading.value = true
   try {
     const id = editingTaskId.value
-    const date = taskDate.value || selectedDate.value
+      const date = taskStartDate.value || selectedDate.value
     if (id) {
-      await updateCalendarTask(id, {
-        date,
-        title,
-        description: taskDescription.value.trim() || null,
-        start_time: taskStartTime.value?.trim() || null,
-        end_time: taskEndTime.value?.trim() || null,
-        priority: taskPriority.value,
-        assignee_ids: taskAssignees.value,
-      })
+      if (taskRepeatRule.value === 'none' || taskRepeatApplyMode.value === 'only_this') {
+        await updateCalendarTask(id, {
+          date,
+          title,
+          description: taskDescription.value.trim() || null,
+          start_time: taskStartTime.value?.trim() || null,
+          end_time: taskEndTime.value?.trim() || null,
+          priority: taskPriority.value,
+          assignee_ids: taskAssignees.value,
+        })
+      } else {
+        const repeatUntil = taskRepeatUntil.value || date
+        const plannedDates = buildRecurringDates(
+          date,
+          taskRepeatRule.value,
+          taskRepeatEvery.value,
+          taskRepeatEndMode.value,
+          taskRepeatCount.value,
+          repeatUntil,
+          taskRepeatWeekDays.value,
+        )
+        await updateCalendarTask(id, {
+          date,
+          title,
+          description: taskDescription.value.trim() || null,
+          start_time: taskStartTime.value?.trim() || null,
+          end_time: taskEndTime.value?.trim() || null,
+          priority: taskPriority.value,
+          assignee_ids: taskAssignees.value,
+        })
+        for (const plannedDate of plannedDates.slice(1)) {
+          await insertCalendarTask({
+            user_id: effectiveCalendarUserId.value ?? auth.user.value?.id ?? null,
+            date: plannedDate,
+            title,
+            description: taskDescription.value.trim() || null,
+            start_time: taskStartTime.value?.trim() || null,
+            end_time: taskEndTime.value?.trim() || null,
+            priority: taskPriority.value,
+            assignee_ids: taskAssignees.value,
+          })
+        }
+      }
     } else {
-      await insertCalendarTask({
-        user_id: effectiveCalendarUserId.value ?? auth.user.value?.id ?? null,
+      const repeatRule = taskRepeatRule.value
+      if (repeatRule === 'weekly' && taskRepeatWeekDays.value.length === 0) return
+      const repeatUntil = taskRepeatUntil.value || date
+      const plannedDates = buildRecurringDates(
         date,
-        title,
-        description: taskDescription.value.trim() || null,
-        start_time: taskStartTime.value?.trim() || null,
-        end_time: taskEndTime.value?.trim() || null,
-        priority: taskPriority.value,
-        assignee_ids: taskAssignees.value,
-      })
+        repeatRule,
+        taskRepeatEvery.value,
+        taskRepeatEndMode.value,
+        taskRepeatCount.value,
+        repeatUntil,
+        taskRepeatWeekDays.value,
+      )
+      for (const plannedDate of plannedDates) {
+        await insertCalendarTask({
+          user_id: effectiveCalendarUserId.value ?? auth.user.value?.id ?? null,
+          date: plannedDate,
+          title,
+          description: taskDescription.value.trim() || null,
+          start_time: taskStartTime.value?.trim() || null,
+          end_time: taskEndTime.value?.trim() || null,
+          priority: taskPriority.value,
+          assignee_ids: taskAssignees.value,
+        })
+      }
     }
     await loadTasksFromDb()
+    if (isScheduleView.value) await loadSchedulePage(false)
     await loadFilesForVisibleTasks()
     isTaskModalOpen.value = false
-    successModalTitle.value = editingTaskId.value ? 'Изменения сохранены' : 'Задача создана'
+    successModalTitle.value = editingTaskId.value ? 'Изменения сохранены' : 'Событие создано'
     successModalMessage.value = editingTaskId.value
-      ? 'Данные задачи успешно обновлены.'
-      : 'Новая задача успешно добавлена.'
+      ? taskRepeatRule.value !== 'none' && taskRepeatApplyMode.value === 'this_and_following'
+        ? 'Событие обновлено, а следующие встречи созданы по новому правилу.'
+        : 'Данные события успешно обновлены.'
+      : taskRepeatRule.value === 'none'
+        ? 'Новое событие успешно добавлено.'
+        : 'Серия событий успешно добавлена.'
     successModalOpen.value = true
   } catch (e) {
     console.error(e)
@@ -620,30 +1193,11 @@ async function onSubmitTask() {
   }
 }
 
-async function toggleTaskCompleted(task: CalendarTask) {
-  if (taskToggleLoadingIds.value.includes(task.id)) return
-  const prevCompletedAt = task.completedAt
-  const nextCompletedAt = task.completedAt ? null : new Date().toISOString()
-  task.completedAt = nextCompletedAt
-  taskToggleLoadingIds.value = [...taskToggleLoadingIds.value, task.id]
-  try {
-    // Сначала показываем анимацию переключения, затем отправляем запрос.
-    await new Promise((resolve) => setTimeout(resolve, 260))
-    await updateCalendarTask(task.id, {
-      completed_at: nextCompletedAt,
-    })
-  } catch (e) {
-    task.completedAt = prevCompletedAt
-    console.error(e)
-  } finally {
-    taskToggleLoadingIds.value = taskToggleLoadingIds.value.filter((id) => id !== task.id)
-  }
-}
-
 async function deleteTask(id: string) {
   try {
     await deleteCalendarTask(id)
     await loadTasksFromDb()
+    if (isScheduleView.value) await loadSchedulePage(false)
   } catch (e) {
     console.error(e)
   }
@@ -679,8 +1233,8 @@ async function confirmDeleteTask() {
         <div class="type-label">Календарь</div>
         <h1 class="page-title">Планирование дня</h1>
         <div v-if="isManager" class="calendar-owner-card">
-          <div class="calendar-owner-label-row">
-            <span class="calendar-owner-icon" aria-hidden="true">
+          <div class="calendar-owner-select-shell">
+            <span class="calendar-owner-icon calendar-owner-icon--inline" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
                 <circle cx="9" cy="7" r="4" />
@@ -688,9 +1242,6 @@ async function confirmDeleteTask() {
                 <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
             </span>
-            <label for="calendar-owner-select" class="calendar-owner-label">Сотрудник</label>
-          </div>
-          <div class="calendar-owner-select-shell">
             <select
               id="calendar-owner-select"
               v-model="managerCalendarUserId"
@@ -707,26 +1258,71 @@ async function confirmDeleteTask() {
           Просмотр календаря: <strong>{{ calendarViewingOtherLabel }}</strong>
         </p>
       </div>
-      <button type="button" class="calendar-add-btn" @click="openNewTaskModal">
-        <svg
-          class="calendar-add-btn-icon"
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <line x1="12" x2="12" y1="5" y2="19" />
-          <line x1="5" x2="19" y1="12" y2="12" />
-        </svg>
-        Добавить задачу
-      </button>
+      <div class="calendar-header-actions">
+        <div class="calendar-view-switch" role="tablist" aria-label="Режим календаря">
+          <button
+            type="button"
+            class="calendar-view-switch-btn"
+            :class="{ 'is-active': isDayView }"
+            :aria-selected="isDayView"
+            @click="setCalendarView('day')"
+          >
+            День
+          </button>
+          <button
+            type="button"
+            class="calendar-view-switch-btn"
+            :class="{ 'is-active': isWeekView }"
+            :aria-selected="isWeekView"
+            @click="setCalendarView('week')"
+          >
+            Неделя
+          </button>
+          <button
+            type="button"
+            class="calendar-view-switch-btn"
+            :class="{ 'is-active': isMonthView }"
+            :aria-selected="isMonthView"
+            @click="setCalendarView('month')"
+          >
+            Месяц
+          </button>
+          <button
+            type="button"
+            class="calendar-view-switch-btn"
+            :class="{ 'is-active': isScheduleView }"
+            :aria-selected="isScheduleView"
+            @click="setCalendarView('schedule')"
+          >
+            Расписание
+          </button>
+        </div>
+        <button type="button" class="calendar-add-btn" @click="openNewTaskModal()">
+          <svg
+            class="calendar-add-btn-icon"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="12" x2="12" y1="5" y2="19" />
+            <line x1="5" x2="19" y1="12" y2="12" />
+          </svg>
+          Создать событие
+        </button>
+      </div>
     </header>
 
-    <div class="calendar-layout page-enter-item" style="--enter-delay: 60ms">
-      <section class="calendar-card calendar-card-left">
+    <div
+      class="calendar-layout page-enter-item"
+      :class="{ 'calendar-layout--manager': isManager, 'calendar-layout--week': isWeekView || isMonthView || isScheduleView }"
+      style="--enter-delay: 60ms"
+    >
+      <Transition name="mini-calendar-slide">
+      <section v-if="isDayView" class="calendar-card calendar-card-left">
         <div class="calendar-month-header">
           <button
             type="button"
@@ -812,23 +1408,37 @@ async function confirmDeleteTask() {
           </div>
         </div>
       </section>
+      </Transition>
 
       <section class="calendar-card calendar-card-right">
         <header class="day-header">
           <div class="day-header-text">
-            <div class="type-label">Задачи на день</div>
+            <div class="type-label">{{ isScheduleView ? 'Расписание событий' : isMonthView ? 'Задачи на месяц' : isWeekView ? 'Задачи на неделю' : 'Задачи на день' }}</div>
             <h2 class="day-title">
               {{
-                new Date(selectedDate + 'T12:00:00').toLocaleDateString('ru-RU', {
-                  day: 'numeric',
-                  month: 'long',
-                  weekday: 'long',
-                })
+                isMonthView
+                  ? `${monthsShort[currentMonth].toLowerCase()} ${currentYear}`
+                  : isScheduleView
+                  ? 'Ближайшие события'
+                  : isWeekView
+                  ? `${weekDays[0].weekDay.toLowerCase()}, ${weekDays[0].date} ${monthsShort[parseDateKey(weekDays[0].key).getMonth()].toLowerCase()} — ${weekDays[6].weekDay.toLowerCase()}, ${weekDays[6].date} ${monthsShort[parseDateKey(weekDays[6].key).getMonth()].toLowerCase()}`
+                  : new Date(selectedDate + 'T12:00:00').toLocaleDateString('ru-RU', {
+                    day: 'numeric',
+                    month: 'long',
+                    weekday: 'long',
+                  })
               }}
             </h2>
             <p class="day-header-summary">
-              Запланировано {{ tasksForSelectedDate.length }} {{ tasksForSelectedDate.length === 1 ? 'задача' : tasksForSelectedDate.length < 5 ? 'задачи' : 'задач' }}
-              ({{ tasksForSelectedDate.filter(t => t.completedAt).length }} выполнено)
+              Запланировано
+              {{ isScheduleView ? scheduleTasks.length : isMonthView ? tasksForCurrentMonth.length : isWeekView ? tasksForSelectedWeek.length : tasksForSelectedDate.length }}
+              {{
+                (isScheduleView ? scheduleTasks.length : isMonthView ? tasksForCurrentMonth.length : isWeekView ? tasksForSelectedWeek.length : tasksForSelectedDate.length) === 1
+                  ? 'событие'
+                  : (isScheduleView ? scheduleTasks.length : isMonthView ? tasksForCurrentMonth.length : isWeekView ? tasksForSelectedWeek.length : tasksForSelectedDate.length) < 5
+                    ? 'события'
+                    : 'событий'
+              }}
             </p>
             <div v-if="filesLoading" class="day-header-loading">
               <UiLoadingBar size="md" />
@@ -844,115 +1454,228 @@ async function confirmDeleteTask() {
             <div class="day-loading-skeleton day-loading-skeleton--medium" />
           </div>
         </div>
-        <div v-else-if="!tasksForSelectedDate.length" class="day-empty">
-          <p>На этот день ещё нет задач. Нажмите «Добавить задачу» в шапке страницы.</p>
-        </div>
-
-        <ul v-else class="day-task-list">
-          <li
-            v-for="task in tasksForSelectedDate"
-            :key="task.id"
-            class="day-task"
-            :class="{ 'day-task--completed': task.completedAt }"
-          >
-            <!-- Uiverse / JkHuger: анимация чекбокса + подпись (название задачи) -->
-            <div class="task-cal-head" @click.stop>
-              <div class="checkbox-container">
-                <input
-                  type="checkbox"
-                  class="task-checkbox"
-                  :id="`task-check-${task.id}`"
-                  :checked="!!task.completedAt"
-                  :disabled="taskToggleLoadingIds.includes(task.id)"
-                  :aria-label="task.completedAt ? 'Снять отметку о выполнении' : 'Отметить выполненным'"
-                  @change="toggleTaskCompleted(task)"
-                />
-                <label :for="`task-check-${task.id}`" class="checkbox-label">
-                  <div class="checkbox-box">
-                    <div class="checkbox-fill"></div>
-                    <div class="checkmark">
-                      <svg viewBox="0 0 24 24" class="check-icon">
-                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"></path>
-                      </svg>
-                    </div>
-                    <div class="success-ripple"></div>
-                  </div>
-                  <span class="checkbox-text">{{ task.title }}</span>
-                </label>
+        <div v-else-if="isWeekView" class="week-view-wrap">
+          <div class="week-view-header">
+            <div class="week-view-gmt">GMT+3</div>
+            <button
+              v-for="day in weekDays"
+              :key="day.key"
+              type="button"
+              class="week-view-day"
+              :class="{ 'week-view-day--today': day.isToday, 'week-view-day--selected': day.isSelected, 'week-view-day--weekend': day.isWeekend }"
+              @click="selectDay(day.key)"
+            >
+              <span class="week-view-day-label">{{ day.weekDay.toLowerCase() }}</span>
+              <span class="week-view-day-num">{{ day.date }}</span>
+            </button>
+          </div>
+          <div class="day-events-scroll week-view-scroll" :style="{ height: `${dayGridViewportHeight}px` }">
+            <div class="day-events-grid week-view-grid" :style="{ height: `${dayGridHeight}px` }" @click="onDayGridClick">
+              <div
+                v-for="slot in daySlots.slice(0, -1)"
+                :key="`week-${slot.key}`"
+                class="day-grid-line week-grid-line"
+                :style="{ top: `${dayGridTopPadding + ((slot.minutes - dayStartHour * 60) / daySlotMinutes) * daySlotHeight}px` }"
+              >
+                <span class="day-grid-time">{{ slot.label }}</span>
+              </div>
+              <div class="week-view-cols">
+                <div v-for="day in weekDays" :key="`col-${day.key}`" class="week-view-col" />
+              </div>
+              <article
+                v-for="event in weekEventsTimed"
+                :key="`week-ev-${event.task.id}`"
+                class="day-event-card week-event-card"
+                :class="priorityClass(event.task.priority)"
+                :style="{
+                  top: `${event.top}px`,
+                  height: `${event.height}px`,
+                  left: `calc(66px + ${event.dayIndex} * ((100% - 66px) / 7) + 4px)`,
+                  width: 'calc((100% - 66px) / 7 - 8px)',
+                }"
+                @click="openEditTaskModal(event.task)"
+              >
+                <div class="day-event-time">{{ minutesToHhmm(event.start) }}<span v-if="event.task.endTime"> – {{ event.task.endTime }}</span></div>
+                <div class="day-event-title">{{ event.task.title }}</div>
+              </article>
+              <div
+                v-if="showNowMarker"
+                class="day-now-line week-now-line"
+                :style="{ top: `${nowMarkerTop}px` }"
+              >
+                <span class="day-now-label">{{ nowMarkerLabel }}</span>
               </div>
             </div>
-            <div
-              class="day-task-main"
-              role="button"
-              tabindex="0"
-              @click="openEditTaskModal(task)"
-              @keydown.enter="openEditTaskModal(task)"
+          </div>
+        </div>
+        <div v-else-if="isMonthView" class="month-view-wrap">
+          <div class="month-view-header">
+            <button type="button" class="month-nav-btn" aria-label="Предыдущий месяц" @click="prevMonth">‹</button>
+            <div class="month-label">{{ currentMonthLabel }}</div>
+            <button type="button" class="month-nav-btn" aria-label="Следующий месяц" @click="nextMonth">›</button>
+          </div>
+          <div class="month-view-grid">
+            <div v-for="day in weekdaysShort" :key="`m-${day}`" class="month-view-weekday">{{ day }}</div>
+            <button
+              v-for="cell in monthCells"
+              :key="`m-cell-${cell.key}`"
+              type="button"
+              class="month-view-cell"
+              :class="{
+                'month-view-cell--muted': !cell.inCurrentMonth,
+                'month-view-cell--today': cell.isToday,
+                'month-view-cell--selected': cell.isSelected,
+                'month-view-cell--weekend': cell.isWeekend,
+                'month-view-cell--drop-target': monthDropTargetDate === cell.key,
+              }"
+              @click="onMonthCellClick(cell.key)"
+              @dragover="onMonthCellDragOver(cell.key, $event)"
+              @dragleave="onMonthCellDragLeave(cell.key)"
+              @drop="onMonthCellDrop(cell.key, $event)"
             >
-              <div class="day-task-time" v-if="task.startTime || task.endTime">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
+              <div class="month-view-date">{{ cell.date }}</div>
+              <div class="month-view-events">
+                <button
+                  v-for="t in cell.tasks"
+                  :key="t.id"
+                  type="button"
+                  class="month-view-event-pill"
+                  :class="priorityClass(t.priority)"
+                  draggable="true"
+                  @click.stop="openEditTaskModal(t)"
+                  @dragstart="onMonthEventDragStart(t.id, $event)"
+                  @dragend="onMonthEventDragEnd"
                 >
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M12 6v6l3 3" />
-                </svg>
-                <span>
-                  {{ task.startTime || '—' }}<span v-if="task.endTime"> – {{ task.endTime }}</span>
-                </span>
+                  <span class="month-view-event-title">{{ t.title }}</span>
+                  <span v-if="t.startTime" class="month-view-event-time">{{ t.startTime }}</span>
+                </button>
+                <div v-if="cell.more > 0" class="month-view-event-more">+{{ cell.more }}</div>
               </div>
-              <div v-if="task.description" class="day-task-desc">
-                {{ task.description }}
+            </button>
+          </div>
+        </div>
+        <div v-else-if="isScheduleView" ref="scheduleListRef" class="schedule-view-wrap" @scroll.passive="onScheduleScroll">
+          <div v-if="scheduleLoading" class="day-loading">
+            <UiLoadingBar />
+          </div>
+          <template v-else>
+            <section v-for="group in scheduleGroups" :key="group.date" class="schedule-day-group">
+              <div class="schedule-day-head-wrap">
+                <div class="schedule-day-head">{{ group.label }}</div>
               </div>
-              <div v-if="getTaskFiles(task.id).length > 0" class="day-task-files">
-                <span class="day-task-files-icon" aria-hidden="true">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                  </svg>
-                </span>
-                <span class="day-task-files-count">{{ getTaskFiles(task.id).length }} {{ getTaskFiles(task.id).length === 1 ? 'файл' : getTaskFiles(task.id).length < 5 ? 'файла' : 'файлов' }}</span>
-                <div class="day-task-files-preview">
-                  <a
-                    v-for="f in getTaskFiles(task.id).slice(0, 3)"
-                    :key="f.id"
-                    :href="getTaskFilePublicUrl(f.file_path)"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="day-task-file-pill"
-                    :title="f.file_name"
-                    @click.stop
+              <button
+                v-for="task in group.tasks"
+                :key="task.id"
+                type="button"
+                class="schedule-item"
+                :class="priorityClass(task.priority)"
+                @click="openEditTaskModal(task)"
+              >
+                <div class="schedule-item-timebox">
+                  <div class="schedule-item-time">{{ task.startTime ? `${task.startTime}${task.endTime ? ` - ${task.endTime}` : ''}` : 'весь день' }}</div>
+                  <div v-if="isTaskRecurringInSchedule(task)" class="schedule-item-repeat">Повторяемое событие</div>
+                </div>
+                <div class="schedule-item-main">
+                  <span class="schedule-item-dot" :class="priorityClass(task.priority)" />
+                  <span class="schedule-item-title">{{ task.title }}</span>
+                </div>
+                <div v-if="dayEventAssignees(task.id).length" class="schedule-item-assignees">
+                  <span
+                    v-for="p in dayEventAssignees(task.id).slice(0, 3)"
+                    :key="`s-${task.id}-${p.id}`"
+                    class="day-event-assignee-avatar"
+                    :style="assigneeAvatarStyle(p)"
+                    :title="profileLabel(p)"
                   >
-                    {{ f.file_name.length > 12 ? f.file_name.slice(0, 10) + '…' : f.file_name }}
-                  </a>
+                    {{ assigneeInitials(p) }}
+                  </span>
+                  <span v-if="dayEventAssignees(task.id).length > 3" class="day-event-assignee-more">
+                    +{{ dayEventAssignees(task.id).length - 3 }}
+                  </span>
+                </div>
+              </button>
+            </section>
+            <div v-if="scheduleLoadingMore" class="schedule-more-loader">
+              <UiLoadingBar size="sm" />
+            </div>
+            <div v-else-if="!scheduleHasMore && scheduleTasks.length" class="schedule-end">Больше событий нет</div>
+            <div v-if="!scheduleTasks.length" class="day-empty">
+              <p>Событий в расписании пока нет.</p>
+            </div>
+          </template>
+        </div>
+        <div v-else class="day-events-layout" :class="{ 'day-events-layout--with-aside': dayEventsUntimed.length > 0 }">
+          <div class="day-events-board">
+            <div ref="dayEventsScrollRef" class="day-events-scroll" :style="{ height: `${dayGridViewportHeight}px` }">
+              <div
+                class="day-events-grid"
+                :style="{ height: `${dayGridHeight}px` }"
+                @click.self="onDayGridClick"
+              >
+                <div
+                  v-for="slot in daySlots.slice(0, -1)"
+                  :key="slot.key"
+                  class="day-grid-line"
+                  :style="{ top: `${dayGridTopPadding + ((slot.minutes - dayStartHour * 60) / daySlotMinutes) * daySlotHeight}px` }"
+                >
+                  <span class="day-grid-time">{{ slot.label }}</span>
+                </div>
+                <article
+                  v-for="event in dayEventsTimed"
+                  :key="event.task.id"
+                  class="day-event-card"
+                  :class="[priorityClass(event.task.priority), { 'day-event-card--completed': event.task.completedAt }]"
+                  :style="{ top: `${event.top}px`, height: `${event.height}px` }"
+                  role="button"
+                  tabindex="0"
+                  @click.stop="openEditTaskModal(event.task)"
+                  @keydown.enter="openEditTaskModal(event.task)"
+                >
+                  <div class="day-event-time">{{ minutesToHhmm(event.start) }}<span v-if="event.task.endTime"> – {{ event.task.endTime }}</span></div>
+                  <div class="day-event-title">{{ event.task.title }}</div>
+                  <div v-if="dayEventAssignees(event.task.id).length" class="day-event-assignees">
+                    <span
+                      v-for="p in dayEventAssignees(event.task.id).slice(0, 3)"
+                      :key="p.id"
+                      class="day-event-assignee-avatar"
+                      :style="assigneeAvatarStyle(p)"
+                      :title="profileLabel(p)"
+                    >
+                      {{ assigneeInitials(p) }}
+                    </span>
+                    <span v-if="dayEventAssignees(event.task.id).length > 3" class="day-event-assignee-more">
+                      +{{ dayEventAssignees(event.task.id).length - 3 }}
+                    </span>
+                  </div>
+                </article>
+                <div
+                  v-if="showNowMarker"
+                  class="day-now-line"
+                  :style="{ top: `${nowMarkerTop}px` }"
+                  aria-hidden="true"
+                >
+                  <span class="day-now-label">{{ nowMarkerLabel }}</span>
                 </div>
               </div>
-              <div class="day-task-meta">
-                <span
-                  class="priority-pill"
-                  :class="{
-                    'priority-pill--high': task.priority === 'high',
-                    'priority-pill--low': task.priority === 'low',
-                  }"
-                >
-                  {{
-                    task.priority === 'high'
-                      ? 'Высокий приоритет'
-                      : task.priority === 'low'
-                        ? 'Низкий приоритет'
-                        : 'Обычный приоритет'
-                  }}
-                </span>
-                <span v-if="task.assignee" class="assignee-pill">
-                  {{ task.assignee }}
-                </span>
-              </div>
             </div>
-          </li>
-        </ul>
+            <div v-if="!tasksForSelectedDate.length" class="day-empty">
+              <p>На этот день событий нет. Кликните на слот сетки или нажмите «Создать событие».</p>
+            </div>
+          </div>
+          <aside v-if="dayEventsUntimed.length" class="day-unscheduled">
+            <div class="day-unscheduled-title">Без времени</div>
+            <button
+              v-for="task in dayEventsUntimed"
+              :key="task.id"
+              type="button"
+              class="day-unscheduled-item"
+              @click="openEditTaskModal(task)"
+            >
+              <span>{{ task.title }}</span>
+              <span class="day-unscheduled-item-meta">{{ task.priority === 'high' ? 'Высокий' : task.priority === 'low' ? 'Низкий' : 'Обычный' }}</span>
+            </button>
+          </aside>
+        </div>
       </section>
     </div>
 
@@ -973,11 +1696,11 @@ async function confirmDeleteTask() {
             </div>
             <div class="modal-header-text">
               <h2 class="modal-title modal-title--design">
-                {{ editingTaskId ? 'Редактирование задачи' : 'Новая задача' }}
+                {{ editingTaskId ? 'Редактирование события' : 'Новое событие' }}
               </h2>
               <p v-if="editingTaskId" class="modal-task-id modal-task-id--design">ID: {{ shortTaskId(editingTaskId) }}</p>
               <p v-else class="modal-subtitle">
-                {{ new Date((taskDate || selectedDate) + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' }) }}
+                {{ new Date((taskStartDate || selectedDate) + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' }) }}
               </p>
             </div>
           </div>
@@ -993,7 +1716,7 @@ async function confirmDeleteTask() {
           <fieldset class="modal-form-fieldset" :disabled="taskSaveLoading">
           <div class="modal-body">
             <label class="modal-field modal-field--design">
-              <span class="modal-label modal-label--design">Название задачи</span>
+              <span class="modal-label modal-label--design">Название события</span>
               <input
                 v-model="taskTitle"
                 type="text"
@@ -1009,14 +1732,14 @@ async function confirmDeleteTask() {
                 v-model="taskDescription"
                 class="modal-textarea modal-textarea--design"
                 rows="4"
-                placeholder="Добавьте детали задачи..."
+                placeholder="Добавьте детали события..."
               />
             </label>
 
-            <!-- Сетка как в макете: Срок выполнения | Приоритет -->
+            <!-- Сетка как в макете: Дата/время начала | Дата/время завершения -->
             <div class="modal-grid-2">
               <label class="modal-field modal-field--design">
-                <span class="modal-label modal-label--design">Срок выполнения</span>
+                <span class="modal-label modal-label--design">Дата и время начала</span>
                 <div class="modal-deadline-row modal-deadline-row--design">
                   <div class="modal-deadline-date">
                     <svg class="modal-input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1025,9 +1748,9 @@ async function confirmDeleteTask() {
                       <line x1="8" x2="8" y1="2" y2="6" />
                       <line x1="3" x2="21" y1="10" y2="10" />
                     </svg>
-                    <input v-model="taskDate" type="date" class="modal-input modal-input--design modal-input--with-icon" />
+                    <input v-model="taskStartDate" type="date" class="modal-input modal-input--design modal-input--with-icon" />
                   </div>
-                  <div class="modal-deadline-time-range">
+                  <div class="modal-deadline-time-range modal-deadline-time-range--single">
                     <div class="modal-deadline-time-start">
                       <svg class="modal-input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="10" />
@@ -1035,19 +1758,134 @@ async function confirmDeleteTask() {
                       </svg>
                       <input v-model="taskStartTime" type="time" class="modal-input modal-input--design modal-input--with-icon" />
                     </div>
-                    <span class="time-separator">–</span>
-                    <input v-model="taskEndTime" type="time" class="modal-input modal-input--design modal-input--time-end" />
                   </div>
                 </div>
               </label>
               <label class="modal-field modal-field--design">
-                <span class="modal-label modal-label--design">Приоритет</span>
-                <select v-model="taskPriority" class="modal-input modal-input--design modal-select modal-select--design">
-                  <option value="normal">Обычный</option>
-                  <option value="high">Высокий</option>
-                  <option value="low">Низкий</option>
-                </select>
+                <span class="modal-label modal-label--design">Дата и время завершения</span>
+                <div class="modal-deadline-row modal-deadline-row--design">
+                  <div class="modal-deadline-date">
+                    <svg class="modal-input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect width="18" height="18" x="3" y="4" rx="2" />
+                      <line x1="16" x2="16" y1="2" y2="6" />
+                      <line x1="8" x2="8" y1="2" y2="6" />
+                      <line x1="3" x2="21" y1="10" y2="10" />
+                    </svg>
+                    <input v-model="taskEndDate" type="date" class="modal-input modal-input--design modal-input--with-icon" />
+                  </div>
+                  <div class="modal-deadline-time-range modal-deadline-time-range--single">
+                    <div class="modal-deadline-time-start">
+                      <svg class="modal-input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 6v6l3 3" />
+                      </svg>
+                      <input v-model="taskEndTime" type="time" class="modal-input modal-input--design modal-input--with-icon" />
+                    </div>
+                  </div>
+                </div>
               </label>
+            </div>
+
+            <label class="modal-field modal-field--design">
+              <span class="modal-label modal-label--design">Приоритет</span>
+              <select v-model="taskPriority" class="modal-input modal-input--design modal-select modal-select--design">
+                <option value="normal">Обычный</option>
+                <option value="high">Высокий</option>
+                <option value="low">Низкий</option>
+              </select>
+            </label>
+
+            <div class="modal-grid-2">
+              <label class="modal-field modal-field--design">
+                <span class="modal-label modal-label--design">Повторяемость</span>
+                <div class="repeat-row">
+                <select v-model="taskRepeatRule" class="modal-input modal-input--design modal-select modal-select--design">
+                  <option value="none">Не повторяется</option>
+                  <option value="daily">Каждый день</option>
+                  <option value="weekly">Каждую неделю</option>
+                  <option value="monthly">Каждый месяц</option>
+                  <option value="yearly">Каждый год</option>
+                </select>
+                <template v-if="taskRepeatRule !== 'none'">
+                  <span class="repeat-inline-label">каждые</span>
+                  <input
+                    v-model.number="taskRepeatEvery"
+                    type="number"
+                    min="1"
+                    max="365"
+                    class="modal-input modal-input--design repeat-every-input"
+                    :disabled="false"
+                  />
+                </template>
+                </div>
+                <Transition name="repeat-reveal">
+                <div v-if="taskRepeatRule === 'weekly'" class="repeat-weekdays">
+                  <label v-for="(d, idx) in weekdaysShort" :key="d" class="repeat-weekday-item">
+                    <input
+                      :checked="taskRepeatWeekDays.includes(idx + 1)"
+                      type="checkbox"
+                      :disabled="false"
+                      @change="
+                        taskRepeatWeekDays = taskRepeatWeekDays.includes(idx + 1)
+                          ? taskRepeatWeekDays.filter((x) => x !== idx + 1)
+                          : [...taskRepeatWeekDays, idx + 1]
+                      "
+                    />
+                    <span>{{ d }}</span>
+                  </label>
+                </div>
+                </Transition>
+              </label>
+              <Transition name="repeat-reveal">
+              <label v-if="taskRepeatRule !== 'none'" class="modal-field modal-field--design">
+                <span class="modal-label modal-label--design">Окончание</span>
+                <div class="repeat-end">
+                  <label class="repeat-end-item">
+                    <input v-model="taskRepeatEndMode" type="radio" value="never" :disabled="taskRepeatRule === 'none'" />
+                    <span>Никогда</span>
+                  </label>
+                  <label class="repeat-end-item">
+                    <input v-model="taskRepeatEndMode" type="radio" value="after" :disabled="taskRepeatRule === 'none'" />
+                    <span>После</span>
+                    <input
+                      v-model.number="taskRepeatCount"
+                      type="number"
+                      min="1"
+                      max="500"
+                      class="modal-input modal-input--design repeat-count-input"
+                      :disabled="taskRepeatRule === 'none' || taskRepeatEndMode !== 'after'"
+                    />
+                    <span>повторений</span>
+                  </label>
+                  <label class="repeat-end-item">
+                    <input v-model="taskRepeatEndMode" type="radio" value="on_date" :disabled="taskRepeatRule === 'none'" />
+                    <span>Дата</span>
+                  </label>
+                </div>
+                <input
+                  v-model="taskRepeatUntil"
+                  type="date"
+                  class="modal-input modal-input--design"
+                  :min="taskStartDate || selectedDate"
+                  :disabled="taskRepeatRule === 'none' || taskRepeatEndMode !== 'on_date'"
+                />
+              </label>
+              </Transition>
+            </div>
+
+            <div v-if="editingTaskId && taskRepeatRule !== 'none'" class="repeat-apply-box">
+              <div class="repeat-apply-title">Как применить изменения повторяемости</div>
+              <label class="repeat-apply-option">
+                <input v-model="taskRepeatApplyMode" type="radio" value="only_this" />
+                <span>Только это событие</span>
+              </label>
+              <label class="repeat-apply-option">
+                <input v-model="taskRepeatApplyMode" type="radio" value="this_and_following" />
+                <span>Это событие и следующие</span>
+              </label>
+              <p class="repeat-apply-hint">
+                При выборе «это и следующие» будут созданы новые встречи по выбранному правилу начиная с текущей даты.
+              </p>
             </div>
 
             <!-- Ответственные: label + кнопка «Добавить» в одну строку, чипы как в макете -->
@@ -1193,7 +2031,7 @@ async function confirmDeleteTask() {
                     <UiLoadingBar size="compact" />
                   </span>
                 </span>
-                <span v-else>{{ editingTaskId ? 'Сохранить изменения' : 'Создать задачу' }}</span>
+                <span v-else>{{ editingTaskId ? 'Сохранить изменения' : 'Создать событие' }}</span>
               </button>
             </div>
           </div>
@@ -1241,6 +2079,17 @@ async function confirmDeleteTask() {
   display: flex;
   flex-direction: column;
   gap: var(--space-xl);
+  font-size: 14px;
+}
+
+.calendar-page :deep(.type-label) {
+  font-size: 0.58rem;
+  letter-spacing: 0.22em;
+}
+
+.calendar-page :deep(.page-title) {
+  font-size: 1.55rem;
+  font-weight: 500;
 }
 
 .calendar-header {
@@ -1257,9 +2106,10 @@ async function confirmDeleteTask() {
 
 .calendar-owner-card {
   margin-top: 16px;
-  max-width: 380px;
-  padding: 16px 18px 18px;
-  border-radius: 16px;
+  width: 272px;
+  max-width: 100%;
+  padding: 10px 11px 11px;
+  border-radius: 12px;
   background: linear-gradient(
     152deg,
     rgba(61, 92, 64, 0.09) 0%,
@@ -1269,18 +2119,11 @@ async function confirmDeleteTask() {
   border: 1px solid rgba(61, 92, 64, 0.14);
 }
 
-.calendar-owner-label-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
 .calendar-owner-icon {
   flex-shrink: 0;
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1289,21 +2132,23 @@ async function confirmDeleteTask() {
 }
 
 .calendar-owner-icon svg {
-  width: 19px;
-  height: 19px;
-}
-
-.calendar-owner-label {
-  margin: 0;
-  font-size: 0.8125rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--agro-dark);
+  width: 14px;
+  height: 14px;
 }
 
 .calendar-owner-select-shell {
   position: relative;
+}
+
+.calendar-owner-icon--inline {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  z-index: 1;
 }
 
 .calendar-owner-select-shell::after {
@@ -1323,12 +2168,12 @@ async function confirmDeleteTask() {
 .calendar-owner-select {
   width: 100%;
   margin: 0;
-  padding: 13px 44px 13px 16px;
-  border-radius: 12px;
+  padding: 8px 34px 8px 40px;
+  border-radius: 9px;
   border: 1px solid rgba(61, 92, 64, 0.13);
   background: #fff;
   color: #1a2422;
-  font-size: 0.9375rem;
+  font-size: 0.74rem;
   font-weight: 600;
   font-family: inherit;
   line-height: 1.3;
@@ -1355,10 +2200,11 @@ async function confirmDeleteTask() {
 
 .calendar-view-hint {
   margin: 14px 0 0;
-  max-width: 380px;
-  padding: 10px 14px;
-  border-radius: 12px;
-  font-size: 0.8125rem;
+  width: 100%;
+  max-width: none;
+  padding: 7px 9px;
+  border-radius: 9px;
+  font-size: 0.68rem;
   color: var(--text-secondary, #5c6560);
   line-height: 1.45;
   background: rgba(61, 92, 64, 0.07);
@@ -1385,15 +2231,52 @@ async function confirmDeleteTask() {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 20px;
-  border-radius: 12px;
+  padding: 8px 14px;
+  border-radius: 10px;
   border: none;
   background: var(--agro);
   color: #fff;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   font-weight: 700;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(61, 92, 64, 0.35);
+}
+
+.calendar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.calendar-view-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+
+.calendar-view-switch-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 6px 9px;
+  border-radius: 8px;
+}
+
+.calendar-view-switch-btn.is-active {
+  color: #fff;
+  background: var(--agro);
+}
+
+.calendar-view-switch-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .calendar-add-btn:hover {
@@ -1401,21 +2284,48 @@ async function confirmDeleteTask() {
 }
 
 .calendar-add-btn-icon {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
 }
 
 .calendar-layout {
   display: grid;
-  grid-template-columns: 380px minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: 272px minmax(0, 1fr);
+  gap: 20px;
   align-items: flex-start;
+}
+
+.calendar-layout--week {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.calendar-card-left {
+  width: 100%;
+}
+
+.mini-calendar-slide-enter-active,
+.mini-calendar-slide-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.mini-calendar-slide-enter-from,
+.mini-calendar-slide-leave-to {
+  opacity: 0;
+  transform: translateX(-14px);
+}
+
+.calendar-layout--manager {
+  margin-top: -10px;
 }
 
 @media (max-width: 900px) {
   .calendar-layout {
     grid-template-columns: 1fr;
     gap: 20px;
+  }
+
+  .day-events-layout {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1774,10 +2684,10 @@ async function confirmDeleteTask() {
 
 .calendar-card {
   background: var(--bg-panel);
-  border-radius: 16px;
+  border-radius: 12px;
   border: 1px solid rgba(0, 0, 0, 0.08);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-  padding: var(--space-lg);
+  padding: 13px;
 }
 
 .calendar-month-header {
@@ -1789,11 +2699,12 @@ async function confirmDeleteTask() {
 
 .month-label {
   font-weight: 600;
+  font-size: 0.84rem;
 }
 
 .month-nav-btn {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
   background: var(--bg-base);
@@ -1801,7 +2712,7 @@ async function confirmDeleteTask() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.1rem;
+  font-size: 0.95rem;
 }
 
 .calendar-grid {
@@ -1811,7 +2722,7 @@ async function confirmDeleteTask() {
 }
 
 .calendar-weekday {
-  font-size: 0.75rem;
+  font-size: 0.58rem;
   text-align: center;
   color: var(--text-secondary);
   padding-bottom: 4px;
@@ -1832,7 +2743,7 @@ async function confirmDeleteTask() {
 }
 
 .calendar-day-number {
-  font-size: 0.9rem;
+  font-size: 0.72rem;
 }
 
 .calendar-day-dot {
@@ -1952,7 +2863,7 @@ async function confirmDeleteTask() {
 
 .week-progress-title {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 0.86rem;
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1978,17 +2889,17 @@ async function confirmDeleteTask() {
 
 .week-progress-range {
   margin: 0 0 8px;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   opacity: 0.9;
 }
 
 .week-progress-count {
   margin: 0 0 10px;
-  font-size: 1.1rem;
+  font-size: 0.95rem;
 }
 
 .week-progress-number {
-  font-size: 1.5rem;
+  font-size: 1.28rem;
   font-weight: 700;
 }
 
@@ -2010,7 +2921,7 @@ async function confirmDeleteTask() {
 .week-progress-labels {
   display: flex;
   justify-content: space-between;
-  font-size: 0.75rem;
+  font-size: 0.67rem;
   opacity: 0.95;
 }
 
@@ -2070,6 +2981,7 @@ async function confirmDeleteTask() {
 
 .calendar-card-right {
   min-height: 260px;
+  padding: 11px;
 }
 
 .day-header {
@@ -2077,17 +2989,17 @@ async function confirmDeleteTask() {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-md);
-  margin-bottom: var(--space-md);
+  margin-bottom: 8px;
 }
 
 .day-title {
-  margin: 4px 0 0;
-  font-size: 1.25rem;
+  margin: 2px 0 0;
+  font-size: 0.9rem;
 }
 
 .day-header-summary {
-  margin: 4px 0 0;
-  font-size: 0.85rem;
+  margin: 2px 0 0;
+  font-size: 0.66rem;
   color: var(--text-secondary);
 }
 
@@ -2159,6 +3071,603 @@ async function confirmDeleteTask() {
 .day-empty {
   padding: var(--space-lg);
   text-align: center;
+  color: var(--text-secondary);
+}
+
+.day-events-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.day-events-layout--with-aside {
+  grid-template-columns: minmax(0, 1fr) 220px;
+}
+
+.day-events-board {
+  border-radius: 14px;
+  background: transparent;
+  padding: 0;
+}
+
+.day-events-grid {
+  position: relative;
+  border-radius: 10px;
+  background: var(--bg-panel);
+  border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+  cursor: crosshair;
+  overflow: hidden;
+}
+
+.day-events-scroll {
+  border-radius: 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.week-view-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
+  touch-action: pan-x pan-y;
+  overscroll-behavior-x: contain;
+}
+
+.week-view-header {
+  display: grid;
+  grid-template-columns: 66px repeat(7, minmax(0, 1fr));
+  align-items: stretch;
+  border: 1px solid color-mix(in srgb, var(--border-color) 90%, transparent);
+  border-radius: 12px;
+  overflow: hidden;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-panel) 90%, #f6f8f7) 0%,
+    color-mix(in srgb, var(--bg-base) 96%, #fff) 100%
+  );
+}
+
+.week-view-header,
+.week-view-scroll {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.week-view-scroll {
+  overflow-x: visible;
+  touch-action: pan-x pan-y;
+}
+
+.week-view-gmt {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
+}
+
+.week-view-day {
+  border: none;
+  background: transparent;
+  border-right: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
+  min-height: 54px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  transition: background-color 0.18s ease, transform 0.18s ease;
+}
+
+.week-view-day:last-child {
+  border-right: none;
+}
+
+.week-view-day:hover {
+  background: color-mix(in srgb, var(--agro) 8%, transparent);
+}
+
+.week-view-day--weekend {
+  background: color-mix(in srgb, var(--agro) 6%, transparent);
+}
+
+.week-view-day-label {
+  font-size: 0.62rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.week-view-day-num {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.18s ease, background-color 0.18s ease;
+}
+
+.week-view-day--today .week-view-day-num {
+  color: #fff;
+  background: var(--agro);
+  box-shadow: 0 2px 6px rgba(45, 90, 61, 0.26);
+}
+
+.week-view-day--selected {
+  background: color-mix(in srgb, var(--agro) 11%, transparent);
+}
+
+.week-view-day--selected .week-view-day-label {
+  color: color-mix(in srgb, var(--agro) 75%, #2f4733);
+}
+
+.week-view-day--selected .week-view-day-num {
+  color: #fff;
+  background: color-mix(in srgb, var(--agro) 88%, #2a4230);
+}
+
+.week-view-grid {
+  overflow: hidden;
+}
+
+.week-view-cols {
+  position: absolute;
+  top: 0;
+  left: 66px;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  pointer-events: none;
+}
+
+.week-view-col {
+  border-right: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
+}
+
+.week-view-col:last-child {
+  border-right: none;
+}
+
+.week-grid-line {
+  left: 66px;
+}
+
+.week-event-card {
+  right: auto;
+  min-width: 0;
+}
+
+.month-view-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.month-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.month-view-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-panel);
+}
+
+.month-view-weekday {
+  font-size: 0.62rem;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 7px 4px;
+  border-right: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
+  background: color-mix(in srgb, var(--bg-base) 90%, #fff);
+}
+
+.month-view-weekday:last-child {
+  border-right: none;
+}
+
+.month-view-cell {
+  min-height: 112px;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
+  background: transparent;
+  text-align: left;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.month-view-cell:nth-child(7n) {
+  border-right: none;
+}
+
+.month-view-cell--muted {
+  opacity: 0.45;
+}
+
+.month-view-cell--today .month-view-date {
+  background: var(--agro);
+  color: #fff;
+}
+
+.month-view-cell--selected {
+  background: color-mix(in srgb, var(--agro) 8%, transparent);
+}
+
+.month-view-cell--weekend {
+  background: color-mix(in srgb, var(--agro) 5%, transparent);
+}
+
+.month-view-cell--weekend.month-view-cell--selected {
+  background: color-mix(in srgb, var(--agro) 11%, transparent);
+}
+
+.month-view-cell--drop-target {
+  background: color-mix(in srgb, #1fa3db 14%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, #1fa3db 52%, transparent);
+}
+
+.month-view-date {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.month-view-events {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.month-view-event-pill {
+  border-radius: 6px;
+  padding: 3px 5px;
+  background: #c9e2f1;
+  color: #1f2937;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  border: 1px solid #b8d9ec;
+  text-align: left;
+  cursor: pointer;
+}
+
+.month-view-event-pill:active {
+  cursor: grabbing;
+}
+
+.month-view-event-title {
+  font-size: 0.62rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.month-view-event-time {
+  font-size: 0.58rem;
+  color: var(--text-secondary);
+}
+
+.month-view-event-more {
+  font-size: 0.6rem;
+  color: var(--text-secondary);
+  padding-left: 2px;
+}
+
+.schedule-view-wrap {
+  max-height: min(68vh, 760px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.schedule-day-group {
+  margin-bottom: 14px;
+  padding-top: 4px;
+}
+
+.schedule-day-head-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.schedule-day-head-wrap::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: color-mix(in srgb, var(--border-color) 80%, transparent);
+  transform: translateY(-50%);
+}
+
+.schedule-day-head {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-base) 92%, #fff);
+  border: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  z-index: 1;
+}
+
+.schedule-item {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--bg-panel);
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.schedule-item-timebox {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.schedule-item-time {
+  font-size: 0.84rem;
+  color: var(--text-primary);
+}
+
+.schedule-item-repeat {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+
+.schedule-item-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.schedule-item-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+  background: #72b2d5;
+}
+
+.schedule-item-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schedule-item-assignees {
+  display: inline-flex;
+  align-items: center;
+}
+
+.schedule-more-loader,
+.schedule-end {
+  padding: 10px 0 6px;
+  text-align: center;
+}
+
+.schedule-end {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.day-grid-line {
+  position: absolute;
+  left: 66px;
+  right: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--border-color) 85%, transparent);
+  pointer-events: none;
+}
+
+.day-grid-time {
+  position: absolute;
+  left: -54px;
+  top: -9px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.day-event-card {
+  position: absolute;
+  left: 72px;
+  right: 10px;
+  border-radius: 10px;
+  border: 1px solid #b8d9ec;
+  background: #c9e2f1;
+  padding: 7px 10px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  box-shadow: 0 6px 14px rgba(107, 144, 168, 0.18);
+}
+
+.day-event-card--completed {
+  opacity: 0.75;
+  filter: grayscale(0.18);
+}
+
+.day-event-time {
+  font-size: 0.7rem;
+  color: #3e4b57;
+  font-weight: 600;
+}
+
+.day-event-title {
+  margin-top: 2px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #1f2d3d;
+}
+
+.priority-normal.day-event-card,
+.priority-normal.month-view-event-pill,
+.priority-normal.schedule-item {
+  background: #c9e2f1;
+  border-color: #b8d9ec;
+}
+
+.priority-high.day-event-card,
+.priority-high.month-view-event-pill,
+.priority-high.schedule-item {
+  background: #f3d5d8;
+  border-color: #eab8bf;
+}
+
+.priority-low.day-event-card,
+.priority-low.month-view-event-pill,
+.priority-low.schedule-item {
+  background: #e9edf1;
+  border-color: #d6dde4;
+}
+
+.schedule-item-dot.priority-high {
+  background: #de8f99;
+}
+
+.schedule-item-dot.priority-low {
+  background: #aeb8c2;
+}
+
+.day-event-assignees {
+  position: absolute;
+  right: 10px;
+  top: 7px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.day-event-assignee-avatar {
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  color: #fff;
+  font-size: 0.5rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: -6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.26);
+}
+
+.day-event-assignee-more {
+  margin-left: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #205670;
+  font-size: 0.5rem;
+  font-weight: 700;
+  padding: 2px 5px;
+}
+
+.day-now-line {
+  position: absolute;
+  left: 76px;
+  right: 0;
+  height: 1px;
+  background: #de5656;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.day-now-label {
+  position: absolute;
+  left: 6px;
+  top: -10px;
+  font-size: 0.68rem;
+  line-height: 1;
+  color: #fff;
+  background: #de5656;
+  border-radius: 4px;
+  padding: 3px 5px;
+  font-weight: 700;
+}
+
+.day-unscheduled {
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-base);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.day-unscheduled-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.day-unscheduled-item {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.day-unscheduled-item-meta {
+  font-size: 0.72rem;
   color: var(--text-secondary);
 }
 
@@ -2625,6 +4134,105 @@ async function confirmDeleteTask() {
   min-width: 0;
 }
 
+.repeat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.repeat-row .modal-select--design {
+  min-width: 220px;
+}
+
+.repeat-inline-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.repeat-every-input {
+  width: 78px;
+  padding: 10px 12px;
+}
+
+.repeat-weekdays {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.repeat-weekday-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.repeat-end {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.repeat-end-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.repeat-count-input {
+  width: 86px;
+  padding: 8px 10px;
+}
+
+.repeat-apply-box {
+  border: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-base) 92%, #fff);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.repeat-apply-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.repeat-apply-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.repeat-apply-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.repeat-reveal-enter-active,
+.repeat-reveal-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.repeat-reveal-enter-from,
+.repeat-reveal-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
 /* Поле приоритета — такое же оформление, как у полей «Срок выполнения» */
 .modal-grid-2 .modal-field--design .modal-select--design {
   width: 100%;
@@ -2652,15 +4260,15 @@ async function confirmDeleteTask() {
 /* Срок выполнения — как в макете: flex gap-2, дата flex-1, время w-32, pl-10 py-2.5 rounded-xl */
 .modal-deadline-row--design {
   display: flex;
+  flex-direction: column;
   align-items: stretch;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .modal-deadline-date {
   position: relative;
-  flex: 1 1 120px;
-  min-width: 120px;
+  width: 100%;
+  min-width: 0;
 }
 
 .modal-deadline-date .modal-input-icon {
@@ -2683,17 +4291,23 @@ async function confirmDeleteTask() {
 
 /* Блок времени: как в макете w-32 (8rem) на каждое поле, pl-10 pr-4 py-2.5 */
 .modal-deadline-time-range {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
+  width: 100%;
   flex-wrap: nowrap;
   gap: 8px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+}
+
+.modal-deadline-time-range--single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .modal-deadline-time-start {
   position: relative;
-  width: 8rem;
-  flex-shrink: 0;
+  width: 100%;
+  min-width: 0;
 }
 
 .modal-deadline-time-start .modal-input-icon {
@@ -2709,9 +4323,11 @@ async function confirmDeleteTask() {
 .modal-deadline-time-start .modal-input {
   width: 100%;
   box-sizing: border-box;
-  padding: 10px 16px 10px 40px;
+  padding: 10px 40px 10px 40px;
   font-size: 0.875rem;
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
 }
 
 .modal-deadline-time-range .time-separator {
@@ -2723,12 +4339,30 @@ async function confirmDeleteTask() {
 }
 
 .modal-deadline-time-range .modal-input--time-end {
-  width: 8rem;
-  flex-shrink: 0;
-  padding: 10px 16px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 40px 10px 14px;
   font-size: 0.875rem;
   font-weight: 500;
   box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal-deadline-time-range input[type='time']::-webkit-calendar-picker-indicator {
+  opacity: 1;
+}
+
+.modal-deadline-time-range input[type='time'] {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: none;
+}
+
+.modal-deadline-time-range input[type='time']::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  width: 0;
+  margin: 0;
+  padding: 0;
 }
 
 .modal-input-wrap {
@@ -3421,6 +5055,162 @@ async function confirmDeleteTask() {
   gap: 10px;
   overflow: visible;
 }
+
+/* Финальный компактный адаптив именно для страницы календаря */
+@media (max-width: 900px) {
+  .calendar-layout--manager {
+    margin-top: 0;
+  }
+
+  .calendar-card-right {
+    padding: 10px;
+  }
+
+  .day-events-scroll {
+    height: min(56vh, 460px) !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .calendar-page :deep(.page-title) {
+    font-size: 1.35rem;
+  }
+
+  .calendar-card-right {
+    padding: 9px;
+  }
+
+  .day-title {
+    font-size: 0.84rem;
+  }
+
+  .day-header-summary {
+    font-size: 0.62rem;
+  }
+
+  .day-grid-time {
+    font-size: 0.68rem;
+  }
+
+  .day-event-card {
+    left: 66px;
+    right: 8px;
+    padding: 6px 8px;
+  }
+
+  .day-event-time {
+    font-size: 0.64rem;
+  }
+
+  .day-event-title {
+    font-size: 0.72rem;
+  }
+
+  .day-event-assignee-avatar {
+    width: 15px;
+    height: 15px;
+    font-size: 0.46rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .calendar-header-actions {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .calendar-view-switch {
+    padding: 3px;
+  }
+
+  .calendar-view-switch-btn {
+    padding: 5px 7px;
+    font-size: 0.68rem;
+  }
+
+  .calendar-add-btn {
+    padding: 7px 10px;
+    font-size: 0.72rem;
+  }
+
+  .calendar-card-right {
+    padding: 8px;
+  }
+
+  .day-events-grid {
+    border-radius: 9px;
+  }
+
+  .day-events-scroll {
+    height: min(54vh, 420px) !important;
+  }
+
+  .week-view-gmt {
+    font-size: 0.56rem;
+  }
+
+  .week-view-day {
+    min-height: 46px;
+  }
+
+  .week-view-day-label {
+    font-size: 0.54rem;
+  }
+
+  .week-view-day-num {
+    font-size: 0.76rem;
+  }
+
+  .week-view-header,
+  .week-view-scroll {
+    width: 820px;
+    min-width: 820px;
+  }
+
+  .month-view-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .month-view-grid {
+    min-width: 760px;
+  }
+}
+
+@media (max-width: 480px) {
+  .calendar-page :deep(.page-title) {
+    font-size: 1.2rem;
+  }
+
+  .calendar-card-right {
+    padding: 7px;
+  }
+
+  .day-grid-line {
+    left: 58px;
+  }
+
+  .day-grid-time {
+    left: -49px;
+    font-size: 0.62rem;
+  }
+
+  .day-event-card {
+    left: 60px;
+    right: 7px;
+    border-radius: 8px;
+    padding: 6px 7px;
+  }
+
+  .day-event-time {
+    font-size: 0.6rem;
+  }
+
+  .day-event-title {
+    font-size: 0.68rem;
+  }
+}
 </style>
 
 <style>
@@ -3466,5 +5256,66 @@ html[data-theme='dark'] .calendar-page .calendar-view-hint {
 
 html[data-theme='dark'] .calendar-page .calendar-view-hint strong {
   color: color-mix(in srgb, #fff 90%, var(--agro-light));
+}
+
+html[data-theme='dark'] .calendar-page .schedule-day-head-wrap::before {
+  background: color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .schedule-day-head {
+  background: color-mix(in srgb, var(--bg-base) 86%, #132119);
+  border-color: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  color: color-mix(in srgb, #fff 82%, var(--agro-light));
+}
+
+html[data-theme='dark'] .calendar-page .priority-normal.day-event-card,
+html[data-theme='dark'] .calendar-page .priority-normal.month-view-event-pill,
+html[data-theme='dark'] .calendar-page .priority-normal.schedule-item {
+  background: #21455b;
+  border-color: #356683;
+}
+
+html[data-theme='dark'] .calendar-page .priority-high.day-event-card,
+html[data-theme='dark'] .calendar-page .priority-high.month-view-event-pill,
+html[data-theme='dark'] .calendar-page .priority-high.schedule-item {
+  background: #5b2e36;
+  border-color: #8a4a56;
+}
+
+html[data-theme='dark'] .calendar-page .priority-low.day-event-card,
+html[data-theme='dark'] .calendar-page .priority-low.month-view-event-pill,
+html[data-theme='dark'] .calendar-page .priority-low.schedule-item {
+  background: #2f3741;
+  border-color: #4d5865;
+}
+
+html[data-theme='dark'] .calendar-page .day-event-time,
+html[data-theme='dark'] .calendar-page .day-event-title,
+html[data-theme='dark'] .calendar-page .month-view-event-title,
+html[data-theme='dark'] .calendar-page .schedule-item-time,
+html[data-theme='dark'] .calendar-page .schedule-item-title {
+  color: #eef6ff;
+}
+
+html[data-theme='dark'] .calendar-page .month-view-event-time,
+html[data-theme='dark'] .calendar-page .schedule-item-repeat {
+  color: color-mix(in srgb, #fff 72%, #9fb7cc);
+}
+
+html[data-theme='dark'] .calendar-page .schedule-item-dot.priority-normal {
+  background: #79bfeb;
+}
+
+html[data-theme='dark'] .calendar-page .schedule-item-dot.priority-high {
+  background: #f1a2ad;
+}
+
+html[data-theme='dark'] .calendar-page .schedule-item-dot.priority-low {
+  background: #b8c1cb;
+}
+
+html[data-theme='dark'] .calendar-page .day-event-assignee-more {
+  background: rgba(8, 18, 28, 0.85);
+  color: #d8e6f5;
 }
 </style>

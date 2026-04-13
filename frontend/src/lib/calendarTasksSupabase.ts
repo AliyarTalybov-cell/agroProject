@@ -29,6 +29,13 @@ const ASSIGNEES_TABLE = 'calendar_task_assignees'
 const FILES_TABLE = 'calendar_task_files'
 const FILES_BUCKET = 'task-attachments'
 
+export type LoadCalendarTasksPageArgs = {
+  userId: string | null
+  fromDate?: string | null
+  page: number
+  pageSize: number
+}
+
 /** Задачи календаря: созданные пользователем или где он в исполнителях */
 export async function loadCalendarTasks(userId: string | null): Promise<CalendarTaskRow[]> {
   if (!supabase) return []
@@ -74,6 +81,55 @@ export async function loadCalendarTasks(userId: string | null): Promise<Calendar
     if (d !== 0) return d
     return (a.start_time ?? '').localeCompare(b.start_time ?? '')
   })
+}
+
+export async function loadCalendarTasksPage(args: LoadCalendarTasksPageArgs): Promise<CalendarTaskRow[]> {
+  if (!supabase) return []
+  const safePage = Math.max(1, Math.floor(args.page))
+  const safePageSize = Math.min(100, Math.max(1, Math.floor(args.pageSize)))
+  const from = (safePage - 1) * safePageSize
+  const to = from + safePageSize - 1
+  const columns =
+    'id, user_id, date, title, description, start_time, end_time, priority, assignee, completed_at, created_at, updated_at'
+
+  if (!args.userId) {
+    let q = supabase
+      .from(TABLE)
+      .select(columns)
+      .order('date', { ascending: true })
+      .order('start_time', { ascending: true, nullsFirst: false })
+      .range(from, to)
+    if (args.fromDate) q = q.gte('date', args.fromDate)
+    const { data, error } = await q
+    if (error) throw error
+    return (data ?? []) as CalendarTaskRow[]
+  }
+
+  const { data: assigneeRows, error: assigneeError } = await supabase
+    .from(ASSIGNEES_TABLE)
+    .select('task_id')
+    .eq('user_id', args.userId)
+  if (assigneeError) throw assigneeError
+  const ids = (assigneeRows ?? []).map((r) => r.task_id).filter(Boolean)
+
+  let q = supabase
+    .from(TABLE)
+    .select(columns)
+    .order('date', { ascending: true })
+    .order('start_time', { ascending: true, nullsFirst: false })
+    .range(from, to)
+  if (args.fromDate) q = q.gte('date', args.fromDate)
+
+  if (ids.length > 0) {
+    const idsExpr = ids.join(',')
+    q = q.or(`user_id.eq.${args.userId},id.in.(${idsExpr})`)
+  } else {
+    q = q.eq('user_id', args.userId)
+  }
+
+  const { data, error } = await q
+  if (error) throw error
+  return (data ?? []) as CalendarTaskRow[]
 }
 
 export async function loadTaskAssignees(taskId: string): Promise<string[]> {
