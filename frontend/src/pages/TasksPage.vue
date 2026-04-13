@@ -1596,7 +1596,7 @@ async function confirmDeleteTask() {
               </button>
             </section>
             <div v-if="scheduleLoadingMore" class="schedule-more-loader">
-              <UiLoadingBar size="sm" />
+              <UiLoadingBar size="compact" />
             </div>
             <div v-else-if="!scheduleHasMore && scheduleTasks.length" class="schedule-end">Больше событий нет</div>
             <div v-if="!scheduleTasks.length" class="day-empty">
@@ -1841,11 +1841,11 @@ async function confirmDeleteTask() {
                 <span class="modal-label modal-label--design">Окончание</span>
                 <div class="repeat-end">
                   <label class="repeat-end-item">
-                    <input v-model="taskRepeatEndMode" type="radio" value="never" :disabled="taskRepeatRule === 'none'" />
+                    <input v-model="taskRepeatEndMode" type="radio" value="never" />
                     <span>Никогда</span>
                   </label>
                   <label class="repeat-end-item">
-                    <input v-model="taskRepeatEndMode" type="radio" value="after" :disabled="taskRepeatRule === 'none'" />
+                    <input v-model="taskRepeatEndMode" type="radio" value="after" />
                     <span>После</span>
                     <input
                       v-model.number="taskRepeatCount"
@@ -1853,12 +1853,12 @@ async function confirmDeleteTask() {
                       min="1"
                       max="500"
                       class="modal-input modal-input--design repeat-count-input"
-                      :disabled="taskRepeatRule === 'none' || taskRepeatEndMode !== 'after'"
+                      :disabled="taskRepeatEndMode !== 'after'"
                     />
                     <span>повторений</span>
                   </label>
                   <label class="repeat-end-item">
-                    <input v-model="taskRepeatEndMode" type="radio" value="on_date" :disabled="taskRepeatRule === 'none'" />
+                    <input v-model="taskRepeatEndMode" type="radio" value="on_date" />
                     <span>Дата</span>
                   </label>
                 </div>
@@ -1867,7 +1867,7 @@ async function confirmDeleteTask() {
                   type="date"
                   class="modal-input modal-input--design"
                   :min="taskStartDate || selectedDate"
-                  :disabled="taskRepeatRule === 'none' || taskRepeatEndMode !== 'on_date'"
+                  :disabled="taskRepeatEndMode !== 'on_date'"
                 />
               </label>
               </Transition>
