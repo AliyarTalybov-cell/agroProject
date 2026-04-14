@@ -192,6 +192,16 @@ export async function updateTaskAssigneeStatus(
   if (error) throw error
 }
 
+export async function removeTaskAssignee(taskId: string, userId: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase
+    .from(ASSIGNEES_TABLE)
+    .delete()
+    .eq('task_id', taskId)
+    .eq('user_id', userId)
+  if (error) throw error
+}
+
 export async function insertCalendarTask(
   payload: {
     user_id: string | null

@@ -6,6 +6,7 @@ import {
   loadCalendarTasksPage,
   loadTaskAssignees,
   updateTaskAssigneeStatus,
+  removeTaskAssignee,
   loadTaskFiles,
   uploadTaskFile,
   deleteTaskFile,
@@ -401,6 +402,11 @@ const canEditCurrentTask = computed(() => {
   return canManageTask(editingTask.value)
 })
 
+const canDeleteCurrentTask = computed(() => {
+  if (!editingTaskId.value) return false
+  return canDeleteForAll.value || canDeleteOnlyForMe.value
+})
+
 const deleteSeriesCandidates = computed(() => {
   const base = editingTask.value
   if (!base) return [] as CalendarTask[]
@@ -426,12 +432,23 @@ const canDeleteOnlyForMe = computed(() => {
   const me = myUserId.value
   const task = editingTask.value
   if (!me || !task) return false
-  if (isManager.value) return false
-  if (task.userId === me) return false
-  return taskAssignees.value.includes(me) && taskAssignees.value.length > 1
+  if (currentTaskParticipationStatus.value !== 'declined') return false
+  const hasAssigneeRecord = taskAssignees.value.includes(me)
+  const hasParticipationStatus = currentTaskParticipationStatus.value !== null
+  return (hasAssigneeRecord || hasParticipationStatus) && taskAssignees.value.length > 1
 })
 
-const showDeleteAudienceChoice = computed(() => taskAssignees.value.length > 1 && !isManager.value)
+const canDeleteForAll = computed(() => {
+  const me = myUserId.value
+  const task = editingTask.value
+  if (!me || !task) return false
+  if (isManager.value) return true
+  return task.userId === me
+})
+
+const showDeleteAudienceChoice = computed(
+  () => taskAssignees.value.length > 1 && (canDeleteForAll.value || canDeleteOnlyForMe.value),
+)
 const currentTaskParticipationStatus = computed<CalendarTaskAssigneeStatus | null>(() => {
   const me = myUserId.value
   const task = editingTask.value
@@ -440,25 +457,26 @@ const currentTaskParticipationStatus = computed<CalendarTaskAssigneeStatus | nul
   return byUser[me] ?? null
 })
 
-const taskAssigneesByStatus = computed(() => {
-  const accepted: string[] = []
-  const pending: string[] = []
-  const declined: string[] = []
-  const task = editingTask.value
-  const statusMap = (task ? taskAssigneeStatusByTaskId.value[task.id] : undefined) ?? {}
-  for (const uid of taskAssignees.value) {
-    const status = statusMap[uid] ?? 'pending'
-    if (status === 'accepted') accepted.push(uid)
-    else if (status === 'declined') declined.push(uid)
-    else pending.push(uid)
-  }
-  return { accepted, pending, declined }
+const modalTaskOwnerLabel = computed(() => {
+  const ownerId = editingTask.value?.userId ?? effectiveCalendarUserId.value ?? myUserId.value
+  if (!ownerId) return 'Не указан'
+  const profile = profileById(ownerId)
+  if (profile) return profileLabel(profile)
+  if (ownerId === myUserId.value) return 'Вы'
+  return ownerId
 })
 
-const activeAssigneeIds = computed(() => [
-  ...taskAssigneesByStatus.value.accepted,
-  ...taskAssigneesByStatus.value.pending,
-])
+function assigneeStatusForModal(uid: string): CalendarTaskAssigneeStatus {
+  const task = editingTask.value
+  const map = (task ? taskAssigneeStatusByTaskId.value[task.id] : undefined) ?? {}
+  return map[uid] ?? 'pending'
+}
+
+function assigneeStatusLabel(status: CalendarTaskAssigneeStatus): string {
+  if (status === 'accepted') return 'Принял'
+  if (status === 'declined') return 'Отказался'
+  return 'Ожидает'
+}
 
 const scheduleGroups = computed(() => {
   const map = new Map<string, CalendarTask[]>()
@@ -1329,14 +1347,14 @@ async function deleteTask(id: string) {
 }
 
 function openDeleteConfirm() {
-  if (!canEditCurrentTask.value) {
+  if (!canDeleteCurrentTask.value) {
     successModalTitle.value = 'Недостаточно прав'
-    successModalMessage.value = 'Удалять событие может только его постановщик или руководитель.'
+    successModalMessage.value = 'Удалять событие может руководитель, постановщик или участник события (только у себя).'
     successModalOpen.value = true
     return
   }
   deleteScope.value = 'only_this'
-  deleteAudienceScope.value = 'all'
+  deleteAudienceScope.value = canDeleteForAll.value ? 'all' : 'only_me'
   showDeleteConfirm.value = true
 }
 
@@ -1348,19 +1366,24 @@ async function confirmDeleteTask() {
   const currentId = editingTaskId.value
   const currentTask = editingTask.value
   if (!currentId || !currentTask) return
-  if (!canEditCurrentTask.value) {
+  if (!canDeleteCurrentTask.value) {
     closeDeleteConfirm()
     successModalTitle.value = 'Недостаточно прав'
-    successModalMessage.value = 'Удалять событие может только его постановщик или руководитель.'
+    successModalMessage.value = 'Удалять событие может руководитель, постановщик или участник события (только у себя).'
     successModalOpen.value = true
     return
   }
   deleteInProgress.value = true
   try {
     if (deleteAudienceScope.value === 'only_me' && canDeleteOnlyForMe.value && myUserId.value) {
-      await updateTaskAssigneeStatus(currentId, myUserId.value, 'declined')
+      // "Удалить только у меня" после отказа: убираем связь участника, чтобы слот пропал из моего календаря.
+      await removeTaskAssignee(currentId, myUserId.value)
       await loadTasksFromDb()
       if (isScheduleView.value) await loadSchedulePage(false)
+    } else if (deleteAudienceScope.value === 'all' && !canDeleteForAll.value) {
+      successModalTitle.value = 'Недостаточно прав'
+      successModalMessage.value = 'Удалять у всех может только постановщик события или руководитель.'
+      successModalOpen.value = true
     } else if (deleteScope.value === 'this_and_following' && canDeleteAsSeries.value) {
       const ids = deleteSeriesCandidates.value
         .filter((t) => t.date >= currentTask.date)
@@ -1896,7 +1919,8 @@ async function confirmDeleteTask() {
                 {{ editingTaskId ? 'Редактирование события' : 'Новое событие' }}
               </h2>
               <p v-if="editingTaskId" class="modal-task-id modal-task-id--design">ID: {{ shortTaskId(editingTaskId) }}</p>
-              <p v-else class="modal-subtitle">
+              <p class="modal-task-owner modal-task-owner--design">Постановщик: {{ modalTaskOwnerLabel }}</p>
+              <p v-if="!editingTaskId" class="modal-subtitle">
                 {{ new Date((taskStartDate || selectedDate) + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' }) }}
               </p>
             </div>
@@ -2040,32 +2064,35 @@ async function confirmDeleteTask() {
                   <label class="repeat-end-item">
                     <input v-model="taskRepeatEndMode" type="radio" value="never" />
                     <span>Никогда</span>
+                    <span class="repeat-end-spacer" aria-hidden="true"></span>
                   </label>
-                  <label class="repeat-end-item">
+                  <label class="repeat-end-item repeat-end-item--after">
                     <input v-model="taskRepeatEndMode" type="radio" value="after" />
                     <span>После</span>
-                    <input
-                      v-model.number="taskRepeatCount"
-                      type="number"
-                      min="1"
-                      max="500"
-                      class="modal-input modal-input--design repeat-count-input"
-                      :disabled="taskRepeatEndMode !== 'after'"
-                    />
-                    <span>повторений</span>
+                    <span class="repeat-end-inline">
+                      <input
+                        v-model.number="taskRepeatCount"
+                        type="number"
+                        min="1"
+                        max="500"
+                        class="modal-input modal-input--design repeat-count-input"
+                        :disabled="taskRepeatEndMode !== 'after'"
+                      />
+                      <span>повторений</span>
+                    </span>
                   </label>
-                  <label class="repeat-end-item">
+                  <label class="repeat-end-item repeat-end-item--date">
                     <input v-model="taskRepeatEndMode" type="radio" value="on_date" />
                     <span>Дата</span>
+                    <input
+                      v-model="taskRepeatUntil"
+                      type="date"
+                      class="modal-input modal-input--design repeat-date-input"
+                      :min="taskStartDate || selectedDate"
+                      :disabled="taskRepeatEndMode !== 'on_date'"
+                    />
                   </label>
                 </div>
-                <input
-                  v-model="taskRepeatUntil"
-                  type="date"
-                  class="modal-input modal-input--design"
-                  :min="taskStartDate || selectedDate"
-                  :disabled="taskRepeatEndMode !== 'on_date'"
-                />
               </label>
               </Transition>
             </div>
@@ -2145,7 +2172,7 @@ async function confirmDeleteTask() {
               </div>
               <div class="modal-chips modal-chips--design">
                 <div
-                  v-for="uid in activeAssigneeIds"
+                  v-for="uid in taskAssignees"
                   :key="uid"
                   class="modal-chip modal-chip--design"
                 >
@@ -2154,40 +2181,11 @@ async function confirmDeleteTask() {
                     :style="profileById(uid) ? assigneeAvatarStyle(profileById(uid)!) : undefined"
                   >{{ profileById(uid) ? assigneeInitials(profileById(uid)!) : '?' }}</span>
                   <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
+                  <span
+                    class="modal-chip-status"
+                    :class="`modal-chip-status--${assigneeStatusForModal(uid)}`"
+                  >{{ assigneeStatusLabel(assigneeStatusForModal(uid)) }}</span>
                   <button type="button" class="modal-chip-remove" aria-label="Убрать" @click="removeAssignee(uid)">×</button>
-                </div>
-              </div>
-              <div v-if="editingTaskId" class="assignee-status-board">
-                <div class="assignee-status-column">
-                  <div class="assignee-status-title">Приняли</div>
-                  <div v-if="taskAssigneesByStatus.accepted.length" class="assignee-status-list">
-                    <span v-for="uid in taskAssigneesByStatus.accepted" :key="`accepted-${uid}`" class="assignee-status-chip">
-                      {{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}
-                    </span>
-                  </div>
-                  <div v-else class="assignee-status-empty">Пока нет</div>
-                </div>
-                <div class="assignee-status-column">
-                  <div class="assignee-status-title">Ожидают ответ</div>
-                  <div v-if="taskAssigneesByStatus.pending.length" class="assignee-status-list">
-                    <span v-for="uid in taskAssigneesByStatus.pending" :key="`pending-${uid}`" class="assignee-status-chip">
-                      {{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}
-                    </span>
-                  </div>
-                  <div v-else class="assignee-status-empty">Пусто</div>
-                </div>
-                <div class="assignee-status-column assignee-status-column--declined">
-                  <div class="assignee-status-title">Отказались</div>
-                  <div v-if="taskAssigneesByStatus.declined.length" class="assignee-status-list">
-                    <span
-                      v-for="uid in taskAssigneesByStatus.declined"
-                      :key="`declined-${uid}`"
-                      class="assignee-status-chip assignee-status-chip--declined"
-                    >
-                      {{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}
-                    </span>
-                  </div>
-                  <div v-else class="assignee-status-empty">Нет отказов</div>
                 </div>
               </div>
             </div>
@@ -2204,6 +2202,11 @@ async function confirmDeleteTask() {
                   </button>
                   <button type="button" class="modal-btn modal-btn--design" @click="setMyParticipationStatus('accepted')">
                     Принять
+                  </button>
+                </div>
+                <div v-else-if="currentTaskParticipationStatus === 'accepted'" class="participation-actions">
+                  <button type="button" class="modal-btn-ghost modal-btn-ghost--design" @click="setMyParticipationStatus('declined')">
+                    Отказаться
                   </button>
                 </div>
                 <div v-else-if="currentTaskParticipationStatus === 'declined'" class="participation-actions">
@@ -2227,7 +2230,14 @@ async function confirmDeleteTask() {
                   class="modal-file-card modal-file-card--design"
                 >
                   <div class="modal-file-icon-box">
-                    <svg v-if="/\.pdf$/i.test(f.file_name)" class="modal-file-icon-pdf" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <img
+                      v-if="/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(f.file_name)"
+                      class="modal-file-thumb"
+                      :src="getTaskFilePublicUrl(f.file_path)"
+                      :alt="f.file_name"
+                      loading="lazy"
+                    />
+                    <svg v-else-if="/\.pdf$/i.test(f.file_name)" class="modal-file-icon-pdf" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                       <path d="M14 2v6h6" />
                       <path d="M9 13h6" />
@@ -2269,7 +2279,7 @@ async function confirmDeleteTask() {
           <!-- Подвал по макету: bg-gray-50, border-t, Удалить слева, Отмена + Сохранить справа -->
           <div class="modal-actions modal-actions--design">
             <UiDeleteButton
-              v-if="editingTaskId && canEditCurrentTask"
+              v-if="editingTaskId && canDeleteCurrentTask"
               size="md"
               wide
               :disabled="taskSaveLoading"
@@ -2310,16 +2320,16 @@ async function confirmDeleteTask() {
         </p>
         <div v-if="showDeleteAudienceChoice" class="delete-scope-box">
           <div class="delete-scope-caption">Область удаления</div>
-          <label class="delete-scope-option">
-            <input v-model="deleteAudienceScope" type="radio" value="all" />
+          <label class="delete-scope-option" :class="{ 'is-disabled': !canDeleteForAll }">
+            <input v-model="deleteAudienceScope" type="radio" value="all" :disabled="!canDeleteForAll" />
             <span>Удалить у всех участников</span>
           </label>
           <label class="delete-scope-option" :class="{ 'is-disabled': !canDeleteOnlyForMe }">
             <input v-model="deleteAudienceScope" type="radio" value="only_me" :disabled="!canDeleteOnlyForMe" />
             <span>Удалить только у меня</span>
           </label>
-          <p v-if="!canDeleteOnlyForMe" class="delete-scope-note">
-            Этот вариант доступен только приглашенному участнику (не постановщику события).
+          <p v-if="!canDeleteForAll || !canDeleteOnlyForMe" class="delete-scope-note">
+            Удалить у всех может только постановщик или руководитель. Удалить у себя можно только после отказа от участия.
           </p>
         </div>
         <div v-if="canDeleteAsSeries" class="delete-scope-box">
@@ -2900,12 +2910,12 @@ async function confirmDeleteTask() {
   /* Модалка задачи: компактный вид на маленьких экранах */
   .modal-backdrop {
     padding: var(--space-sm);
-    align-items: flex-end;
+    align-items: center;
   }
 
   .modal-backdrop .modal {
     max-height: 85vh;
-    border-radius: 20px 20px 0 0;
+    border-radius: 12px;
   }
 
   .modal-header {
@@ -2929,6 +2939,7 @@ async function confirmDeleteTask() {
   .modal-actions.modal-actions--design {
     flex-direction: column;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .modal-actions.modal-actions--design .modal-actions-right {
@@ -4191,26 +4202,27 @@ async function confirmDeleteTask() {
 .modal-backdrop .modal {
   width: 100%;
   max-width: 672px;
-  max-height: 80vh;
-  overflow-y: auto;
+  max-height: 90vh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
-  border-radius: 24px;
+  border-radius: 12px;
   border: 1px solid var(--border-color);
-  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
 }
 
 .modal-calendar {
+  width: min(calc(100vw - 48px), 672px);
   max-width: 672px;
 }
 
 .modal-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-md);
-  padding: 24px 32px;
+  padding: var(--space-md) var(--space-lg);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -4233,8 +4245,8 @@ async function confirmDeleteTask() {
 
 .modal-title {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 700;
+  font-size: 1.125rem;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
@@ -4253,6 +4265,13 @@ async function confirmDeleteTask() {
   letter-spacing: 0.05em;
 }
 
+.modal-task-owner {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
 .modal-subtitle {
   margin: 0;
   font-size: 0.85rem;
@@ -4260,28 +4279,28 @@ async function confirmDeleteTask() {
 }
 
 .modal-close {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border: none;
-  border-radius: 50%;
+  border-radius: 8px;
   background: transparent;
-  font-size: 1.4rem;
   cursor: pointer;
   color: var(--text-secondary);
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition: color 0.2s ease, background 0.2s ease;
 }
 
 .modal-close:hover {
-  background: var(--bg-base);
+  background: var(--sidebar-hover-bg);
   color: var(--text-primary);
 }
 
 /* Макет: шапка */
 .modal-header--design {
-  padding: 24px 32px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .modal-icon--design {
@@ -4293,7 +4312,7 @@ async function confirmDeleteTask() {
 }
 
 .modal-title--design {
-  font-size: 1.25rem;
+  font-size: 1.125rem;
   font-weight: 700;
 }
 
@@ -4303,6 +4322,11 @@ async function confirmDeleteTask() {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.modal-task-owner--design {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
 }
 
 .modal-close--design {
@@ -4316,39 +4340,60 @@ async function confirmDeleteTask() {
 
 /* Макет: поля */
 .modal-field--design {
-  gap: 8px;
+  gap: 6px;
 }
 
 .modal-label--design {
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--text-primary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+  color: var(--text-secondary);
 }
 
 .modal-input--title {
   font-weight: 600;
-  font-size: 1.125rem;
+  font-size: 1rem;
 }
 
 .modal-input--design,
 .modal-textarea--design {
-  padding: 12px 16px;
-  background: var(--bg-base);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: var(--bg-panel);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
-  font-size: 0.875rem;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  font-family: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.modal-input--design,
+.modal-select--design {
+  height: 44px;
+}
+
+.modal-input--design:focus,
+.modal-textarea--design:focus,
+.modal-select--design:focus {
+  outline: none;
+  border-color: var(--agro);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--agro) 20%, transparent);
 }
 
 .modal-textarea--design {
   resize: vertical;
-  min-height: 96px;
-  line-height: 1.5;
+  min-height: 100px;
 }
 
 .modal-grid-2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px;
+  gap: var(--space-md);
   align-items: start;
 }
 
@@ -4397,20 +4442,59 @@ async function confirmDeleteTask() {
 .repeat-end {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
+  align-items: flex-start;
+  width: 100%;
 }
 
 .repeat-end-item {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 20px 60px minmax(0, 1fr);
+  justify-content: start;
   align-items: center;
-  gap: 10px;
-  font-size: 0.82rem;
+  column-gap: 0;
+  font-size: 0.78rem;
   color: var(--text-secondary);
+  width: 100%;
+  min-width: 0;
 }
 
 .repeat-count-input {
-  width: 86px;
-  padding: 8px 10px;
+  width: 132px;
+  min-width: 132px;
+  padding: 6px 8px;
+}
+
+.repeat-end-item--after {
+  grid-template-columns: 20px 60px auto;
+}
+
+.repeat-end-item--date {
+  grid-template-columns: 20px 60px auto;
+}
+
+.repeat-date-input {
+  width: 150px;
+  min-width: 150px;
+  padding: 6px 8px;
+}
+
+.repeat-end-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+}
+
+.repeat-end-inline > span {
+  white-space: nowrap;
+  margin-left: 6px;
+}
+
+.repeat-end-spacer {
+  display: inline-block;
+  width: 1px;
+  height: 1px;
 }
 
 .repeat-apply-box {
@@ -4459,13 +4543,13 @@ async function confirmDeleteTask() {
 .modal-grid-2 .modal-field--design .modal-select--design {
   width: 100%;
   box-sizing: border-box;
-  padding: 10px 16px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  min-height: 42px;
-  background: var(--bg-base);
+  padding: 10px 12px;
+  font-size: 0.9375rem;
+  font-weight: 400;
+  min-height: 44px;
+  background: var(--bg-panel);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: 8px;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
@@ -4506,9 +4590,9 @@ async function confirmDeleteTask() {
 .modal-deadline-date .modal-input {
   width: 100%;
   box-sizing: border-box;
-  padding: 10px 16px 10px 40px;
-  font-size: 0.875rem;
-  font-weight: 500;
+  padding: 10px 12px 10px 40px;
+  font-size: 0.9375rem;
+  font-weight: 400;
 }
 
 /* Блок времени: как в макете w-32 (8rem) на каждое поле, pl-10 pr-4 py-2.5 */
@@ -4545,9 +4629,9 @@ async function confirmDeleteTask() {
 .modal-deadline-time-start .modal-input {
   width: 100%;
   box-sizing: border-box;
-  padding: 10px 40px 10px 40px;
-  font-size: 0.875rem;
-  font-weight: 500;
+  padding: 10px 12px 10px 40px;
+  font-size: 0.9375rem;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
   min-width: 0;
 }
@@ -4563,9 +4647,9 @@ async function confirmDeleteTask() {
 .modal-deadline-time-range .modal-input--time-end {
   width: 100%;
   min-width: 0;
-  padding: 10px 40px 10px 14px;
-  font-size: 0.875rem;
-  font-weight: 500;
+  padding: 10px 12px 10px 14px;
+  font-size: 0.9375rem;
+  font-weight: 400;
   box-sizing: border-box;
   font-variant-numeric: tabular-nums;
 }
@@ -4664,7 +4748,7 @@ async function confirmDeleteTask() {
 .modal-chip--design {
   padding: 6px 12px 6px 6px;
   border-radius: 9999px;
-  background: var(--bg-panel);
+  background: #fff;
   border: 1px solid var(--border-color);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
@@ -4712,7 +4796,7 @@ async function confirmDeleteTask() {
   line-height: 1.3;
   border-radius: 999px;
   padding: 3px 8px;
-  background: var(--bg-panel);
+  background: #fff;
   border: 1px solid var(--border-color);
   white-space: nowrap;
   overflow: hidden;
@@ -4763,6 +4847,14 @@ async function confirmDeleteTask() {
   align-items: center;
   justify-content: center;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+}
+
+.modal-file-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .modal-file-icon-pdf {
@@ -4817,13 +4909,15 @@ async function confirmDeleteTask() {
 
 /* Подвал по макету: серый фон */
 .modal-actions--design {
-  padding: 24px 32px;
-  background: var(--bg-base);
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-panel-hover);
+  border-top: 1px solid var(--border-color);
   justify-content: space-between;
-  flex-wrap: wrap;
+  flex-direction: row-reverse;
+  flex-wrap: nowrap;
   gap: 12px;
   overflow: visible;
+  border-radius: 0 0 12px 12px;
 }
 
 .modal-actions-right {
@@ -4833,30 +4927,30 @@ async function confirmDeleteTask() {
 }
 
 .modal-btn-ghost--design {
-  padding: 10px 24px;
-  border-radius: 12px;
-  font-weight: 700;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-weight: 600;
   font-size: 0.875rem;
   color: var(--text-secondary);
-  background: transparent;
-  border: none;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
 }
 
 .modal-btn-ghost--design:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--sidebar-hover-bg);
   color: var(--text-primary);
 }
 
 .modal-btn--design {
-  padding: 10px 32px;
-  border-radius: 12px;
+  padding: 10px 18px;
+  border-radius: 8px;
   font-weight: 700;
   font-size: 0.875rem;
-  box-shadow: 0 2px 8px rgba(61, 92, 64, 0.35);
+  box-shadow: none;
 }
 
 .modal-btn--design:hover {
-  box-shadow: 0 4px 12px rgba(61, 92, 64, 0.4);
+  box-shadow: none;
 }
 
 .modal-form {
@@ -4869,15 +4963,19 @@ async function confirmDeleteTask() {
 .modal-form--design {
   padding: 0;
   gap: 0;
+  flex: 1;
+  min-height: 0;
 }
 
 .modal-body {
   flex: 1;
   overflow-y: auto;
-  padding: 32px;
+  padding: var(--space-lg);
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-lg);
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .modal-field {
@@ -4887,9 +4985,11 @@ async function confirmDeleteTask() {
 }
 
 .modal-label {
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--text-primary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
 }
 
 .modal-label-row {
@@ -5030,6 +5130,11 @@ async function confirmDeleteTask() {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
+/* Фикс: базовый .modal-chip объявлен ниже и перебивал дизайн-версию */
+.modal-chip.modal-chip--design {
+  background: #fff;
+}
+
 .modal-chip-avatar {
   width: 24px;
   height: 24px;
@@ -5045,6 +5150,29 @@ async function confirmDeleteTask() {
 
 .modal-chip-label {
   color: var(--text-primary);
+}
+
+.modal-chip-status {
+  font-size: 0.65rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 7px;
+  line-height: 1.2;
+}
+
+.modal-chip-status--accepted {
+  background: rgba(34, 197, 94, 0.16);
+  color: #166534;
+}
+
+.modal-chip-status--pending {
+  background: rgba(245, 158, 11, 0.18);
+  color: #92400e;
+}
+
+.modal-chip-status--declined {
+  background: rgba(239, 68, 68, 0.16);
+  color: #991b1b;
 }
 
 .modal-chip-remove {
@@ -5278,6 +5406,11 @@ async function confirmDeleteTask() {
   padding: 0;
   margin: 0;
   min-width: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .modal-form-fieldset:disabled {
@@ -5294,6 +5427,149 @@ async function confirmDeleteTask() {
   display: inline-flex;
   transform: scale(0.9);
   transform-origin: center;
+}
+
+/* Финальные приоритетные стили модалки календаря (чтобы не перебивались базовыми .modal-*) */
+.modal-calendar {
+  overflow-y: auto;
+  height: min(90vh, 920px);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-calendar .modal-form--design {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.modal-calendar .modal-form-fieldset {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.modal-calendar .modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.modal-calendar .modal-input.modal-input--design,
+.modal-calendar .modal-select.modal-select--design,
+.modal-calendar .modal-textarea.modal-textarea--design {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+
+.modal-calendar .modal-input.modal-input--design,
+.modal-calendar .modal-select.modal-select--design {
+  height: 44px;
+}
+
+.modal-calendar .repeat-end-item .repeat-count-input,
+.modal-calendar .repeat-end-item .repeat-date-input {
+  width: 150px;
+  min-width: 150px;
+  flex: 0 0 150px;
+  height: 44px;
+}
+
+.modal-calendar .repeat-apply-box,
+.modal-calendar .assignee-status-column {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.modal-calendar .repeat-apply-box {
+  padding: 12px;
+  gap: 10px;
+}
+
+.modal-calendar .participation-box {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+}
+
+.modal-calendar .assignee-status-chip {
+  background: #fff;
+}
+
+.modal-calendar .modal-attach-placeholder--design {
+  min-height: 56px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.modal-calendar .modal-actions.modal-actions--design {
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-panel-hover);
+  border-top: 1px solid var(--border-color);
+  border-radius: 0 0 12px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-direction: row;
+  gap: 12px;
+}
+
+.modal-calendar .modal-actions-right {
+  margin-left: auto;
+}
+
+.modal-calendar .modal-btn-ghost.modal-btn-ghost--design {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.modal-calendar .modal-btn.modal-btn--design {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: none;
+  background: var(--agro);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.modal-calendar .modal-btn.modal-btn--design:hover {
+  background: var(--agro-dark);
+}
+
+.modal-calendar .modal-actions :deep(.ui-delete-btn) {
+  border-radius: 8px;
 }
 
 .modal-backdrop--confirm {
@@ -5670,6 +5946,75 @@ html[data-theme='dark'] .calendar-page .schedule-day-head {
   color: color-mix(in srgb, #fff 82%, var(--agro-light));
 }
 
+/* Усиливаем читаемость рабочих зон календаря в dark без смены общей палитры */
+html[data-theme='dark'] .calendar-page .calendar-card-right {
+  background: color-mix(in srgb, var(--bg-panel) 92%, #0f1714);
+  border-color: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .day-events-scroll,
+html[data-theme='dark'] .calendar-page .week-view-wrap,
+html[data-theme='dark'] .calendar-page .month-view-wrap,
+html[data-theme='dark'] .calendar-page .schedule-view-wrap {
+  background: color-mix(in srgb, var(--bg-base) 88%, #0d1512);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  border-radius: 12px;
+}
+
+html[data-theme='dark'] .calendar-page .day-events-grid,
+html[data-theme='dark'] .calendar-page .week-view-grid {
+  background: color-mix(in srgb, var(--bg-panel) 90%, #101917);
+}
+
+html[data-theme='dark'] .calendar-page .day-grid-line,
+html[data-theme='dark'] .calendar-page .week-grid-line {
+  border-top-color: rgba(148, 163, 184, 0.26);
+}
+
+html[data-theme='dark'] .calendar-page .day-grid-time {
+  color: color-mix(in srgb, #fff 70%, #9fb7cc);
+}
+
+html[data-theme='dark'] .calendar-page .week-view-header {
+  background: color-mix(in srgb, var(--bg-panel) 90%, #121d19);
+  border-color: color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .week-view-day {
+  border-right-color: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .week-view-col {
+  border-right-color: color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .month-view-grid {
+  background: color-mix(in srgb, var(--bg-panel) 90%, #0f1815);
+  border-color: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .month-view-weekday,
+html[data-theme='dark'] .calendar-page .month-view-cell {
+  border-color: color-mix(in srgb, var(--text-primary) 13%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .month-view-cell {
+  background: color-mix(in srgb, var(--bg-panel) 86%, #121c18);
+}
+
+html[data-theme='dark'] .calendar-page .month-view-cell--muted {
+  background: color-mix(in srgb, var(--bg-base) 82%, #0c1311);
+}
+
+html[data-theme='dark'] .calendar-page .month-view-cell--weekend {
+  background: color-mix(in srgb, var(--bg-panel) 78%, #17231e);
+}
+
+html[data-theme='dark'] .calendar-page .month-view-cell--selected,
+html[data-theme='dark'] .calendar-page .week-view-day--selected {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agro-light) 46%, transparent);
+}
+
 html[data-theme='dark'] .calendar-page .priority-normal.day-event-card,
 html[data-theme='dark'] .calendar-page .priority-normal.month-view-event-pill,
 html[data-theme='dark'] .calendar-page .priority-normal.schedule-item {
@@ -5732,6 +6077,83 @@ html[data-theme='dark'] .calendar-page .event-participation--pending {
 }
 
 html[data-theme='dark'] .calendar-page .event-participation--declined {
+  background: rgba(239, 68, 68, 0.24);
+  color: #fecaca;
+}
+
+/* Модалка события в dark: повышаем читаемость без смены общей палитры */
+html[data-theme='dark'] .calendar-page .modal-calendar {
+  background: color-mix(in srgb, var(--bg-panel) 92%, #0e1512);
+  border-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-header--design {
+  background: color-mix(in srgb, var(--bg-panel) 90%, #101916);
+  border-bottom-color: color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-body {
+  background: color-mix(in srgb, var(--bg-base) 86%, #0d1411);
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-label--design,
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-task-id--design,
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-task-owner--design,
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-subtitle {
+  color: color-mix(in srgb, #fff 72%, #9fb7cc);
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-title--design {
+  color: #eef6ff;
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-input.modal-input--design,
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-select.modal-select--design,
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-textarea.modal-textarea--design {
+  background: color-mix(in srgb, var(--bg-panel) 88%, #121c18);
+  border-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+  color: #eef6ff;
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-input.modal-input--design::placeholder,
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-textarea.modal-textarea--design::placeholder {
+  color: color-mix(in srgb, #fff 54%, #8ea4b8);
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .repeat-apply-box,
+html[data-theme='dark'] .calendar-page .modal-calendar .participation-box,
+html[data-theme='dark'] .calendar-page .modal-calendar .assignee-status-column {
+  background: color-mix(in srgb, var(--bg-panel) 86%, #101916);
+  border-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-attach-placeholder--design {
+  background: color-mix(in srgb, var(--bg-panel) 86%, #101916);
+  border-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-actions.modal-actions--design {
+  background: color-mix(in srgb, var(--bg-panel) 90%, #111a17);
+  border-top-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+}
+
+html[data-theme='dark'] .calendar-page .modal-calendar .modal-btn-ghost.modal-btn-ghost--design {
+  background: color-mix(in srgb, var(--bg-panel) 88%, #18231f);
+  border-color: color-mix(in srgb, var(--text-primary) 20%, transparent);
+  color: #d9e5dc;
+}
+
+html[data-theme='dark'] .calendar-page .modal-chip-status--accepted {
+  background: rgba(34, 197, 94, 0.24);
+  color: #bbf7d0;
+}
+
+html[data-theme='dark'] .calendar-page .modal-chip-status--pending {
+  background: rgba(245, 158, 11, 0.28);
+  color: #fde68a;
+}
+
+html[data-theme='dark'] .calendar-page .modal-chip-status--declined {
   background: rgba(239, 68, 68, 0.24);
   color: #fecaca;
 }
