@@ -24,6 +24,14 @@ export type CalendarTaskFileRow = {
   created_at: string
 }
 
+export type CalendarTaskAssigneeStatus = 'pending' | 'accepted' | 'declined'
+
+export type CalendarTaskAssigneeRow = {
+  task_id: string
+  user_id: string
+  status: CalendarTaskAssigneeStatus
+}
+
 const TABLE = 'calendar_tasks'
 const ASSIGNEES_TABLE = 'calendar_task_assignees'
 const FILES_TABLE = 'calendar_task_files'
@@ -132,24 +140,56 @@ export async function loadCalendarTasksPage(args: LoadCalendarTasksPageArgs): Pr
   return (data ?? []) as CalendarTaskRow[]
 }
 
-export async function loadTaskAssignees(taskId: string): Promise<string[]> {
+export async function loadTaskAssignees(taskId: string): Promise<CalendarTaskAssigneeRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from(ASSIGNEES_TABLE)
-    .select('user_id')
+    .select('task_id, user_id, status')
     .eq('task_id', taskId)
   if (error) throw error
-  return (data ?? []).map((r) => r.user_id)
+  return (data ?? []).map((r) => ({
+    task_id: r.task_id as string,
+    user_id: r.user_id as string,
+    status: ((r.status as CalendarTaskAssigneeStatus) || 'accepted') as CalendarTaskAssigneeStatus,
+  }))
 }
 
-export async function setTaskAssignees(taskId: string, userIds: string[]): Promise<void> {
+export async function setTaskAssignees(
+  taskId: string,
+  userIds: string[],
+  options?: {
+    defaultStatus?: CalendarTaskAssigneeStatus
+    statusByUserId?: Record<string, CalendarTaskAssigneeStatus>
+  },
+): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
   const { error: delError } = await supabase.from(ASSIGNEES_TABLE).delete().eq('task_id', taskId)
   if (delError) throw delError
   if (userIds.length === 0) return
-  const rows = userIds.filter((id) => id).map((user_id) => ({ task_id: taskId, user_id }))
+  const fallbackStatus = options?.defaultStatus ?? 'pending'
+  const rows = userIds
+    .filter((id) => id)
+    .map((user_id) => ({
+      task_id: taskId,
+      user_id,
+      status: options?.statusByUserId?.[user_id] ?? fallbackStatus,
+    }))
   const { error: insError } = await supabase.from(ASSIGNEES_TABLE).insert(rows)
   if (insError) throw insError
+}
+
+export async function updateTaskAssigneeStatus(
+  taskId: string,
+  userId: string,
+  status: CalendarTaskAssigneeStatus,
+): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase
+    .from(ASSIGNEES_TABLE)
+    .update({ status })
+    .eq('task_id', taskId)
+    .eq('user_id', userId)
+  if (error) throw error
 }
 
 export async function insertCalendarTask(
@@ -163,6 +203,7 @@ export async function insertCalendarTask(
     priority?: string
     assignee?: string | null
     assignee_ids?: string[]
+    assignee_status_by_user_id?: Record<string, CalendarTaskAssigneeStatus>
   },
 ): Promise<CalendarTaskRow> {
   if (!supabase) throw new Error('Supabase не настроен')
@@ -184,7 +225,12 @@ export async function insertCalendarTask(
   if (error) throw error
   const row = data as CalendarTaskRow
   const ids = payload.assignee_ids?.filter((id) => id) ?? []
-  if (ids.length > 0) await setTaskAssignees(row.id, ids)
+  if (ids.length > 0) {
+    await setTaskAssignees(row.id, ids, {
+      defaultStatus: 'pending',
+      statusByUserId: payload.assignee_status_by_user_id,
+    })
+  }
   return row
 }
 
@@ -200,16 +246,23 @@ export async function updateCalendarTask(
     assignee: string | null
     completed_at: string | null
     assignee_ids: string[]
+    assignee_status_by_user_id: Record<string, CalendarTaskAssigneeStatus>
   }>,
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { assignee_ids, ...rest } = payload
+  const { assignee_ids, assignee_status_by_user_id, ...rest } = payload
   const updates: Record<string, unknown> = { ...rest, updated_at: new Date().toISOString() }
   if (payload?.title !== undefined) updates.title = (payload.title as string).trim()
   delete (updates as Record<string, unknown>).assignee_ids
+  delete (updates as Record<string, unknown>).assignee_status_by_user_id
   const { error } = await supabase.from(TABLE).update(updates).eq('id', id)
   if (error) throw error
-  if (assignee_ids !== undefined) await setTaskAssignees(id, assignee_ids)
+  if (assignee_ids !== undefined) {
+    await setTaskAssignees(id, assignee_ids, {
+      defaultStatus: 'pending',
+      statusByUserId: assignee_status_by_user_id,
+    })
+  }
 }
 
 export async function deleteCalendarTask(id: string): Promise<void> {

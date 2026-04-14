@@ -5,6 +5,7 @@ import {
   loadCalendarTasks,
   loadCalendarTasksPage,
   loadTaskAssignees,
+  updateTaskAssigneeStatus,
   loadTaskFiles,
   uploadTaskFile,
   deleteTaskFile,
@@ -15,6 +16,7 @@ import {
   isSupabaseConfigured,
   type CalendarTaskRow,
   type CalendarTaskFileRow,
+  type CalendarTaskAssigneeStatus,
 } from '@/lib/calendarTasksSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
@@ -24,6 +26,7 @@ import UiSuccessModal from '@/components/UiSuccessModal.vue'
 
 type CalendarTask = {
   id: string
+  userId: string | null
   date: string
   title: string
   description: string
@@ -42,6 +45,7 @@ type RepeatApplyMode = 'only_this' | 'this_and_following'
 function rowToTask(r: CalendarTaskRow): CalendarTask {
   return {
     id: r.id,
+    userId: r.user_id ?? null,
     date: r.date,
     title: r.title,
     description: r.description ?? '',
@@ -106,6 +110,8 @@ const editingTaskId = ref<string | null>(null)
 const taskSaveLoading = ref(false)
 const showDeleteConfirm = ref(false)
 const deleteInProgress = ref(false)
+const deleteScope = ref<'only_this' | 'this_and_following'>('only_this')
+const deleteAudienceScope = ref<'all' | 'only_me'>('all')
 const successModalOpen = ref(false)
 const successModalTitle = ref('Операция выполнена')
 const successModalMessage = ref('')
@@ -132,6 +138,7 @@ const assigneeSearch = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const taskFilesByTaskId = ref<Record<string, CalendarTaskFileRow[]>>({})
 const taskAssigneeIdsByTaskId = ref<Record<string, string[]>>({})
+const taskAssigneeStatusByTaskId = ref<Record<string, Record<string, CalendarTaskAssigneeStatus>>>({})
 const dayEventsScrollRef = ref<HTMLElement | null>(null)
 const monthDragTaskId = ref<string | null>(null)
 const monthDropTargetDate = ref<string | null>(null)
@@ -142,6 +149,11 @@ const scheduleHasMore = ref(true)
 const schedulePage = ref(1)
 const scheduleListRef = ref<HTMLElement | null>(null)
 const schedulePageSize = 30
+const assigneesTooltipVisible = ref(false)
+const assigneesTooltipText = ref('')
+const assigneesTooltipX = ref(0)
+const assigneesTooltipY = ref(0)
+const assigneesTooltipRef = ref<HTMLElement | null>(null)
 
 function shortTaskId(id: string): string {
   return id.replace(/-/g, '').slice(-8).toUpperCase()
@@ -375,6 +387,78 @@ const isDayView = computed(() => calendarViewMode.value === 'day')
 const isWeekView = computed(() => calendarViewMode.value === 'week')
 const isMonthView = computed(() => calendarViewMode.value === 'month')
 const isScheduleView = computed(() => calendarViewMode.value === 'schedule')
+const myUserId = computed(() => auth.user.value?.id ?? null)
+const editingTask = computed(() => tasks.value.find((t) => t.id === editingTaskId.value) ?? null)
+
+function canManageTask(task: CalendarTask | null): boolean {
+  if (!task) return false
+  if (isManager.value) return true
+  return !!myUserId.value && task.userId === myUserId.value
+}
+
+const canEditCurrentTask = computed(() => {
+  if (!editingTaskId.value) return true
+  return canManageTask(editingTask.value)
+})
+
+const deleteSeriesCandidates = computed(() => {
+  const base = editingTask.value
+  if (!base) return [] as CalendarTask[]
+  const titleKey = base.title.trim().toLowerCase()
+  return tasks.value
+    .filter((t) => {
+      if (t.userId !== base.userId) return false
+      if (t.title.trim().toLowerCase() !== titleKey) return false
+      if ((t.startTime || '') !== (base.startTime || '')) return false
+      if ((t.endTime || '') !== (base.endTime || '')) return false
+      return true
+    })
+    .sort((a, b) => a.date.localeCompare(b.date))
+})
+
+const canDeleteAsSeries = computed(() => {
+  const base = editingTask.value
+  if (!base) return false
+  return deleteSeriesCandidates.value.filter((t) => t.date >= base.date).length > 1
+})
+
+const canDeleteOnlyForMe = computed(() => {
+  const me = myUserId.value
+  const task = editingTask.value
+  if (!me || !task) return false
+  if (isManager.value) return false
+  if (task.userId === me) return false
+  return taskAssignees.value.includes(me) && taskAssignees.value.length > 1
+})
+
+const showDeleteAudienceChoice = computed(() => taskAssignees.value.length > 1 && !isManager.value)
+const currentTaskParticipationStatus = computed<CalendarTaskAssigneeStatus | null>(() => {
+  const me = myUserId.value
+  const task = editingTask.value
+  if (!me || !task) return null
+  const byUser = taskAssigneeStatusByTaskId.value[task.id] ?? {}
+  return byUser[me] ?? null
+})
+
+const taskAssigneesByStatus = computed(() => {
+  const accepted: string[] = []
+  const pending: string[] = []
+  const declined: string[] = []
+  const task = editingTask.value
+  const statusMap = (task ? taskAssigneeStatusByTaskId.value[task.id] : undefined) ?? {}
+  for (const uid of taskAssignees.value) {
+    const status = statusMap[uid] ?? 'pending'
+    if (status === 'accepted') accepted.push(uid)
+    else if (status === 'declined') declined.push(uid)
+    else pending.push(uid)
+  }
+  return { accepted, pending, declined }
+})
+
+const activeAssigneeIds = computed(() => [
+  ...taskAssigneesByStatus.value.accepted,
+  ...taskAssigneesByStatus.value.pending,
+])
 
 const scheduleGroups = computed(() => {
   const map = new Map<string, CalendarTask[]>()
@@ -504,6 +588,20 @@ const tasksForCurrentMonth = computed(() => {
   const monthPrefix = `${currentYear.value}-${String(currentMonth.value + 1).padStart(2, '0')}-`
   return tasks.value.filter((t) => t.date.startsWith(monthPrefix))
 })
+
+const visibleTasksForAssignees = computed(() => {
+  if (isScheduleView.value) return scheduleTasks.value
+  if (isMonthView.value) return tasksForCurrentMonth.value
+  if (isWeekView.value) return tasksForSelectedWeek.value
+  return tasksForSelectedDate.value
+})
+
+const visibleTaskIdsKey = computed(() =>
+  visibleTasksForAssignees.value
+    .map((t) => t.id)
+    .sort()
+    .join(','),
+)
 
 function setCalendarView(mode: 'day' | 'week' | 'month' | 'schedule') {
   calendarViewMode.value = mode
@@ -700,119 +798,8 @@ function scrollDayViewportToNow(force = false) {
   container.scrollTo({ top: target, behavior: force ? 'auto' : 'smooth' })
 }
 
-function getWeekRange(dateKey: string): { start: string; end: string } {
-  const d = new Date(dateKey + 'T12:00:00')
-  const day = d.getDay()
-  const monOffset = day === 0 ? -6 : 1 - day
-  const mon = new Date(d)
-  mon.setDate(d.getDate() + monOffset)
-  const sun = new Date(mon)
-  sun.setDate(mon.getDate() + 6)
-  return {
-    start: formatDateKey(mon),
-    end: formatDateKey(sun),
-  }
-}
-
-const progressRangeStart = ref<string | null>(null)
-const progressRangeEnd = ref<string | null>(null)
-
-const weekProgress = computed(() => {
-  const week = getWeekRange(selectedDate.value)
-  const start = progressRangeStart.value ?? week.start
-  const end = progressRangeEnd.value ?? progressRangeStart.value ?? week.end
-  const rangeStart = start <= end ? start : end
-  const rangeEnd = start <= end ? end : start
-  const rangeTasks = tasks.value.filter((t) => t.date >= rangeStart && t.date <= rangeEnd)
-  const total = rangeTasks.length
-  const completed = rangeTasks.filter((t) => t.completedAt).length
-  return { total, completed, start: rangeStart, end: rangeEnd }
-})
-
-const weekProgressLabel = computed(() => {
-  const { start, end } = weekProgress.value
-  const d1 = new Date(start + 'T12:00:00')
-  const d2 = new Date(end + 'T12:00:00')
-  const day1 = d1.getDate()
-  const day2 = d2.getDate()
-  const m1 = monthsShort[d1.getMonth()].slice(0, 3)
-  const m2 = monthsShort[d2.getMonth()].slice(0, 3)
-  if (start === end) return `${day1} ${m1}`
-  if (m1 === m2) return `${day1} – ${day2} ${m2}`
-  return `${day1} ${m1} – ${day2} ${m2}`
-})
-
-const progressBlockActive = ref(false)
-const showProgressHint = ref(false)
-let progressHintTimer: ReturnType<typeof setTimeout> | null = null
-
-/** Диапазон текущего отображаемого месяца (с 1-го по последнее число) для подсветки при выборе прогресса */
-const progressMonthRange = computed(() => {
-  const y = currentYear.value
-  const m = currentMonth.value
-  const start = `${y}-${String(m + 1).padStart(2, '0')}-01`
-  const lastDay = new Date(y, m + 1, 0).getDate()
-  const end = `${y}-${String(m + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-  return { start, end }
-})
-
-const isCustomProgressRange = computed(
-  () => progressRangeStart.value !== null || progressRangeEnd.value !== null,
-)
-
-function onProgressBlockClick() {
-  progressBlockActive.value = !progressBlockActive.value
-  if (progressBlockActive.value) {
-    showProgressHint.value = true
-    if (progressHintTimer) clearTimeout(progressHintTimer)
-    progressHintTimer = setTimeout(() => {
-      showProgressHint.value = false
-      progressHintTimer = null
-    }, 4500)
-  }
-}
-
-function clearProgressRange() {
-  progressRangeStart.value = null
-  progressRangeEnd.value = null
-}
-
-function selectDayForProgress(key: string) {
-  if (!progressRangeStart.value) {
-    progressRangeStart.value = key
-    progressRangeEnd.value = null
-  } else if (!progressRangeEnd.value) {
-    const a = progressRangeStart.value
-    const b = key
-    progressRangeStart.value = a <= b ? a : b
-    progressRangeEnd.value = a <= b ? b : a
-  } else {
-    progressRangeStart.value = key
-    progressRangeEnd.value = null
-  }
-}
-
 function selectDay(key: string) {
-  if (progressBlockActive.value) {
-    selectDayForProgress(key)
-  }
   selectedDate.value = key
-}
-
-/** Подсветка в календаре: при активном фрейме — весь месяц, иначе — текущий диапазон прогресса */
-function isDayInProgressRange(dayKey: string): boolean {
-  if (progressBlockActive.value) {
-    const { start, end } = progressMonthRange.value
-    return dayKey >= start && dayKey <= end
-  }
-  const { start, end } = weekProgress.value
-  return dayKey >= start && dayKey <= end
-}
-
-/** Первая дата для пульсации: при активном фрейме — всегда 1-е число месяца */
-function isProgressRangeStartDay(dayKey: string): boolean {
-  if (!progressBlockActive.value) return false
-  return dayKey === progressMonthRange.value.start
 }
 
 async function loadFilesForVisibleTasks() {
@@ -841,22 +828,31 @@ async function loadFilesForVisibleTasks() {
 }
 
 async function loadAssigneesForVisibleTasks() {
-  const ids = tasksForSelectedDate.value.map((t) => t.id)
+  const ids = visibleTasksForAssignees.value.map((t) => t.id)
   if (ids.length === 0 || !isSupabaseConfigured()) {
     taskAssigneeIdsByTaskId.value = {}
+    taskAssigneeStatusByTaskId.value = {}
     return
   }
   const next: Record<string, string[]> = {}
+  const nextStatus: Record<string, Record<string, CalendarTaskAssigneeStatus>> = {}
   await Promise.all(
     ids.map(async (taskId) => {
       try {
-        next[taskId] = await loadTaskAssignees(taskId)
+        const rows = await loadTaskAssignees(taskId)
+        next[taskId] = rows.map((r) => r.user_id)
+        nextStatus[taskId] = rows.reduce<Record<string, CalendarTaskAssigneeStatus>>((acc, row) => {
+          acc[row.user_id] = row.status
+          return acc
+        }, {})
       } catch {
         next[taskId] = []
+        nextStatus[taskId] = {}
       }
     }),
   )
   taskAssigneeIdsByTaskId.value = next
+  taskAssigneeStatusByTaskId.value = nextStatus
 }
 
 function dayEventAssignees(taskId: string): ProfileRow[] {
@@ -864,6 +860,78 @@ function dayEventAssignees(taskId: string): ProfileRow[] {
   return ids
     .map((id) => profileById(id))
     .filter((p): p is ProfileRow => !!p)
+}
+
+function taskAssigneesTitle(taskId: string): string {
+  const names = dayEventAssignees(taskId).map((p) => profileLabel(p)).filter(Boolean)
+  return names.length ? names.join(', ') : ''
+}
+
+function taskAssigneesTooltip(taskId: string): string {
+  const names = taskAssigneesTitle(taskId)
+  return names ? `Участники: ${names}` : ''
+}
+
+function taskParticipationStatus(taskId: string): CalendarTaskAssigneeStatus | null {
+  const me = myUserId.value
+  if (!me) return null
+  return taskAssigneeStatusByTaskId.value[taskId]?.[me] ?? null
+}
+
+function taskParticipationLabel(taskId: string): string {
+  const status = taskParticipationStatus(taskId)
+  if (status === 'pending') return 'Ожидает ответа'
+  if (status === 'declined') return 'Отклонено'
+  if (status === 'accepted') return 'Принято'
+  return ''
+}
+
+function taskParticipationClass(taskId: string): string {
+  const status = taskParticipationStatus(taskId)
+  return status ? `event-participation--${status}` : ''
+}
+
+function buildAssigneeStatusPayload(taskId: string | null): Record<string, CalendarTaskAssigneeStatus> {
+  const existing = (taskId ? taskAssigneeStatusByTaskId.value[taskId] : undefined) ?? {}
+  const next: Record<string, CalendarTaskAssigneeStatus> = {}
+  for (const uid of taskAssignees.value) {
+    next[uid] = existing[uid] ?? 'pending'
+  }
+  const owner = effectiveCalendarUserId.value ?? auth.user.value?.id ?? null
+  if (owner && next[owner]) next[owner] = 'accepted'
+  return next
+}
+
+function moveAssigneesTooltip(e: MouseEvent) {
+  const offset = 14
+  const pad = 8
+  const tipWidth = assigneesTooltipRef.value?.offsetWidth ?? 260
+  const tipHeight = assigneesTooltipRef.value?.offsetHeight ?? 86
+
+  let x = e.clientX + offset
+  let y = e.clientY + offset
+
+  if (x + tipWidth + pad > window.innerWidth) {
+    x = Math.max(pad, e.clientX - tipWidth - offset)
+  }
+  if (y + tipHeight + pad > window.innerHeight) {
+    y = Math.max(pad, e.clientY - tipHeight - offset)
+  }
+
+  assigneesTooltipX.value = x
+  assigneesTooltipY.value = y
+}
+
+function showTaskAssigneesTooltip(taskId: string, e: MouseEvent) {
+  const text = taskAssigneesTooltip(taskId)
+  if (!text) return
+  assigneesTooltipText.value = text
+  assigneesTooltipVisible.value = true
+  moveAssigneesTooltip(e)
+}
+
+function hideTaskAssigneesTooltip() {
+  assigneesTooltipVisible.value = false
 }
 
 function prevMonth() {
@@ -911,9 +979,9 @@ async function loadProfilesOnce() {
 }
 
 watch(
-  () => [tasksForSelectedDate.value.length, selectedDate.value] as const,
+  () => [visibleTaskIdsKey.value, selectedDate.value, calendarViewMode.value] as const,
   () => {
-    void loadFilesForVisibleTasks()
+    if (isDayView.value) void loadFilesForVisibleTasks()
     void loadAssigneesForVisibleTasks()
     void nextTick(() => scrollDayViewportToNow(true))
   },
@@ -957,6 +1025,11 @@ watch(
     void loadSchedulePage(false)
   },
 )
+
+watch(editingTaskId, () => {
+  deleteScope.value = 'only_this'
+  deleteAudienceScope.value = 'all'
+})
 
 onMounted(() => {
   loadProfilesOnce()
@@ -1033,10 +1106,22 @@ async function openEditTaskModal(task: CalendarTask) {
   isTaskModalOpen.value = true
   if (isSupabaseConfigured()) {
     try {
-      taskAssignees.value = await loadTaskAssignees(task.id)
+      const rows = await loadTaskAssignees(task.id)
+      taskAssignees.value = rows.map((r) => r.user_id)
+      taskAssigneeStatusByTaskId.value = {
+        ...taskAssigneeStatusByTaskId.value,
+        [task.id]: rows.reduce<Record<string, CalendarTaskAssigneeStatus>>((acc, row) => {
+          acc[row.user_id] = row.status
+          return acc
+        }, {}),
+      }
       taskFiles.value = await loadTaskFiles(task.id)
     } catch {
       taskAssignees.value = []
+      taskAssigneeStatusByTaskId.value = {
+        ...taskAssigneeStatusByTaskId.value,
+        [task.id]: {},
+      }
     }
   } else {
     taskAssignees.value = []
@@ -1089,6 +1174,35 @@ async function removeFile(fileRow: CalendarTaskFileRow) {
   }
 }
 
+async function setMyParticipationStatus(status: CalendarTaskAssigneeStatus) {
+  const me = myUserId.value
+  const task = editingTask.value
+  if (!me || !task || !isSupabaseConfigured()) return
+  try {
+    await updateTaskAssigneeStatus(task.id, me, status)
+    taskAssigneeStatusByTaskId.value = {
+      ...taskAssigneeStatusByTaskId.value,
+      [task.id]: {
+        ...(taskAssigneeStatusByTaskId.value[task.id] ?? {}),
+        [me]: status,
+      },
+    }
+    await loadTasksFromDb()
+    if (isScheduleView.value) await loadSchedulePage(false)
+    void loadAssigneesForVisibleTasks()
+    if (status === 'accepted') {
+      successModalTitle.value = 'Приглашение принято'
+      successModalMessage.value = 'Вы подтвердили участие в событии.'
+    } else if (status === 'declined') {
+      successModalTitle.value = 'Приглашение отклонено'
+      successModalMessage.value = 'Событие останется в календаре с меткой «Отклонено».'
+    }
+    successModalOpen.value = true
+  } catch (err) {
+    console.error(err)
+  }
+}
+
 function closeTaskModal() {
   isTaskModalOpen.value = false
 }
@@ -1102,8 +1216,15 @@ async function onSubmitTask() {
   taskSaveLoading.value = true
   try {
     const id = editingTaskId.value
-      const date = taskStartDate.value || selectedDate.value
+    const date = taskStartDate.value || selectedDate.value
+    if (id && !canEditCurrentTask.value) {
+      successModalTitle.value = 'Недостаточно прав'
+      successModalMessage.value = 'Редактировать событие может только его постановщик или руководитель.'
+      successModalOpen.value = true
+      return
+    }
     if (id) {
+      const assigneeStatusPayload = buildAssigneeStatusPayload(id)
       if (taskRepeatRule.value === 'none' || taskRepeatApplyMode.value === 'only_this') {
         await updateCalendarTask(id, {
           date,
@@ -1113,6 +1234,7 @@ async function onSubmitTask() {
           end_time: taskEndTime.value?.trim() || null,
           priority: taskPriority.value,
           assignee_ids: taskAssignees.value,
+          assignee_status_by_user_id: assigneeStatusPayload,
         })
       } else {
         const repeatUntil = taskRepeatUntil.value || date
@@ -1133,6 +1255,7 @@ async function onSubmitTask() {
           end_time: taskEndTime.value?.trim() || null,
           priority: taskPriority.value,
           assignee_ids: taskAssignees.value,
+          assignee_status_by_user_id: assigneeStatusPayload,
         })
         for (const plannedDate of plannedDates.slice(1)) {
           await insertCalendarTask({
@@ -1144,6 +1267,7 @@ async function onSubmitTask() {
             end_time: taskEndTime.value?.trim() || null,
             priority: taskPriority.value,
             assignee_ids: taskAssignees.value,
+            assignee_status_by_user_id: buildAssigneeStatusPayload(null),
           })
         }
       }
@@ -1170,6 +1294,7 @@ async function onSubmitTask() {
           end_time: taskEndTime.value?.trim() || null,
           priority: taskPriority.value,
           assignee_ids: taskAssignees.value,
+          assignee_status_by_user_id: buildAssigneeStatusPayload(null),
         })
       }
     }
@@ -1204,6 +1329,14 @@ async function deleteTask(id: string) {
 }
 
 function openDeleteConfirm() {
+  if (!canEditCurrentTask.value) {
+    successModalTitle.value = 'Недостаточно прав'
+    successModalMessage.value = 'Удалять событие может только его постановщик или руководитель.'
+    successModalOpen.value = true
+    return
+  }
+  deleteScope.value = 'only_this'
+  deleteAudienceScope.value = 'all'
   showDeleteConfirm.value = true
 }
 
@@ -1212,10 +1345,32 @@ function closeDeleteConfirm() {
 }
 
 async function confirmDeleteTask() {
-  if (!editingTaskId.value) return
+  const currentId = editingTaskId.value
+  const currentTask = editingTask.value
+  if (!currentId || !currentTask) return
+  if (!canEditCurrentTask.value) {
+    closeDeleteConfirm()
+    successModalTitle.value = 'Недостаточно прав'
+    successModalMessage.value = 'Удалять событие может только его постановщик или руководитель.'
+    successModalOpen.value = true
+    return
+  }
   deleteInProgress.value = true
   try {
-    await deleteTask(editingTaskId.value)
+    if (deleteAudienceScope.value === 'only_me' && canDeleteOnlyForMe.value && myUserId.value) {
+      await updateTaskAssigneeStatus(currentId, myUserId.value, 'declined')
+      await loadTasksFromDb()
+      if (isScheduleView.value) await loadSchedulePage(false)
+    } else if (deleteScope.value === 'this_and_following' && canDeleteAsSeries.value) {
+      const ids = deleteSeriesCandidates.value
+        .filter((t) => t.date >= currentTask.date)
+        .map((t) => t.id)
+      await Promise.all(ids.map((id) => deleteCalendarTask(id)))
+      await loadTasksFromDb()
+      if (isScheduleView.value) await loadSchedulePage(false)
+    } else {
+      await deleteTask(currentId)
+    }
     showDeleteConfirm.value = false
     closeTaskModal()
   } catch (e) {
@@ -1231,7 +1386,15 @@ async function confirmDeleteTask() {
     <header class="calendar-header page-enter-item">
       <div class="calendar-header-text">
         <div class="type-label">Календарь</div>
-        <h1 class="page-title">Планирование дня</h1>
+        <div class="calendar-title-row">
+          <h1 class="page-title">Планирование дня</h1>
+          <div class="calendar-help" tabindex="0" aria-label="Подсказка по планированию">
+            <span class="calendar-help-icon">?</span>
+            <div class="calendar-help-tooltip">
+              Планируйте задачи по дням, неделям и месяцам. Создавайте события кликом по слоту или кнопкой «Создать событие».
+            </div>
+          </div>
+        </div>
         <div v-if="isManager" class="calendar-owner-card">
           <div class="calendar-owner-select-shell">
             <span class="calendar-owner-icon calendar-owner-icon--inline" aria-hidden="true">
@@ -1358,54 +1521,12 @@ async function confirmDeleteTask() {
               'calendar-day--muted': !day.inCurrentMonth,
               'calendar-day--today': day.isToday,
               'calendar-day--selected': day.isSelected,
-              'calendar-day--in-range': progressBlockActive && isDayInProgressRange(day.key),
-              'calendar-day--range-start': isProgressRangeStartDay(day.key),
             }"
             @click="selectDay(day.key)"
           >
             <span class="calendar-day-number">{{ day.date }}</span>
             <span v-if="day.hasTasks" class="calendar-day-dot" />
           </button>
-        </div>
-
-        <div
-          class="week-progress"
-          :class="{ 'week-progress--active': progressBlockActive }"
-          role="button"
-          tabindex="0"
-          @click="onProgressBlockClick"
-          @keydown.enter="onProgressBlockClick"
-          @keydown.space.prevent="onProgressBlockClick"
-        >
-          <div v-if="showProgressHint" class="week-progress-hint">
-            Выберите диапазон дат для подсчёта прогресса
-          </div>
-          <div class="week-progress-head">
-            <h3 class="week-progress-title">Прогресс</h3>
-            <button
-              v-if="isCustomProgressRange"
-              type="button"
-              class="week-progress-reset"
-              @click.stop="clearProgressRange()"
-            >
-              Сбросить
-            </button>
-          </div>
-          <p class="week-progress-range">{{ weekProgressLabel }}</p>
-          <p class="week-progress-count">
-            <span class="week-progress-number">{{ weekProgress.completed }}</span>
-            из {{ weekProgress.total }} задач
-          </p>
-          <div class="week-progress-bar-wrap">
-            <div
-              class="week-progress-bar-fill"
-              :style="{ width: weekProgress.total ? (100 * weekProgress.completed) / weekProgress.total + '%' : '0%' }"
-            />
-          </div>
-          <div class="week-progress-labels">
-            <span>Выполнено {{ weekProgress.total ? Math.round((100 * weekProgress.completed) / weekProgress.total) : 0 }}%</span>
-            <span>Осталось {{ Math.max(0, weekProgress.total - weekProgress.completed) }}</span>
-          </div>
         </div>
       </section>
       </Transition>
@@ -1497,6 +1618,32 @@ async function confirmDeleteTask() {
               >
                 <div class="day-event-time">{{ minutesToHhmm(event.start) }}<span v-if="event.task.endTime"> – {{ event.task.endTime }}</span></div>
                 <div class="day-event-title">{{ event.task.title }}</div>
+                <div
+                  v-if="taskParticipationLabel(event.task.id)"
+                  class="event-participation-pill"
+                  :class="taskParticipationClass(event.task.id)"
+                >
+                  {{ taskParticipationLabel(event.task.id) }}
+                </div>
+                <div
+                  v-if="dayEventAssignees(event.task.id).length"
+                  class="day-event-assignees"
+                  @mouseenter.stop="showTaskAssigneesTooltip(event.task.id, $event)"
+                  @mousemove.stop="moveAssigneesTooltip($event)"
+                  @mouseleave.stop="hideTaskAssigneesTooltip"
+                >
+                  <span
+                    v-for="p in dayEventAssignees(event.task.id).slice(0, 3)"
+                    :key="`w-${event.task.id}-${p.id}`"
+                    class="day-event-assignee-avatar"
+                    :style="assigneeAvatarStyle(p)"
+                  >
+                    {{ assigneeInitials(p) }}
+                  </span>
+                  <span v-if="dayEventAssignees(event.task.id).length > 3" class="day-event-assignee-more">
+                    +{{ dayEventAssignees(event.task.id).length - 3 }}
+                  </span>
+                </div>
               </article>
               <div
                 v-if="showNowMarker"
@@ -1548,6 +1695,32 @@ async function confirmDeleteTask() {
                 >
                   <span class="month-view-event-title">{{ t.title }}</span>
                   <span v-if="t.startTime" class="month-view-event-time">{{ t.startTime }}</span>
+                  <span
+                    v-if="taskParticipationLabel(t.id)"
+                    class="event-participation-pill"
+                    :class="taskParticipationClass(t.id)"
+                  >
+                    {{ taskParticipationLabel(t.id) }}
+                  </span>
+                  <span
+                    v-if="dayEventAssignees(t.id).length"
+                    class="month-view-assignees"
+                    @mouseenter.stop="showTaskAssigneesTooltip(t.id, $event)"
+                    @mousemove.stop="moveAssigneesTooltip($event)"
+                    @mouseleave.stop="hideTaskAssigneesTooltip"
+                  >
+                    <span
+                      v-for="p in dayEventAssignees(t.id).slice(0, 3)"
+                      :key="`m-${t.id}-${p.id}`"
+                      class="month-view-assignee-avatar"
+                      :style="assigneeAvatarStyle(p)"
+                    >
+                      {{ assigneeInitials(p) }}
+                    </span>
+                    <span v-if="dayEventAssignees(t.id).length > 3" class="month-view-assignee-more">
+                      +{{ dayEventAssignees(t.id).length - 3 }}
+                    </span>
+                  </span>
                 </button>
                 <div v-if="cell.more > 0" class="month-view-event-more">+{{ cell.more }}</div>
               </div>
@@ -1578,14 +1751,26 @@ async function confirmDeleteTask() {
                 <div class="schedule-item-main">
                   <span class="schedule-item-dot" :class="priorityClass(task.priority)" />
                   <span class="schedule-item-title">{{ task.title }}</span>
+                  <span
+                    v-if="taskParticipationLabel(task.id)"
+                    class="event-participation-pill"
+                    :class="taskParticipationClass(task.id)"
+                  >
+                    {{ taskParticipationLabel(task.id) }}
+                  </span>
                 </div>
-                <div v-if="dayEventAssignees(task.id).length" class="schedule-item-assignees">
+                <div
+                  v-if="dayEventAssignees(task.id).length"
+                  class="schedule-item-assignees"
+                  @mouseenter.stop="showTaskAssigneesTooltip(task.id, $event)"
+                  @mousemove.stop="moveAssigneesTooltip($event)"
+                  @mouseleave.stop="hideTaskAssigneesTooltip"
+                >
                   <span
                     v-for="p in dayEventAssignees(task.id).slice(0, 3)"
                     :key="`s-${task.id}-${p.id}`"
                     class="day-event-assignee-avatar"
                     :style="assigneeAvatarStyle(p)"
-                    :title="profileLabel(p)"
                   >
                     {{ assigneeInitials(p) }}
                   </span>
@@ -1633,13 +1818,25 @@ async function confirmDeleteTask() {
                 >
                   <div class="day-event-time">{{ minutesToHhmm(event.start) }}<span v-if="event.task.endTime"> – {{ event.task.endTime }}</span></div>
                   <div class="day-event-title">{{ event.task.title }}</div>
-                  <div v-if="dayEventAssignees(event.task.id).length" class="day-event-assignees">
+                  <div
+                    v-if="taskParticipationLabel(event.task.id)"
+                    class="event-participation-pill"
+                    :class="taskParticipationClass(event.task.id)"
+                  >
+                    {{ taskParticipationLabel(event.task.id) }}
+                  </div>
+                  <div
+                    v-if="dayEventAssignees(event.task.id).length"
+                    class="day-event-assignees"
+                    @mouseenter.stop="showTaskAssigneesTooltip(event.task.id, $event)"
+                    @mousemove.stop="moveAssigneesTooltip($event)"
+                    @mouseleave.stop="hideTaskAssigneesTooltip"
+                  >
                     <span
                       v-for="p in dayEventAssignees(event.task.id).slice(0, 3)"
                       :key="p.id"
                       class="day-event-assignee-avatar"
                       :style="assigneeAvatarStyle(p)"
-                      :title="profileLabel(p)"
                     >
                       {{ assigneeInitials(p) }}
                     </span>
@@ -1948,7 +2145,7 @@ async function confirmDeleteTask() {
               </div>
               <div class="modal-chips modal-chips--design">
                 <div
-                  v-for="uid in taskAssignees"
+                  v-for="uid in activeAssigneeIds"
                   :key="uid"
                   class="modal-chip modal-chip--design"
                 >
@@ -1958,6 +2155,61 @@ async function confirmDeleteTask() {
                   >{{ profileById(uid) ? assigneeInitials(profileById(uid)!) : '?' }}</span>
                   <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
                   <button type="button" class="modal-chip-remove" aria-label="Убрать" @click="removeAssignee(uid)">×</button>
+                </div>
+              </div>
+              <div v-if="editingTaskId" class="assignee-status-board">
+                <div class="assignee-status-column">
+                  <div class="assignee-status-title">Приняли</div>
+                  <div v-if="taskAssigneesByStatus.accepted.length" class="assignee-status-list">
+                    <span v-for="uid in taskAssigneesByStatus.accepted" :key="`accepted-${uid}`" class="assignee-status-chip">
+                      {{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}
+                    </span>
+                  </div>
+                  <div v-else class="assignee-status-empty">Пока нет</div>
+                </div>
+                <div class="assignee-status-column">
+                  <div class="assignee-status-title">Ожидают ответ</div>
+                  <div v-if="taskAssigneesByStatus.pending.length" class="assignee-status-list">
+                    <span v-for="uid in taskAssigneesByStatus.pending" :key="`pending-${uid}`" class="assignee-status-chip">
+                      {{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}
+                    </span>
+                  </div>
+                  <div v-else class="assignee-status-empty">Пусто</div>
+                </div>
+                <div class="assignee-status-column assignee-status-column--declined">
+                  <div class="assignee-status-title">Отказались</div>
+                  <div v-if="taskAssigneesByStatus.declined.length" class="assignee-status-list">
+                    <span
+                      v-for="uid in taskAssigneesByStatus.declined"
+                      :key="`declined-${uid}`"
+                      class="assignee-status-chip assignee-status-chip--declined"
+                    >
+                      {{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}
+                    </span>
+                  </div>
+                  <div v-else class="assignee-status-empty">Нет отказов</div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="editingTaskId && currentTaskParticipationStatus" class="modal-field modal-field--design">
+              <span class="modal-label modal-label--design">Мое участие</span>
+              <div class="participation-box">
+                <span class="event-participation-pill" :class="taskParticipationClass(editingTaskId)">
+                  {{ taskParticipationLabel(editingTaskId) }}
+                </span>
+                <div v-if="currentTaskParticipationStatus === 'pending'" class="participation-actions">
+                  <button type="button" class="modal-btn-ghost modal-btn-ghost--design" @click="setMyParticipationStatus('declined')">
+                    Отклонить
+                  </button>
+                  <button type="button" class="modal-btn modal-btn--design" @click="setMyParticipationStatus('accepted')">
+                    Принять
+                  </button>
+                </div>
+                <div v-else-if="currentTaskParticipationStatus === 'declined'" class="participation-actions">
+                  <button type="button" class="modal-btn modal-btn--design" @click="setMyParticipationStatus('accepted')">
+                    Принять снова
+                  </button>
                 </div>
               </div>
             </div>
@@ -2017,7 +2269,7 @@ async function confirmDeleteTask() {
           <!-- Подвал по макету: bg-gray-50, border-t, Удалить слева, Отмена + Сохранить справа -->
           <div class="modal-actions modal-actions--design">
             <UiDeleteButton
-              v-if="editingTaskId"
+              v-if="editingTaskId && canEditCurrentTask"
               size="md"
               wide
               :disabled="taskSaveLoading"
@@ -2025,7 +2277,11 @@ async function confirmDeleteTask() {
             />
             <div class="modal-actions-right">
               <button type="button" class="modal-btn-ghost modal-btn-ghost--design" :disabled="taskSaveLoading" @click="closeTaskModal">Отмена</button>
-              <button type="submit" class="modal-btn modal-btn--design" :disabled="taskSaveLoading">
+              <button
+                type="submit"
+                class="modal-btn modal-btn--design"
+                :disabled="taskSaveLoading || (!!editingTaskId && !canEditCurrentTask)"
+              >
                 <span v-if="taskSaveLoading" class="modal-btn-loading">
                   <span class="modal-btn-loading-scale">
                     <UiLoadingBar size="compact" />
@@ -2048,8 +2304,34 @@ async function confirmDeleteTask() {
       @click="closeDeleteConfirm"
     >
       <div class="modal modal-confirm" @click.stop>
-        <h3 class="modal-confirm-title">Удалить задачу?</h3>
-        <p class="modal-confirm-text">Задача будет удалена без возможности восстановления.</p>
+        <h3 class="modal-confirm-title">Удалить событие?</h3>
+        <p class="modal-confirm-text">
+          {{ canDeleteAsSeries ? 'Выберите вариант удаления для повторяющихся событий.' : 'Событие будет удалено без возможности восстановления.' }}
+        </p>
+        <div v-if="showDeleteAudienceChoice" class="delete-scope-box">
+          <div class="delete-scope-caption">Область удаления</div>
+          <label class="delete-scope-option">
+            <input v-model="deleteAudienceScope" type="radio" value="all" />
+            <span>Удалить у всех участников</span>
+          </label>
+          <label class="delete-scope-option" :class="{ 'is-disabled': !canDeleteOnlyForMe }">
+            <input v-model="deleteAudienceScope" type="radio" value="only_me" :disabled="!canDeleteOnlyForMe" />
+            <span>Удалить только у меня</span>
+          </label>
+          <p v-if="!canDeleteOnlyForMe" class="delete-scope-note">
+            Этот вариант доступен только приглашенному участнику (не постановщику события).
+          </p>
+        </div>
+        <div v-if="canDeleteAsSeries" class="delete-scope-box">
+          <label class="delete-scope-option">
+            <input v-model="deleteScope" type="radio" value="only_this" />
+            <span>Удалить только этот слот</span>
+          </label>
+          <label class="delete-scope-option">
+            <input v-model="deleteScope" type="radio" value="this_and_following" />
+            <span>Удалить этот и все последующие слоты</span>
+          </label>
+        </div>
         <div class="modal-confirm-actions">
           <button type="button" class="modal-btn-ghost modal-btn-ghost--design" :disabled="deleteInProgress" @click="closeDeleteConfirm">
             Отмена
@@ -2066,6 +2348,14 @@ async function confirmDeleteTask() {
       button-text="Отлично"
       @close="successModalOpen = false"
     />
+    <div
+      v-if="assigneesTooltipVisible"
+      ref="assigneesTooltipRef"
+      class="assignees-tooltip-float"
+      :style="{ left: `${assigneesTooltipX}px`, top: `${assigneesTooltipY}px` }"
+    >
+      {{ assigneesTooltipText }}
+    </div>
   </section>
 </template>
 
@@ -2102,6 +2392,68 @@ async function confirmDeleteTask() {
 .calendar-header-text {
   min-width: 0;
   flex: 1;
+}
+
+.calendar-title-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.calendar-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 90%, transparent);
+  background: color-mix(in srgb, var(--bg-base) 90%, #fff);
+  color: var(--text-secondary);
+  cursor: help;
+  transform: translateY(-2px);
+}
+
+.calendar-help-icon {
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.calendar-help-tooltip {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 10px);
+  transform: translateY(-50%);
+  min-width: 220px;
+  max-width: 280px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 0.69rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.14);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 20;
+  transition: opacity 0.18s ease;
+}
+
+.calendar-help:hover .calendar-help-tooltip,
+.calendar-help:focus-visible .calendar-help-tooltip {
+  opacity: 1;
+}
+
+@media (max-width: 900px) {
+  .calendar-help-tooltip {
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(78vw, 300px);
+  }
 }
 
 .calendar-owner-card {
@@ -2351,11 +2703,6 @@ async function confirmDeleteTask() {
     font-size: 0.85rem;
   }
 
-  .week-progress {
-    margin-top: var(--space-md);
-    padding: var(--space-md) var(--space-lg);
-  }
-
   .day-title {
     font-size: 1.15rem;
   }
@@ -2431,44 +2778,6 @@ async function confirmDeleteTask() {
   .calendar-day-dot {
     width: 4px;
     height: 4px;
-  }
-
-  .week-progress {
-    padding: var(--space-sm) var(--space-md);
-    margin-top: var(--space-md);
-  }
-
-  .week-progress-hint {
-    left: 0;
-    right: 0;
-    max-width: none;
-    white-space: normal;
-    text-align: center;
-    padding: 10px 12px;
-    font-size: 0.75rem;
-  }
-
-  .week-progress-hint::after {
-    left: 50%;
-    right: auto;
-    transform: translateX(-50%);
-  }
-
-  .week-progress-title {
-    font-size: 0.9rem;
-  }
-
-  .week-progress-count {
-    font-size: 1rem;
-    margin-bottom: 8px;
-  }
-
-  .week-progress-number {
-    font-size: 1.35rem;
-  }
-
-  .week-progress-labels {
-    font-size: 0.7rem;
   }
 
   .calendar-card-right {
@@ -2558,42 +2867,6 @@ async function confirmDeleteTask() {
 
   .calendar-day-number {
     font-size: 0.75rem;
-  }
-
-  .week-progress {
-    padding: 10px 12px;
-  }
-
-  .week-progress-head {
-    margin-bottom: 2px;
-  }
-
-  .week-progress-title {
-    font-size: 0.85rem;
-  }
-
-  .week-progress-range {
-    font-size: 0.75rem;
-    margin-bottom: 6px;
-  }
-
-  .week-progress-count {
-    font-size: 0.95rem;
-    margin-bottom: 6px;
-  }
-
-  .week-progress-number {
-    font-size: 1.2rem;
-  }
-
-  .week-progress-bar-wrap {
-    height: 6px;
-    margin-bottom: 6px;
-  }
-
-  .week-progress-reset {
-    padding: 3px 8px;
-    font-size: 0.7rem;
   }
 
   .day-header {
@@ -2760,169 +3033,6 @@ async function confirmDeleteTask() {
 
 .calendar-day--today {
   background: rgba(61, 92, 64, 0.12);
-}
-
-.week-progress {
-  position: relative;
-  margin-top: var(--space-lg);
-  padding: var(--space-md) var(--space-lg);
-  background: var(--agro);
-  color: #fff;
-  border-radius: 16px;
-  cursor: pointer;
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
-  border: 2px solid transparent;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.week-progress:hover {
-  filter: brightness(1.05);
-}
-
-.week-progress--active {
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.4), 0 4px 20px rgba(61, 92, 64, 0.4);
-  border-color: rgba(255, 255, 255, 0.3);
-}
-
-.week-progress-hint {
-  position: absolute;
-  top: -8px;
-  right: 0;
-  transform: translateY(-100%);
-  padding: 8px 12px;
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  font-size: 0.8rem;
-  font-weight: 500;
-  border-radius: 10px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-  border: 1px solid var(--border-color);
-  white-space: nowrap;
-  animation: week-progress-hint-in 0.25s ease;
-  z-index: 5;
-}
-
-.week-progress-hint::after {
-  content: '';
-  position: absolute;
-  bottom: -6px;
-  right: 16px;
-  border: 6px solid transparent;
-  border-top-color: var(--bg-panel);
-  border-bottom: none;
-}
-
-@keyframes week-progress-hint-in {
-  from {
-    opacity: 0;
-    transform: translateY(-90%);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(-100%);
-  }
-}
-
-.calendar-day--in-range {
-  box-shadow: 0 0 0 2px var(--agro);
-  background: rgba(61, 92, 64, 0.2) !important;
-}
-
-.calendar-day--in-range.calendar-day--muted .calendar-day-number {
-  color: var(--agro);
-  opacity: 1;
-}
-
-.calendar-day--in-range.calendar-day--selected {
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--agro);
-}
-
-.calendar-day--range-start {
-  animation: calendar-day-pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes calendar-day-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 2px var(--agro);
-  }
-  50% {
-    box-shadow: 0 0 0 2px var(--agro), 0 0 0 6px rgba(61, 92, 64, 0.35);
-  }
-}
-
-.week-progress-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
-  min-width: 0;
-}
-
-.week-progress-title {
-  margin: 0;
-  font-size: 0.86rem;
-  font-weight: 700;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.week-progress-reset {
-  padding: 4px 10px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
-}
-
-.week-progress-reset:hover {
-  background: rgba(255, 255, 255, 0.3);
-  border-color: rgba(255, 255, 255, 0.6);
-}
-
-.week-progress-range {
-  margin: 0 0 8px;
-  font-size: 0.72rem;
-  opacity: 0.9;
-}
-
-.week-progress-count {
-  margin: 0 0 10px;
-  font-size: 0.95rem;
-}
-
-.week-progress-number {
-  font-size: 1.28rem;
-  font-weight: 700;
-}
-
-.week-progress-bar-wrap {
-  height: 8px;
-  background: rgba(255, 255, 255, 0.25);
-  border-radius: 999px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-
-.week-progress-bar-fill {
-  height: 100%;
-  background: #fff;
-  border-radius: 999px;
-  transition: width 0.25s ease;
-}
-
-.week-progress-labels {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.67rem;
-  opacity: 0.95;
 }
 
 .day-task-files {
@@ -3250,6 +3360,44 @@ async function confirmDeleteTask() {
 .week-event-card {
   right: auto;
   min-width: 0;
+  padding: 6px 8px 22px;
+}
+
+.week-event-card .day-event-time {
+  font-size: 0.62rem;
+  line-height: 1.1;
+  padding-right: 44px;
+}
+
+.week-event-card .day-event-title {
+  margin-top: 2px;
+  font-size: 0.68rem;
+  line-height: 1.15;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  padding-right: 4px;
+}
+
+.week-event-card .day-event-assignees {
+  right: 6px;
+  top: auto;
+  bottom: 5px;
+}
+
+.week-event-card .day-event-assignee-avatar {
+  width: 14px;
+  height: 14px;
+  font-size: 0.42rem;
+  margin-left: -5px;
+}
+
+.week-event-card .day-event-assignee-more {
+  font-size: 0.44rem;
+  padding: 1px 4px;
 }
 
 .month-view-wrap {
@@ -3383,6 +3531,41 @@ async function confirmDeleteTask() {
   padding-left: 2px;
 }
 
+.month-view-assignees {
+  margin-top: 3px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.month-view-assignee-avatar {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  color: #fff;
+  font-size: 0.42rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: -5px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+}
+
+.month-view-assignee-avatar:first-child {
+  margin-left: 0;
+}
+
+.month-view-assignee-more {
+  margin-left: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #205670;
+  font-size: 0.5rem;
+  font-weight: 700;
+  padding: 1px 4px;
+}
+
 .schedule-view-wrap {
   max-height: min(68vh, 760px);
   overflow-y: auto;
@@ -3498,6 +3681,45 @@ async function confirmDeleteTask() {
 .schedule-end {
   font-size: 0.72rem;
   color: var(--text-secondary);
+}
+
+.event-participation-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 4px;
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.event-participation--accepted {
+  background: rgba(34, 197, 94, 0.18);
+  color: #166534;
+}
+
+.event-participation--pending {
+  background: rgba(245, 158, 11, 0.2);
+  color: #92400e;
+}
+
+.event-participation--declined {
+  background: rgba(239, 68, 68, 0.18);
+  color: #991b1b;
+}
+
+.participation-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.participation-actions {
+  display: inline-flex;
+  gap: 8px;
 }
 
 .day-grid-line {
@@ -4453,6 +4675,60 @@ async function confirmDeleteTask() {
   font-size: 0.6rem;
 }
 
+.assignee-status-board {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.assignee-status-column {
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 8px;
+  min-width: 0;
+}
+
+.assignee-status-column--declined {
+  border-color: color-mix(in srgb, #ef4444 35%, var(--border-color));
+}
+
+.assignee-status-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.assignee-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.assignee-status-chip {
+  font-size: 0.7rem;
+  line-height: 1.3;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assignee-status-chip--declined {
+  background: color-mix(in srgb, #ef4444 14%, var(--bg-panel));
+  border-color: color-mix(in srgb, #ef4444 35%, var(--border-color));
+}
+
+.assignee-status-empty {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
 /* Файлы: карточка с иконкой в квадрате */
 .modal-files-grid--design {
   grid-template-columns: repeat(2, 1fr);
@@ -5048,6 +5324,51 @@ async function confirmDeleteTask() {
   line-height: 1.45;
 }
 
+.delete-scope-box {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.delete-scope-caption {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.delete-scope-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  color: var(--text-primary);
+}
+
+.delete-scope-option.is-disabled {
+  opacity: 0.6;
+}
+
+.delete-scope-note {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.assignees-tooltip-float {
+  position: fixed;
+  z-index: 1300;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+  pointer-events: none;
+}
+
 .modal-confirm-actions {
   display: flex;
   align-items: center;
@@ -5064,10 +5385,35 @@ async function confirmDeleteTask() {
 
   .calendar-card-right {
     padding: 10px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .day-events-scroll {
     height: min(56vh, 460px) !important;
+  }
+
+  .week-view-wrap {
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: pan-x pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .week-view-header,
+  .week-view-scroll {
+    width: 860px;
+    min-width: 860px;
+  }
+
+  .month-view-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+  }
+
+  .month-view-grid {
+    min-width: 860px;
   }
 }
 
@@ -5176,6 +5522,36 @@ async function confirmDeleteTask() {
   .month-view-grid {
     min-width: 760px;
   }
+
+  .schedule-item {
+    grid-template-columns: 112px minmax(0, 1fr);
+    grid-template-areas:
+      'time main'
+      'time assignees';
+    align-items: start;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .schedule-item-timebox {
+    grid-area: time;
+  }
+
+  .schedule-item-main {
+    grid-area: main;
+    justify-content: flex-start;
+  }
+
+  .schedule-item-assignees {
+    grid-area: assignees;
+    justify-self: start;
+  }
+
+  .schedule-item-title {
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.2;
+  }
 }
 
 @media (max-width: 480px) {
@@ -5209,6 +5585,20 @@ async function confirmDeleteTask() {
 
   .day-event-title {
     font-size: 0.68rem;
+  }
+
+  .schedule-item {
+    grid-template-columns: 100px minmax(0, 1fr);
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .schedule-item-time {
+    font-size: 0.78rem;
+  }
+
+  .schedule-item-title {
+    font-size: 0.82rem;
   }
 }
 </style>
@@ -5256,6 +5646,18 @@ html[data-theme='dark'] .calendar-page .calendar-view-hint {
 
 html[data-theme='dark'] .calendar-page .calendar-view-hint strong {
   color: color-mix(in srgb, #fff 90%, var(--agro-light));
+}
+
+html[data-theme='dark'] .calendar-page .calendar-help {
+  background: color-mix(in srgb, var(--bg-panel) 84%, #102119);
+  border-color: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  color: color-mix(in srgb, #fff 78%, var(--agro-light));
+}
+
+html[data-theme='dark'] .calendar-page .calendar-help-tooltip {
+  background: color-mix(in srgb, var(--bg-panel) 90%, #0d1b15);
+  border-color: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  color: #eaf2ee;
 }
 
 html[data-theme='dark'] .calendar-page .schedule-day-head-wrap::before {
@@ -5317,5 +5719,53 @@ html[data-theme='dark'] .calendar-page .schedule-item-dot.priority-low {
 html[data-theme='dark'] .calendar-page .day-event-assignee-more {
   background: rgba(8, 18, 28, 0.85);
   color: #d8e6f5;
+}
+
+html[data-theme='dark'] .calendar-page .event-participation--accepted {
+  background: rgba(34, 197, 94, 0.24);
+  color: #bbf7d0;
+}
+
+html[data-theme='dark'] .calendar-page .event-participation--pending {
+  background: rgba(245, 158, 11, 0.26);
+  color: #fde68a;
+}
+
+html[data-theme='dark'] .calendar-page .event-participation--declined {
+  background: rgba(239, 68, 68, 0.24);
+  color: #fecaca;
+}
+
+html[data-theme='dark'] .calendar-page .assignees-tooltip-float {
+  background: color-mix(in srgb, var(--bg-panel) 90%, #0f1f18);
+  border-color: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  color: #eaf2ee;
+}
+
+html[data-theme='dark'] .calendar-page .assignee-status-column {
+  background: rgba(15, 23, 42, 0.56);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+html[data-theme='dark'] .calendar-page .assignee-status-title {
+  color: #cbd5e1;
+}
+
+html[data-theme='dark'] .calendar-page .assignee-status-chip {
+  background: rgba(30, 41, 59, 0.6);
+  border-color: rgba(148, 163, 184, 0.28);
+  color: #e2e8f0;
+}
+
+html[data-theme='dark'] .calendar-page .assignee-status-chip--declined {
+  background: rgba(127, 29, 29, 0.38);
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #fecaca;
+}
+
+@media (max-width: 820px) {
+  .assignee-status-board {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
