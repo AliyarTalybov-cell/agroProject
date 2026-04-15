@@ -148,6 +148,15 @@ const monthReorderTargetTaskId = ref<string | null>(null)
 const weekDragTaskId = ref<string | null>(null)
 const weekDragDurationMinutes = ref(60)
 const weekDragPriority = ref<CalendarTask['priority']>('normal')
+const dayDragTaskId = ref<string | null>(null)
+const dayDragDurationMinutes = ref(60)
+const dayDragPriority = ref<CalendarTask['priority']>('normal')
+const dayDragPreview = ref<{
+  start: number
+  end: number
+  top: number
+  height: number
+} | null>(null)
 const weekDragPreview = ref<{
   dayIndex: number
   start: number
@@ -984,6 +993,91 @@ async function onWeekGridDrop(e: DragEvent) {
   const task = tasks.value.find((t) => t.id === taskId)
   if (!task) return
   const nextDate = targetDay.key
+  const nextStart = minutesToHhmm(preview.start)
+  const nextEnd = minutesToHhmm(preview.end)
+  if (task.date === nextDate && (task.startTime || '') === nextStart && (task.endTime || '') === nextEnd) return
+
+  const participantIdsRaw = taskAssigneeIdsByTaskId.value[taskId] ?? []
+  const participantIds = participantIdsRaw.length > 0
+    ? participantIdsRaw
+    : [task.userId].filter((x): x is string => !!x)
+  const noConflicts = await ensureNoParticipantConflicts({
+    participantIds,
+    dates: [nextDate],
+    startTime: nextStart,
+    endTime: nextEnd,
+    excludeTaskId: taskId,
+  })
+  if (!noConflicts) return
+
+  const prev = { date: task.date, startTime: task.startTime, endTime: task.endTime }
+  task.date = nextDate
+  task.startTime = nextStart
+  task.endTime = nextEnd
+  try {
+    await updateCalendarTask(taskId, { date: nextDate, start_time: nextStart, end_time: nextEnd })
+  } catch (err) {
+    task.date = prev.date
+    task.startTime = prev.startTime
+    task.endTime = prev.endTime
+    console.error(err)
+  }
+}
+
+function onDayEventDragStart(taskId: string, start: number, end: number, priority: CalendarTask['priority'], e: DragEvent) {
+  dayDragTaskId.value = taskId
+  dayDragDurationMinutes.value = Math.max(daySlotMinutes, end - start)
+  dayDragPriority.value = priority || 'normal'
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', taskId)
+  }
+}
+
+function onDayEventDragEnd() {
+  dayDragTaskId.value = null
+  dayDragPriority.value = 'normal'
+  dayDragPreview.value = null
+}
+
+function getDayDropPreviewFromEvent(e: DragEvent) {
+  const grid = e.currentTarget as HTMLElement | null
+  if (!grid) return null
+  const rect = grid.getBoundingClientRect()
+  const relativeY = e.clientY - rect.top
+  const dayStartMinutes = dayStartHour * 60
+  const dayEndMinutes = dayEndHour * 60
+  const snappedStart = dayStartMinutes + Math.round((relativeY - dayGridTopPadding) / daySlotHeight) * daySlotMinutes
+  const duration = Math.max(daySlotMinutes, dayDragDurationMinutes.value)
+  const maxStart = dayEndMinutes - duration
+  const start = Math.max(dayStartMinutes, Math.min(maxStart, snappedStart))
+  const end = Math.min(dayEndMinutes, start + duration)
+  const adjustedStart = Math.max(dayStartMinutes, end - duration)
+  const top = dayGridTopPadding + ((adjustedStart - dayStartMinutes) / daySlotMinutes) * daySlotHeight
+  const height = Math.max(36, ((end - adjustedStart) / daySlotMinutes) * daySlotHeight - 4)
+  return { start: adjustedStart, end, top, height }
+}
+
+function onDayGridDragOver(e: DragEvent) {
+  if (!dayDragTaskId.value) return
+  e.preventDefault()
+  const preview = getDayDropPreviewFromEvent(e)
+  if (!preview) return
+  dayDragPreview.value = preview
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+async function onDayGridDrop(e: DragEvent) {
+  e.preventDefault()
+  const taskId = dayDragTaskId.value || e.dataTransfer?.getData('text/plain')
+  const preview = getDayDropPreviewFromEvent(e) || dayDragPreview.value
+  dayDragTaskId.value = null
+  dayDragPriority.value = 'normal'
+  dayDragPreview.value = null
+  if (!taskId || !preview || !isSupabaseConfigured()) return
+  const task = tasks.value.find((t) => t.id === taskId)
+  if (!task) return
+  const nextDate = selectedDate.value
   const nextStart = minutesToHhmm(preview.start)
   const nextEnd = minutesToHhmm(preview.end)
   if (task.date === nextDate && (task.startTime || '') === nextStart && (task.endTime || '') === nextEnd) return
@@ -2022,7 +2116,7 @@ async function confirmDeleteTask() {
                 v-for="event in weekEventsTimed"
                 :key="`week-ev-${event.task.id}`"
                 class="day-event-card week-event-card"
-                :class="priorityClass(event.task.priority)"
+                :class="[priorityClass(event.task.priority), { 'week-event-card--compact': event.height < 74 }]"
                 draggable="true"
                 :style="{
                   top: `${event.top}px`,
@@ -2036,13 +2130,6 @@ async function confirmDeleteTask() {
               >
                 <div class="day-event-time">{{ minutesToHhmm(event.start) }}<span v-if="event.task.endTime"> – {{ event.task.endTime }}</span></div>
                 <div class="day-event-title">{{ event.task.title }}</div>
-                <div
-                  v-if="taskParticipationLabel(event.task.id)"
-                  class="event-participation-pill"
-                  :class="taskParticipationClass(event.task.id)"
-                >
-                  {{ taskParticipationLabel(event.task.id) }}
-                </div>
                 <div
                   v-if="dayEventAssignees(event.task.id).length"
                   class="day-event-assignees"
@@ -2170,32 +2257,37 @@ async function confirmDeleteTask() {
                 <div class="schedule-item-main">
                   <span class="schedule-item-dot" :class="priorityClass(task.priority)" />
                   <span class="schedule-item-title">{{ task.title }}</span>
+                </div>
+                <div
+                  v-if="taskParticipationLabel(task.id) || dayEventAssignees(task.id).length"
+                  class="schedule-item-meta"
+                >
                   <span
                     v-if="taskParticipationLabel(task.id)"
-                    class="event-participation-pill"
+                    class="event-participation-pill schedule-item-status"
                     :class="taskParticipationClass(task.id)"
                   >
                     {{ taskParticipationLabel(task.id) }}
                   </span>
-                </div>
-                <div
-                  v-if="dayEventAssignees(task.id).length"
-                  class="schedule-item-assignees"
-                  @mouseenter.stop="showTaskAssigneesTooltip(task.id, $event)"
-                  @mousemove.stop="moveAssigneesTooltip($event)"
-                  @mouseleave.stop="hideTaskAssigneesTooltip"
-                >
-                  <span
-                    v-for="p in dayEventAssignees(task.id).slice(0, 3)"
-                    :key="`s-${task.id}-${p.id}`"
-                    class="day-event-assignee-avatar"
-                    :style="assigneeAvatarStyle(p)"
+                  <div
+                    v-if="dayEventAssignees(task.id).length"
+                    class="schedule-item-assignees"
+                    @mouseenter.stop="showTaskAssigneesTooltip(task.id, $event)"
+                    @mousemove.stop="moveAssigneesTooltip($event)"
+                    @mouseleave.stop="hideTaskAssigneesTooltip"
                   >
-                    {{ assigneeInitials(p) }}
-                  </span>
-                  <span v-if="dayEventAssignees(task.id).length > 3" class="day-event-assignee-more">
-                    +{{ dayEventAssignees(task.id).length - 3 }}
-                  </span>
+                    <span
+                      v-for="p in dayEventAssignees(task.id).slice(0, 3)"
+                      :key="`s-${task.id}-${p.id}`"
+                      class="day-event-assignee-avatar"
+                      :style="assigneeAvatarStyle(p)"
+                    >
+                      {{ assigneeInitials(p) }}
+                    </span>
+                    <span v-if="dayEventAssignees(task.id).length > 3" class="day-event-assignee-more">
+                      +{{ dayEventAssignees(task.id).length - 3 }}
+                    </span>
+                  </div>
                 </div>
               </button>
             </section>
@@ -2215,6 +2307,8 @@ async function confirmDeleteTask() {
                 class="day-events-grid"
                 :style="{ height: `${dayGridHeight}px` }"
                 @click.self="onDayGridClick"
+                @dragover="onDayGridDragOver"
+                @drop="onDayGridDrop"
               >
                 <div
                   v-for="slot in daySlots.slice(0, -1)"
@@ -2228,41 +2322,62 @@ async function confirmDeleteTask() {
                   v-for="event in dayEventsTimed"
                   :key="event.task.id"
                   class="day-event-card"
-                  :class="[priorityClass(event.task.priority), { 'day-event-card--completed': event.task.completedAt }]"
+                  :class="[
+                    priorityClass(event.task.priority),
+                    {
+                      'day-event-card--completed': event.task.completedAt,
+                      'day-event-card--compact': event.height < 64,
+                      'day-event-card--dragging': dayDragTaskId === event.task.id,
+                    },
+                  ]"
                   :style="{ top: `${event.top}px`, height: `${event.height}px` }"
                   role="button"
                   tabindex="0"
+                  draggable="true"
                   @click.stop="openEditTaskModal(event.task)"
                   @keydown.enter="openEditTaskModal(event.task)"
+                  @dragstart="onDayEventDragStart(event.task.id, event.start, event.end, event.task.priority, $event)"
+                  @dragend="onDayEventDragEnd"
                 >
                   <div class="day-event-time">{{ minutesToHhmm(event.start) }}<span v-if="event.task.endTime"> – {{ event.task.endTime }}</span></div>
                   <div class="day-event-title">{{ event.task.title }}</div>
-                  <div
-                    v-if="taskParticipationLabel(event.task.id)"
-                    class="event-participation-pill"
-                    :class="taskParticipationClass(event.task.id)"
-                  >
-                    {{ taskParticipationLabel(event.task.id) }}
-                  </div>
-                  <div
-                    v-if="dayEventAssignees(event.task.id).length"
-                    class="day-event-assignees"
-                    @mouseenter.stop="showTaskAssigneesTooltip(event.task.id, $event)"
-                    @mousemove.stop="moveAssigneesTooltip($event)"
-                    @mouseleave.stop="hideTaskAssigneesTooltip"
-                  >
-                    <span
-                      v-for="p in dayEventAssignees(event.task.id).slice(0, 3)"
-                      :key="p.id"
-                      class="day-event-assignee-avatar"
-                      :style="assigneeAvatarStyle(p)"
+                  <div class="day-event-meta-row" :class="{ 'day-event-meta-row--compact': event.height < 64 }">
+                    <div
+                      v-if="taskParticipationLabel(event.task.id)"
+                      class="event-participation-pill"
+                      :class="taskParticipationClass(event.task.id)"
                     >
-                      {{ assigneeInitials(p) }}
-                    </span>
-                    <span v-if="dayEventAssignees(event.task.id).length > 3" class="day-event-assignee-more">
-                      +{{ dayEventAssignees(event.task.id).length - 3 }}
-                    </span>
+                      {{ taskParticipationLabel(event.task.id) }}
+                    </div>
+                    <div
+                      v-if="dayEventAssignees(event.task.id).length"
+                      class="day-event-assignees"
+                      @mouseenter.stop="showTaskAssigneesTooltip(event.task.id, $event)"
+                      @mousemove.stop="moveAssigneesTooltip($event)"
+                      @mouseleave.stop="hideTaskAssigneesTooltip"
+                    >
+                      <span
+                        v-for="p in dayEventAssignees(event.task.id).slice(0, 3)"
+                        :key="p.id"
+                        class="day-event-assignee-avatar"
+                        :style="assigneeAvatarStyle(p)"
+                      >
+                        {{ assigneeInitials(p) }}
+                      </span>
+                      <span v-if="dayEventAssignees(event.task.id).length > 3" class="day-event-assignee-more">
+                        +{{ dayEventAssignees(event.task.id).length - 3 }}
+                      </span>
+                    </div>
                   </div>
+                </article>
+                <article
+                  v-if="dayDragPreview"
+                  class="day-event-card day-event-card--drag-preview"
+                  :class="priorityClass(dayDragPriority)"
+                  :style="{ top: `${dayDragPreview.top}px`, height: `${dayDragPreview.height}px` }"
+                >
+                  <div class="day-event-time">{{ minutesToHhmm(dayDragPreview.start) }} – {{ minutesToHhmm(dayDragPreview.end) }}</div>
+                  <div class="day-event-title">Новый временной слот</div>
                 </article>
                 <div
                   v-if="showNowMarker"
@@ -3768,7 +3883,7 @@ async function confirmDeleteTask() {
 .week-event-card {
   right: auto;
   min-width: 0;
-  padding: 6px 8px 22px;
+  padding: 6px 8px 24px;
   cursor: grab;
 }
 
@@ -3793,6 +3908,14 @@ async function confirmDeleteTask() {
   text-overflow: ellipsis;
   white-space: normal;
   padding-right: 4px;
+  padding-bottom: 15px;
+}
+
+.week-event-card .event-participation-pill {
+  position: absolute;
+  left: 6px;
+  right: auto;
+  bottom: 5px;
 }
 
 .week-event-card .day-event-assignees {
@@ -3811,6 +3934,15 @@ async function confirmDeleteTask() {
 .week-event-card .day-event-assignee-more {
   font-size: 0.44rem;
   padding: 1px 4px;
+}
+
+.week-event-card:not(.week-event-card--drag-preview):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 9px 16px rgba(31, 41, 55, 0.16);
+}
+
+.week-event-card--compact .day-event-assignees {
+  display: none;
 }
 
 .week-event-card--drag-preview {
@@ -4002,6 +4134,12 @@ async function confirmDeleteTask() {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.month-view-more-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 12px rgba(31, 41, 55, 0.12);
 }
 
 .month-view-more-item-title {
@@ -4107,13 +4245,22 @@ async function confirmDeleteTask() {
   background: var(--bg-panel);
   display: grid;
   grid-template-columns: 170px minmax(0, 1fr) auto;
+  grid-template-areas: 'time main meta';
   align-items: center;
   gap: 10px;
   text-align: left;
   cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.schedule-item:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--agro) 28%, var(--border-color));
+  box-shadow: 0 8px 16px rgba(31, 41, 55, 0.12);
 }
 
 .schedule-item-timebox {
+  grid-area: time;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -4131,10 +4278,26 @@ async function confirmDeleteTask() {
 }
 
 .schedule-item-main {
+  grid-area: main;
   min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 9px;
+}
+
+.schedule-item-meta {
+  grid-area: meta;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.schedule-item-status {
+  margin-top: 0;
+  justify-self: auto;
+  align-self: auto;
 }
 
 .schedule-item-dot {
@@ -4157,6 +4320,7 @@ async function confirmDeleteTask() {
 .schedule-item-assignees {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .schedule-more-loader,
@@ -4269,22 +4433,88 @@ async function confirmDeleteTask() {
     transform 0.18s ease;
 }
 
+.day-events-grid:not(.week-view-grid) .day-event-card {
+  cursor: grab;
+}
+
+.day-events-grid:not(.week-view-grid) .day-event-card:active {
+  cursor: grabbing;
+}
+
+.day-events-grid:not(.week-view-grid) .day-event-card:not(.day-event-card--drag-preview):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(31, 41, 55, 0.16);
+}
+
 .day-event-card--completed {
-  opacity: 0.75;
-  filter: grayscale(0.18);
+  opacity: 0.92;
+  filter: grayscale(0.08);
+}
+
+.day-event-card--dragging {
+  opacity: 0.38;
+  transform: scale(0.99);
+}
+
+.day-event-card--drag-preview {
+  pointer-events: none;
+  z-index: 8;
+  border-style: dashed;
+  opacity: 0.92;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--agro) 46%, transparent), 0 8px 14px rgba(0, 0, 0, 0.12);
+  animation: dayDragPreviewPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes dayDragPreviewPulse {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1px);
+  }
 }
 
 .day-event-time {
   font-size: 0.7rem;
-  color: #3e4b57;
+  color: #324252;
   font-weight: 600;
 }
 
 .day-event-title {
   margin-top: 2px;
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
   color: #1f2d3d;
+  padding-bottom: 16px;
+}
+
+.day-event-meta-row {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.day-event-meta-row--compact {
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.day-event-meta-row .event-participation-pill {
+  position: static;
+}
+
+.day-event-card--compact .event-participation-pill {
+  max-width: 68px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 2px;
 }
 
 .priority-normal.day-event-card,
@@ -4311,6 +4541,21 @@ async function confirmDeleteTask() {
   border-color: #d6dde4;
 }
 
+.day-events-grid:not(.week-view-grid) .priority-normal.day-event-card {
+  background: #bfdff1;
+  border-color: #a9d2e8;
+}
+
+.day-events-grid:not(.week-view-grid) .priority-high.day-event-card {
+  background: #efcdd2;
+  border-color: #e3b3bc;
+}
+
+.day-events-grid:not(.week-view-grid) .priority-low.day-event-card {
+  background: #dde6ee;
+  border-color: #c8d3de;
+}
+
 .schedule-item-dot.priority-high {
   background: #de8f99;
 }
@@ -4320,9 +4565,7 @@ async function confirmDeleteTask() {
 }
 
 .day-event-assignees {
-  position: absolute;
-  right: 10px;
-  top: 7px;
+  position: static;
   display: inline-flex;
   align-items: center;
 }
@@ -6310,7 +6553,7 @@ async function confirmDeleteTask() {
     grid-template-columns: 112px minmax(0, 1fr);
     grid-template-areas:
       'time main'
-      'time assignees';
+      'time meta';
     align-items: start;
     gap: 8px;
     padding: 8px 10px;
@@ -6323,11 +6566,18 @@ async function confirmDeleteTask() {
   .schedule-item-main {
     grid-area: main;
     justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .schedule-item-meta {
+    grid-area: meta;
+    justify-self: end;
+    justify-content: flex-end;
+    margin-top: 2px;
   }
 
   .schedule-item-assignees {
-    grid-area: assignees;
-    justify-self: start;
+    justify-content: flex-end;
   }
 
   .schedule-item-title {
@@ -6390,9 +6640,15 @@ async function confirmDeleteTask() {
   .calendar-page .month-view-cell,
   .calendar-page .month-view-events,
   .calendar-page .month-view-event-pill,
+  .calendar-page .month-view-more-item,
   .calendar-page .month-view-event-more,
+  .calendar-page .schedule-item,
   .calendar-page .calendar-day {
     transition: none !important;
+  }
+
+  .calendar-page .day-event-card--drag-preview {
+    animation: none !important;
   }
 }
 </style>
@@ -6557,12 +6813,33 @@ html[data-theme='dark'] .calendar-page .priority-low.schedule-item {
   border-color: #4d5865;
 }
 
+/* В дневном фильтре делаем карточки темнее, чтобы не выбивались из фона */
+html[data-theme='dark'] .calendar-page .day-events-grid:not(.week-view-grid) .priority-normal.day-event-card {
+  background: #193746;
+  border-color: #2a556c;
+}
+
+html[data-theme='dark'] .calendar-page .day-events-grid:not(.week-view-grid) .priority-high.day-event-card {
+  background: #4a2730;
+  border-color: #71404c;
+}
+
+html[data-theme='dark'] .calendar-page .day-events-grid:not(.week-view-grid) .priority-low.day-event-card {
+  background: #252d37;
+  border-color: #3d4a58;
+}
+
 html[data-theme='dark'] .calendar-page .day-event-time,
 html[data-theme='dark'] .calendar-page .day-event-title,
 html[data-theme='dark'] .calendar-page .month-view-event-title,
 html[data-theme='dark'] .calendar-page .schedule-item-time,
 html[data-theme='dark'] .calendar-page .schedule-item-title {
   color: #eef6ff;
+}
+
+html[data-theme='dark'] .calendar-page .day-events-grid:not(.week-view-grid) .day-event-time,
+html[data-theme='dark'] .calendar-page .day-events-grid:not(.week-view-grid) .day-event-title {
+  color: #deebf7;
 }
 
 html[data-theme='dark'] .calendar-page .month-view-event-time,
