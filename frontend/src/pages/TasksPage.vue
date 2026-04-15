@@ -143,6 +143,18 @@ const taskAssigneeStatusByTaskId = ref<Record<string, Record<string, CalendarTas
 const dayEventsScrollRef = ref<HTMLElement | null>(null)
 const monthDragTaskId = ref<string | null>(null)
 const monthDropTargetDate = ref<string | null>(null)
+const monthExpandedDate = ref<string | null>(null)
+const monthReorderTargetTaskId = ref<string | null>(null)
+const weekDragTaskId = ref<string | null>(null)
+const weekDragDurationMinutes = ref(60)
+const weekDragPriority = ref<CalendarTask['priority']>('normal')
+const weekDragPreview = ref<{
+  dayIndex: number
+  start: number
+  end: number
+  top: number
+  height: number
+} | null>(null)
 const scheduleTasks = ref<CalendarTask[]>([])
 const scheduleLoading = ref(false)
 const scheduleLoadingMore = ref(false)
@@ -591,16 +603,28 @@ const tasksByDate = computed(() => {
 })
 
 const monthCells = computed(() =>
-  calendarWeeks.value.flat().map((day) => {
+  calendarWeeks.value.flat().map((day, idx) => {
     const dayTasks = tasksByDate.value.get(day.key) ?? []
     return {
       ...day,
+      rowIndex: Math.floor(idx / 7),
+      allTasks: dayTasks,
       tasks: dayTasks.slice(0, 3),
       more: Math.max(0, dayTasks.length - 3),
       isWeekend: isWeekendDateKey(day.key),
     }
   }),
 )
+
+const monthExpandedRowIndex = computed(() => {
+  if (!monthExpandedDate.value) return null
+  const target = monthCells.value.find((c) => c.key === monthExpandedDate.value)
+  return target ? target.rowIndex : null
+})
+
+function toggleMonthMore(dateKey: string) {
+  monthExpandedDate.value = monthExpandedDate.value === dateKey ? null : dateKey
+}
 
 const tasksForCurrentMonth = computed(() => {
   const monthPrefix = `${currentYear.value}-${String(currentMonth.value + 1).padStart(2, '0')}-`
@@ -623,6 +647,7 @@ const visibleTaskIdsKey = computed(() =>
 
 function setCalendarView(mode: 'day' | 'week' | 'month' | 'schedule') {
   calendarViewMode.value = mode
+  monthExpandedDate.value = null
 }
 
 async function loadSchedulePage(append: boolean) {
@@ -679,11 +704,17 @@ function onScheduleScroll() {
 
 function onMonthCellClick(dateKey: string) {
   selectedDate.value = dateKey
+  const dayTasks = tasksByDate.value.get(dateKey) ?? []
+  if (dayTasks.length > 0) {
+    monthExpandedDate.value = monthExpandedDate.value === dateKey ? null : dateKey
+    return
+  }
   openNewTaskModal('09:00')
 }
 
 function onMonthEventDragStart(taskId: string, e: DragEvent) {
   monthDragTaskId.value = taskId
+  monthReorderTargetTaskId.value = null
   if (e.dataTransfer) {
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', taskId)
@@ -693,6 +724,7 @@ function onMonthEventDragStart(taskId: string, e: DragEvent) {
 function onMonthEventDragEnd() {
   monthDragTaskId.value = null
   monthDropTargetDate.value = null
+  monthReorderTargetTaskId.value = null
 }
 
 function onMonthCellDragOver(dateKey: string, e: DragEvent) {
@@ -706,6 +738,142 @@ function onMonthCellDragLeave(dateKey: string) {
   if (monthDropTargetDate.value === dateKey) monthDropTargetDate.value = null
 }
 
+function getTaskParticipantIds(task: CalendarTask): string[] {
+  const raw = taskAssigneeIdsByTaskId.value[task.id] ?? []
+  if (raw.length > 0) return raw
+  return [task.userId].filter((x): x is string => !!x)
+}
+
+async function findFreeSlotBackwardForDay(args: {
+  date: string
+  durationMinutes: number
+  participantIds: string[]
+  excludeTaskId?: string | null
+  fromStartMinutes: number
+}): Promise<{ start: string; end: string } | null> {
+  const duration = Math.max(daySlotMinutes, args.durationMinutes)
+  const minStart = dayStartHour * 60
+  const maxStart = dayEndHour * 60 - duration
+  let cursor = Math.max(minStart, Math.min(maxStart, args.fromStartMinutes))
+  cursor = cursor - (cursor % daySlotMinutes)
+  for (let start = cursor; start >= minStart; start -= daySlotMinutes) {
+    const end = start + duration
+    const conflicts = await findParticipantConflicts({
+      participantIds: args.participantIds,
+      dates: [args.date],
+      startTime: minutesToHhmm(start),
+      endTime: minutesToHhmm(end),
+      excludeTaskId: args.excludeTaskId ?? null,
+    })
+    if (conflicts.length === 0) {
+      return { start: minutesToHhmm(start), end: minutesToHhmm(end) }
+    }
+  }
+  return null
+}
+
+function onMonthEventReorderOver(dateKey: string, targetTaskId: string, e: DragEvent) {
+  if (!monthDragTaskId.value || monthDragTaskId.value === targetTaskId) return
+  const dragged = tasks.value.find((t) => t.id === monthDragTaskId.value)
+  if (!dragged) return
+  if (dragged.date !== dateKey) {
+    // Если тянем в другой день и курсор над карточкой, даем сработать сценарию междневного переноса.
+    e.preventDefault()
+    monthDropTargetDate.value = dateKey
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    return
+  }
+  e.preventDefault()
+  e.stopPropagation()
+  monthReorderTargetTaskId.value = targetTaskId
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+function onMonthEventReorderLeave(targetTaskId: string) {
+  if (monthReorderTargetTaskId.value === targetTaskId) monthReorderTargetTaskId.value = null
+}
+
+async function onMonthEventReorderDrop(dateKey: string, targetTaskId: string, e: DragEvent) {
+  if (!monthDragTaskId.value) return
+  e.preventDefault()
+  const draggedId = monthDragTaskId.value
+  monthReorderTargetTaskId.value = null
+  if (draggedId === targetTaskId || !isSupabaseConfigured()) return
+  const draggedTask = tasks.value.find((t) => t.id === draggedId)
+  const targetTask = tasks.value.find((t) => t.id === targetTaskId)
+  if (!draggedTask || !targetTask) return
+  if (draggedTask.date !== dateKey || targetTask.date !== dateKey) {
+    // Дропнули на карточку в другом дне: обрабатываем как междневный перенос.
+    await onMonthCellDrop(dateKey, e)
+    return
+  }
+  e.stopPropagation()
+
+  const draggedStart = hhmmToMinutes(draggedTask.startTime) ?? dayStartHour * 60
+  const draggedEnd = hhmmToMinutes(draggedTask.endTime) ?? draggedStart + 60
+  const duration = Math.max(daySlotMinutes, draggedEnd - draggedStart)
+  const targetStart = hhmmToMinutes(targetTask.startTime) ?? draggedStart
+  const preferredStart = Math.max(dayStartHour * 60, targetStart - duration)
+  const freeSlot = await findFreeSlotBackwardForDay({
+    date: dateKey,
+    durationMinutes: duration,
+    participantIds: getTaskParticipantIds(draggedTask),
+    excludeTaskId: draggedTask.id,
+    fromStartMinutes: preferredStart,
+  })
+  if (!freeSlot) {
+    successModalTitle.value = 'Нет свободного времени'
+    successModalMessage.value = 'Не удалось поднять слот выше: нет подходящего свободного времени в этом дне.'
+    successModalOpen.value = true
+    return
+  }
+
+  const prevStart = draggedTask.startTime
+  const prevEnd = draggedTask.endTime
+  draggedTask.startTime = freeSlot.start
+  draggedTask.endTime = freeSlot.end
+  try {
+    await updateCalendarTask(draggedTask.id, { start_time: freeSlot.start, end_time: freeSlot.end })
+  } catch (err) {
+    draggedTask.startTime = prevStart
+    draggedTask.endTime = prevEnd
+    console.error(err)
+  }
+}
+
+async function findFirstFreeSlotForDay(args: {
+  date: string
+  durationMinutes: number
+  participantIds: string[]
+  excludeTaskId?: string | null
+  preferredStartMinutes?: number
+}): Promise<{ start: string; end: string } | null> {
+  const duration = Math.max(daySlotMinutes, args.durationMinutes)
+  const minStart = dayStartHour * 60
+  const maxStart = dayEndHour * 60 - duration
+  if (maxStart < minStart) return null
+
+  const preferred = Math.max(minStart, Math.min(maxStart, args.preferredStartMinutes ?? minStart))
+  const orderedStarts: number[] = []
+  for (let m = preferred; m <= maxStart; m += daySlotMinutes) orderedStarts.push(m)
+  for (let m = minStart; m < preferred; m += daySlotMinutes) orderedStarts.push(m)
+
+  for (const start of orderedStarts) {
+    const end = start + duration
+    const conflicts = await findParticipantConflicts({
+      participantIds: args.participantIds,
+      dates: [args.date],
+      startTime: minutesToHhmm(start),
+      endTime: minutesToHhmm(end),
+      excludeTaskId: args.excludeTaskId ?? null,
+    })
+    if (conflicts.length === 0) {
+      return { start: minutesToHhmm(start), end: minutesToHhmm(end) }
+    }
+  }
+  return null
+}
+
 async function onMonthCellDrop(dateKey: string, e: DragEvent) {
   e.preventDefault()
   const taskId = monthDragTaskId.value || e.dataTransfer?.getData('text/plain')
@@ -713,14 +881,136 @@ async function onMonthCellDrop(dateKey: string, e: DragEvent) {
   monthDragTaskId.value = null
   if (!taskId || !isSupabaseConfigured()) return
   const task = tasks.value.find((t) => t.id === taskId)
-  if (!task || task.date === dateKey) return
+  if (!task) return
+
+  const prevStart = hhmmToMinutes(task.startTime) ?? dayStartHour * 60
+  const prevEnd = hhmmToMinutes(task.endTime) ?? prevStart + 60
+  const duration = Math.max(daySlotMinutes, prevEnd - prevStart)
+
+  const participantIds = getTaskParticipantIds(task)
+  const nextStart = minutesToHhmm(prevStart)
+  const nextEnd = minutesToHhmm(Math.min(dayEndHour * 60, prevStart + duration))
+  const noConflicts = await ensureNoParticipantConflicts({
+    participantIds,
+    dates: [dateKey],
+    startTime: nextStart,
+    endTime: nextEnd,
+    excludeTaskId: taskId,
+  })
+  if (!noConflicts) {
+    successModalTitle.value = 'Диапазон занят'
+    successModalMessage.value = 'Перенос не выполнен: в выбранном дне этот временной диапазон уже занят у участников.'
+    successModalOpen.value = true
+    return
+  }
+
+  if (task.date === dateKey && (task.startTime || '') === nextStart && (task.endTime || '') === nextEnd) return
+
   const prevDate = task.date
+  const prevStartTime = task.startTime
+  const prevEndTime = task.endTime
   // Оптимистично обновляем локально, чтобы не было резкого мигания сетки.
   task.date = dateKey
+  task.startTime = nextStart
+  task.endTime = nextEnd
   try {
-    await updateCalendarTask(taskId, { date: dateKey })
+    await updateCalendarTask(taskId, { date: dateKey, start_time: nextStart, end_time: nextEnd })
   } catch (err) {
     task.date = prevDate
+    task.startTime = prevStartTime
+    task.endTime = prevEndTime
+    console.error(err)
+  }
+}
+
+function onWeekEventDragStart(taskId: string, start: number, end: number, priority: CalendarTask['priority'], e: DragEvent) {
+  weekDragTaskId.value = taskId
+  weekDragDurationMinutes.value = Math.max(daySlotMinutes, end - start)
+  weekDragPriority.value = priority || 'normal'
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', taskId)
+  }
+}
+
+function onWeekEventDragEnd() {
+  weekDragTaskId.value = null
+  weekDragPriority.value = 'normal'
+  weekDragPreview.value = null
+}
+
+function getWeekDropPreviewFromEvent(e: DragEvent) {
+  const grid = e.currentTarget as HTMLElement | null
+  if (!grid) return null
+  const rect = grid.getBoundingClientRect()
+  const relativeX = e.clientX - rect.left
+  const relativeY = e.clientY - rect.top
+  const weekLabelWidth = 66
+  const usableWidth = Math.max(1, rect.width - weekLabelWidth)
+  const dayWidth = usableWidth / 7
+  const dayIndex = Math.max(0, Math.min(6, Math.floor((relativeX - weekLabelWidth) / dayWidth)))
+  const dayStartMinutes = dayStartHour * 60
+  const dayEndMinutes = dayEndHour * 60
+  const snappedStart = dayStartMinutes + Math.round((relativeY - dayGridTopPadding) / daySlotHeight) * daySlotMinutes
+  const maxStart = dayEndMinutes - daySlotMinutes
+  const start = Math.max(dayStartMinutes, Math.min(maxStart, snappedStart))
+  const duration = Math.max(daySlotMinutes, weekDragDurationMinutes.value)
+  const end = Math.min(dayEndMinutes, start + duration)
+  const adjustedStart = Math.max(dayStartMinutes, end - duration)
+  const top = dayGridTopPadding + ((adjustedStart - dayStartMinutes) / daySlotMinutes) * daySlotHeight
+  const height = Math.max(36, ((end - adjustedStart) / daySlotMinutes) * daySlotHeight - 4)
+  return { dayIndex, start: adjustedStart, end, top, height }
+}
+
+function onWeekGridDragOver(e: DragEvent) {
+  if (!weekDragTaskId.value) return
+  e.preventDefault()
+  const preview = getWeekDropPreviewFromEvent(e)
+  if (!preview) return
+  weekDragPreview.value = preview
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+async function onWeekGridDrop(e: DragEvent) {
+  e.preventDefault()
+  const taskId = weekDragTaskId.value || e.dataTransfer?.getData('text/plain')
+  const preview = getWeekDropPreviewFromEvent(e) || weekDragPreview.value
+  weekDragTaskId.value = null
+  weekDragPriority.value = 'normal'
+  weekDragPreview.value = null
+  if (!taskId || !preview || !isSupabaseConfigured()) return
+  const targetDay = weekDays.value[preview.dayIndex]
+  if (!targetDay) return
+  const task = tasks.value.find((t) => t.id === taskId)
+  if (!task) return
+  const nextDate = targetDay.key
+  const nextStart = minutesToHhmm(preview.start)
+  const nextEnd = minutesToHhmm(preview.end)
+  if (task.date === nextDate && (task.startTime || '') === nextStart && (task.endTime || '') === nextEnd) return
+
+  const participantIdsRaw = taskAssigneeIdsByTaskId.value[taskId] ?? []
+  const participantIds = participantIdsRaw.length > 0
+    ? participantIdsRaw
+    : [task.userId].filter((x): x is string => !!x)
+  const noConflicts = await ensureNoParticipantConflicts({
+    participantIds,
+    dates: [nextDate],
+    startTime: nextStart,
+    endTime: nextEnd,
+    excludeTaskId: taskId,
+  })
+  if (!noConflicts) return
+
+  const prev = { date: task.date, startTime: task.startTime, endTime: task.endTime }
+  task.date = nextDate
+  task.startTime = nextStart
+  task.endTime = nextEnd
+  try {
+    await updateCalendarTask(taskId, { date: nextDate, start_time: nextStart, end_time: nextEnd })
+  } catch (err) {
+    task.date = prev.date
+    task.startTime = prev.startTime
+    task.endTime = prev.endTime
     console.error(err)
   }
 }
@@ -737,6 +1027,74 @@ function minutesToHhmm(value: number): string {
   const h = String(Math.floor(clamped / 60)).padStart(2, '0')
   const m = String(clamped % 60).padStart(2, '0')
   return `${h}:${m}`
+}
+
+function timeRangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd
+}
+
+async function findParticipantConflicts(args: {
+  participantIds: string[]
+  dates: string[]
+  startTime: string | null
+  endTime: string | null
+  excludeTaskId?: string | null
+}): Promise<Array<{ userId: string; label: string; date: string; title: string; start: string; end: string }>> {
+  const start = hhmmToMinutes(args.startTime)
+  const end = hhmmToMinutes(args.endTime)
+  if (start == null || end == null || end <= start) return []
+  const datesSet = new Set(args.dates.filter(Boolean))
+  if (datesSet.size === 0) return []
+
+  const uniqueParticipants = [...new Set(args.participantIds.filter(Boolean))]
+  if (uniqueParticipants.length === 0) return []
+
+  const rows = await Promise.all(
+    uniqueParticipants.map(async (uid) => {
+      const userTasks = await loadCalendarTasks(uid)
+      return { uid, userTasks }
+    }),
+  )
+
+  const conflicts: Array<{ userId: string; label: string; date: string; title: string; start: string; end: string }> = []
+  for (const { uid, userTasks } of rows) {
+    for (const task of userTasks) {
+      if (!datesSet.has(task.date)) continue
+      if (args.excludeTaskId && task.id === args.excludeTaskId) continue
+      const taskStart = hhmmToMinutes(task.start_time)
+      const taskEnd = hhmmToMinutes(task.end_time)
+      if (taskStart == null || taskEnd == null || taskEnd <= taskStart) continue
+      if (!timeRangesOverlap(start, end, taskStart, taskEnd)) continue
+      const profile = profileById(uid)
+      conflicts.push({
+        userId: uid,
+        label: profile ? profileLabel(profile) : uid,
+        date: task.date,
+        title: task.title,
+        start: task.start_time || '',
+        end: task.end_time || '',
+      })
+      break
+    }
+  }
+  return conflicts
+}
+
+async function ensureNoParticipantConflicts(args: {
+  participantIds: string[]
+  dates: string[]
+  startTime: string | null
+  endTime: string | null
+  excludeTaskId?: string | null
+}): Promise<boolean> {
+  const conflicts = await findParticipantConflicts(args)
+  if (conflicts.length === 0) return true
+  const lines = conflicts.map((c) => `• ${c.label} — занято ${c.date} ${c.start}-${c.end} (${c.title})`)
+  successModalTitle.value = 'Конфликт слотов'
+  successModalMessage.value =
+    'Не удалось сохранить событие: у некоторых участников уже есть пересечение по времени.\n\n' + lines.join('\n')
+  successModalOpen.value = true
+  return false
 }
 
 const daySlots = computed(() => {
@@ -953,6 +1311,7 @@ function hideTaskAssigneesTooltip() {
 }
 
 function prevMonth() {
+  monthExpandedDate.value = null
   if (currentMonth.value === 0) {
     currentMonth.value = 11
     currentYear.value -= 1
@@ -962,6 +1321,7 @@ function prevMonth() {
 }
 
 function nextMonth() {
+  monthExpandedDate.value = null
   if (currentMonth.value === 11) {
     currentMonth.value = 0
     currentYear.value += 1
@@ -1235,6 +1595,9 @@ async function onSubmitTask() {
   try {
     const id = editingTaskId.value
     const date = taskStartDate.value || selectedDate.value
+    const startTime = taskStartTime.value?.trim() || null
+    const endTime = taskEndTime.value?.trim() || null
+    const participantIds = [...new Set(taskAssignees.value.filter(Boolean))]
     if (id && !canEditCurrentTask.value) {
       successModalTitle.value = 'Недостаточно прав'
       successModalMessage.value = 'Редактировать событие может только его постановщик или руководитель.'
@@ -1244,12 +1607,20 @@ async function onSubmitTask() {
     if (id) {
       const assigneeStatusPayload = buildAssigneeStatusPayload(id)
       if (taskRepeatRule.value === 'none' || taskRepeatApplyMode.value === 'only_this') {
+        const ok = await ensureNoParticipantConflicts({
+          participantIds,
+          dates: [date],
+          startTime,
+          endTime,
+          excludeTaskId: id,
+        })
+        if (!ok) return
         await updateCalendarTask(id, {
           date,
           title,
           description: taskDescription.value.trim() || null,
-          start_time: taskStartTime.value?.trim() || null,
-          end_time: taskEndTime.value?.trim() || null,
+          start_time: startTime,
+          end_time: endTime,
           priority: taskPriority.value,
           assignee_ids: taskAssignees.value,
           assignee_status_by_user_id: assigneeStatusPayload,
@@ -1265,12 +1636,20 @@ async function onSubmitTask() {
           repeatUntil,
           taskRepeatWeekDays.value,
         )
+        const ok = await ensureNoParticipantConflicts({
+          participantIds,
+          dates: plannedDates,
+          startTime,
+          endTime,
+          excludeTaskId: id,
+        })
+        if (!ok) return
         await updateCalendarTask(id, {
           date,
           title,
           description: taskDescription.value.trim() || null,
-          start_time: taskStartTime.value?.trim() || null,
-          end_time: taskEndTime.value?.trim() || null,
+          start_time: startTime,
+          end_time: endTime,
           priority: taskPriority.value,
           assignee_ids: taskAssignees.value,
           assignee_status_by_user_id: assigneeStatusPayload,
@@ -1281,8 +1660,8 @@ async function onSubmitTask() {
             date: plannedDate,
             title,
             description: taskDescription.value.trim() || null,
-            start_time: taskStartTime.value?.trim() || null,
-            end_time: taskEndTime.value?.trim() || null,
+            start_time: startTime,
+            end_time: endTime,
             priority: taskPriority.value,
             assignee_ids: taskAssignees.value,
             assignee_status_by_user_id: buildAssigneeStatusPayload(null),
@@ -1302,14 +1681,21 @@ async function onSubmitTask() {
         repeatUntil,
         taskRepeatWeekDays.value,
       )
+      const ok = await ensureNoParticipantConflicts({
+        participantIds,
+        dates: plannedDates,
+        startTime,
+        endTime,
+      })
+      if (!ok) return
       for (const plannedDate of plannedDates) {
         await insertCalendarTask({
           user_id: effectiveCalendarUserId.value ?? auth.user.value?.id ?? null,
           date: plannedDate,
           title,
           description: taskDescription.value.trim() || null,
-          start_time: taskStartTime.value?.trim() || null,
-          end_time: taskEndTime.value?.trim() || null,
+          start_time: startTime,
+          end_time: endTime,
           priority: taskPriority.value,
           assignee_ids: taskAssignees.value,
           assignee_status_by_user_id: buildAssigneeStatusPayload(null),
@@ -1614,7 +2000,13 @@ async function confirmDeleteTask() {
             </button>
           </div>
           <div class="day-events-scroll week-view-scroll" :style="{ height: `${dayGridViewportHeight}px` }">
-            <div class="day-events-grid week-view-grid" :style="{ height: `${dayGridHeight}px` }" @click="onDayGridClick">
+            <div
+              class="day-events-grid week-view-grid"
+              :style="{ height: `${dayGridHeight}px` }"
+              @click="onDayGridClick"
+              @dragover="onWeekGridDragOver"
+              @drop="onWeekGridDrop"
+            >
               <div
                 v-for="slot in daySlots.slice(0, -1)"
                 :key="`week-${slot.key}`"
@@ -1631,6 +2023,7 @@ async function confirmDeleteTask() {
                 :key="`week-ev-${event.task.id}`"
                 class="day-event-card week-event-card"
                 :class="priorityClass(event.task.priority)"
+                draggable="true"
                 :style="{
                   top: `${event.top}px`,
                   height: `${event.height}px`,
@@ -1638,6 +2031,8 @@ async function confirmDeleteTask() {
                   width: 'calc((100% - 66px) / 7 - 8px)',
                 }"
                 @click="openEditTaskModal(event.task)"
+                @dragstart="onWeekEventDragStart(event.task.id, event.start, event.end, event.task.priority, $event)"
+                @dragend="onWeekEventDragEnd"
               >
                 <div class="day-event-time">{{ minutesToHhmm(event.start) }}<span v-if="event.task.endTime"> – {{ event.task.endTime }}</span></div>
                 <div class="day-event-title">{{ event.task.title }}</div>
@@ -1667,6 +2062,20 @@ async function confirmDeleteTask() {
                     +{{ dayEventAssignees(event.task.id).length - 3 }}
                   </span>
                 </div>
+              </article>
+              <article
+                v-if="weekDragPreview"
+                class="day-event-card week-event-card week-event-card--drag-preview"
+                :class="priorityClass(weekDragPriority)"
+                :style="{
+                  top: `${weekDragPreview.top}px`,
+                  height: `${weekDragPreview.height}px`,
+                  left: `calc(66px + ${weekDragPreview.dayIndex} * ((100% - 66px) / 7) + 4px)`,
+                  width: 'calc((100% - 66px) / 7 - 8px)',
+                }"
+              >
+                <div class="day-event-time">{{ minutesToHhmm(weekDragPreview.start) }} – {{ minutesToHhmm(weekDragPreview.end) }}</div>
+                <div class="day-event-title">Новый временной слот</div>
               </article>
               <div
                 v-if="showNowMarker"
@@ -1704,49 +2113,36 @@ async function confirmDeleteTask() {
               @drop="onMonthCellDrop(cell.key, $event)"
             >
               <div class="month-view-date">{{ cell.date }}</div>
-              <div class="month-view-events">
+              <div
+                class="month-view-events"
+                :class="{ 'month-view-events--expanded': monthExpandedRowIndex !== null && monthExpandedRowIndex === cell.rowIndex }"
+              >
                 <button
-                  v-for="t in cell.tasks"
+                  v-for="t in ((monthExpandedRowIndex !== null && monthExpandedRowIndex === cell.rowIndex) ? cell.allTasks : cell.tasks)"
                   :key="t.id"
                   type="button"
                   class="month-view-event-pill"
-                  :class="priorityClass(t.priority)"
+                  :class="[priorityClass(t.priority), { 'month-view-event-pill--drop-target': monthReorderTargetTaskId === t.id }]"
                   draggable="true"
                   @click.stop="openEditTaskModal(t)"
                   @dragstart="onMonthEventDragStart(t.id, $event)"
                   @dragend="onMonthEventDragEnd"
+                  @dragover="onMonthEventReorderOver(cell.key, t.id, $event)"
+                  @dragleave="onMonthEventReorderLeave(t.id)"
+                  @drop="onMonthEventReorderDrop(cell.key, t.id, $event)"
                 >
                   <span class="month-view-event-title">{{ t.title }}</span>
                   <span v-if="t.startTime" class="month-view-event-time">{{ t.startTime }}</span>
-                  <span
-                    v-if="taskParticipationLabel(t.id)"
-                    class="event-participation-pill"
-                    :class="taskParticipationClass(t.id)"
-                  >
-                    {{ taskParticipationLabel(t.id) }}
-                  </span>
-                  <span
-                    v-if="dayEventAssignees(t.id).length"
-                    class="month-view-assignees"
-                    @mouseenter.stop="showTaskAssigneesTooltip(t.id, $event)"
-                    @mousemove.stop="moveAssigneesTooltip($event)"
-                    @mouseleave.stop="hideTaskAssigneesTooltip"
-                  >
-                    <span
-                      v-for="p in dayEventAssignees(t.id).slice(0, 3)"
-                      :key="`m-${t.id}-${p.id}`"
-                      class="month-view-assignee-avatar"
-                      :style="assigneeAvatarStyle(p)"
-                    >
-                      {{ assigneeInitials(p) }}
-                    </span>
-                    <span v-if="dayEventAssignees(t.id).length > 3" class="month-view-assignee-more">
-                      +{{ dayEventAssignees(t.id).length - 3 }}
-                    </span>
-                  </span>
                 </button>
-                <div v-if="cell.more > 0" class="month-view-event-more">+{{ cell.more }}</div>
               </div>
+              <button
+                v-if="cell.more > 0 || monthExpandedDate === cell.key"
+                type="button"
+                class="month-view-event-more"
+                @click.stop="toggleMonthMore(cell.key)"
+              >
+                {{ monthExpandedDate === cell.key ? 'Скрыть' : `Развернуть (+${cell.more})` }}
+              </button>
             </button>
           </div>
         </div>
@@ -3024,6 +3420,7 @@ async function confirmDeleteTask() {
   justify-content: center;
   flex-direction: column;
   gap: 2px;
+  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
 
 .calendar-day-number {
@@ -3372,6 +3769,11 @@ async function confirmDeleteTask() {
   right: auto;
   min-width: 0;
   padding: 6px 8px 22px;
+  cursor: grab;
+}
+
+.week-event-card:active {
+  cursor: grabbing;
 }
 
 .week-event-card .day-event-time {
@@ -3409,6 +3811,14 @@ async function confirmDeleteTask() {
 .week-event-card .day-event-assignee-more {
   font-size: 0.44rem;
   padding: 1px 4px;
+}
+
+.week-event-card--drag-preview {
+  pointer-events: none;
+  z-index: 8;
+  border-style: dashed;
+  opacity: 0.9;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--agro) 46%, transparent), 0 8px 14px rgba(0, 0, 0, 0.12);
 }
 
 .month-view-wrap {
@@ -3457,6 +3867,7 @@ async function confirmDeleteTask() {
   flex-direction: column;
   gap: 4px;
   cursor: pointer;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .month-view-cell:nth-child(7n) {
@@ -3504,42 +3915,107 @@ async function confirmDeleteTask() {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  max-height: 142px;
+  overflow: hidden;
+  transition: max-height 0.24s ease;
+}
+
+.month-view-events--expanded {
+  max-height: 520px;
 }
 
 .month-view-event-pill {
   border-radius: 6px;
-  padding: 3px 5px;
+  padding: 2px 4px;
   background: #c9e2f1;
   color: #1f2937;
   display: flex;
   flex-direction: column;
-  line-height: 1.2;
+  line-height: 1.1;
   border: 1px solid #b8d9ec;
   text-align: left;
   cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
 }
 
 .month-view-event-pill:active {
   cursor: grabbing;
 }
 
+.month-view-event-pill:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(31, 41, 55, 0.12);
+}
+
 .month-view-event-title {
-  font-size: 0.62rem;
-  font-weight: 700;
+  font-size: 0.58rem;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .month-view-event-time {
-  font-size: 0.58rem;
+  font-size: 0.54rem;
   color: var(--text-secondary);
 }
 
+.month-view-event-pill--drop-target {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agro) 52%, transparent);
+}
+
 .month-view-event-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
   font-size: 0.6rem;
   color: var(--text-secondary);
-  padding-left: 2px;
+  padding: 0 0 0 2px;
+  cursor: pointer;
+  transition: color 0.16s ease, transform 0.16s ease;
+}
+
+.month-view-event-more:hover {
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+
+.month-view-more-list {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 128px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.month-view-more-item {
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  text-align: left;
+  padding: 3px 5px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.month-view-more-item-title {
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.month-view-more-item-time {
+  font-size: 0.56rem;
+  color: var(--text-secondary);
 }
 
 .month-view-assignees {
@@ -3706,6 +4182,28 @@ async function confirmDeleteTask() {
   line-height: 1.2;
 }
 
+/* Компактная типографика именно в слотах календаря */
+.calendar-page .day-event-time,
+.calendar-page .month-view-event-time,
+.calendar-page .schedule-item-time,
+.calendar-page .month-view-more-item-time {
+  font-size: 0.58rem;
+  font-weight: 400;
+}
+
+.calendar-page .day-event-title,
+.calendar-page .month-view-event-title,
+.calendar-page .schedule-item-title,
+.calendar-page .month-view-more-item-title {
+  font-size: 0.74rem;
+  font-weight: 500;
+}
+
+.calendar-page .event-participation-pill {
+  font-size: 0.52rem;
+  font-weight: 600;
+}
+
 .event-participation--accepted {
   background: rgba(34, 197, 94, 0.18);
   color: #166534;
@@ -3763,6 +4261,12 @@ async function confirmDeleteTask() {
   cursor: pointer;
   overflow: hidden;
   box-shadow: 0 6px 14px rgba(107, 144, 168, 0.18);
+  transition:
+    top 0.22s ease,
+    left 0.22s ease,
+    height 0.22s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
 }
 
 .day-event-card--completed {
@@ -3785,6 +4289,7 @@ async function confirmDeleteTask() {
 
 .priority-normal.day-event-card,
 .priority-normal.month-view-event-pill,
+.priority-normal.month-view-more-item,
 .priority-normal.schedule-item {
   background: #c9e2f1;
   border-color: #b8d9ec;
@@ -3792,6 +4297,7 @@ async function confirmDeleteTask() {
 
 .priority-high.day-event-card,
 .priority-high.month-view-event-pill,
+.priority-high.month-view-more-item,
 .priority-high.schedule-item {
   background: #f3d5d8;
   border-color: #eab8bf;
@@ -3799,6 +4305,7 @@ async function confirmDeleteTask() {
 
 .priority-low.day-event-card,
 .priority-low.month-view-event-pill,
+.priority-low.month-view-more-item,
 .priority-low.schedule-item {
   background: #e9edf1;
   border-color: #d6dde4;
@@ -5877,6 +6384,17 @@ async function confirmDeleteTask() {
     font-size: 0.82rem;
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .calendar-page .day-event-card,
+  .calendar-page .month-view-cell,
+  .calendar-page .month-view-events,
+  .calendar-page .month-view-event-pill,
+  .calendar-page .month-view-event-more,
+  .calendar-page .calendar-day {
+    transition: none !important;
+  }
+}
 </style>
 
 <style>
@@ -6017,6 +6535,7 @@ html[data-theme='dark'] .calendar-page .week-view-day--selected {
 
 html[data-theme='dark'] .calendar-page .priority-normal.day-event-card,
 html[data-theme='dark'] .calendar-page .priority-normal.month-view-event-pill,
+html[data-theme='dark'] .calendar-page .priority-normal.month-view-more-item,
 html[data-theme='dark'] .calendar-page .priority-normal.schedule-item {
   background: #21455b;
   border-color: #356683;
@@ -6024,6 +6543,7 @@ html[data-theme='dark'] .calendar-page .priority-normal.schedule-item {
 
 html[data-theme='dark'] .calendar-page .priority-high.day-event-card,
 html[data-theme='dark'] .calendar-page .priority-high.month-view-event-pill,
+html[data-theme='dark'] .calendar-page .priority-high.month-view-more-item,
 html[data-theme='dark'] .calendar-page .priority-high.schedule-item {
   background: #5b2e36;
   border-color: #8a4a56;
@@ -6031,6 +6551,7 @@ html[data-theme='dark'] .calendar-page .priority-high.schedule-item {
 
 html[data-theme='dark'] .calendar-page .priority-low.day-event-card,
 html[data-theme='dark'] .calendar-page .priority-low.month-view-event-pill,
+html[data-theme='dark'] .calendar-page .priority-low.month-view-more-item,
 html[data-theme='dark'] .calendar-page .priority-low.schedule-item {
   background: #2f3741;
   border-color: #4d5865;
