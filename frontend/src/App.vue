@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import { useAuth } from '@/stores/auth'
 import { chatTotalUnread, refreshChatTotalUnread } from '@/lib/chatSupabase'
+import { countMyUnreadNotifications } from '@/lib/notificationsSupabase'
 import { startActivityHeartbeat, stopActivityHeartbeat } from '@/lib/activityHeartbeat'
 
 const route = useRoute()
@@ -45,6 +46,18 @@ const userInitials = computed(() => {
 
 /** Ref из chatSupabase: в шаблоне используем computed для гарантированной размотки */
 const chatUnreadDisplay = computed(() => Number(chatTotalUnread.value) || 0)
+const notificationsUnread = ref(0)
+const notificationsUnreadDisplay = computed(() => Number(notificationsUnread.value) || 0)
+
+async function refreshHeaderUnreadCounters() {
+  await refreshChatTotalUnread()
+  try {
+    notificationsUnread.value = await countMyUnreadNotifications()
+  } catch {
+    notificationsUnread.value = 0
+  }
+}
+
 async function handleLogout() {
   logoutConfirmOpen.value = true
 }
@@ -80,15 +93,15 @@ watch(mobileMenuOpen, (open) => {
 
 let unreadPoll: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
-  void refreshChatTotalUnread()
-  unreadPoll = setInterval(() => void refreshChatTotalUnread(), 45_000)
+  void refreshHeaderUnreadCounters()
+  unreadPoll = setInterval(() => void refreshHeaderUnreadCounters(), 45_000)
 })
 onUnmounted(() => {
   if (unreadPoll) clearInterval(unreadPoll)
 })
 watch(
   () => route.path,
-  () => void refreshChatTotalUnread(),
+  () => void refreshHeaderUnreadCounters(),
 )
 
 /** Редкий пинг last_activity_at (не чаще ~5 мин), только вне экрана входа */
@@ -225,6 +238,18 @@ watch(
                   </svg>
                 </span>
                 Сотрудники
+              </RouterLink>
+            </li>
+            <li>
+              <RouterLink class="nav-item" to="/notifications">
+                <span class="nav-item-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M15 17h5l-1.4-1.4a2 2 0 0 1-.6-1.4V10a6 6 0 1 0-12 0v4.2c0 .53-.21 1.04-.59 1.42L4 17h5"/>
+                    <path d="M9 17a3 3 0 0 0 6 0"/>
+                  </svg>
+                </span>
+                Уведомления
+                <span v-if="notificationsUnreadDisplay > 0" class="nav-item-badge">{{ notificationsUnreadDisplay > 99 ? '99+' : notificationsUnreadDisplay }}</span>
               </RouterLink>
             </li>
             <li>

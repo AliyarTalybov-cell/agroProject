@@ -15,6 +15,7 @@ import ProfilePage from '@/pages/ProfilePage.vue'
 import EmployeesPage from '@/pages/EmployeesPage.vue'
 import ChatPage from '@/pages/ChatPage.vue'
 import PortalRulesPage from '@/pages/PortalRulesPage.vue'
+import NotificationsPage from '@/pages/NotificationsPage.vue'
 import { getAuthUser, isAuthLoading } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
@@ -34,6 +35,7 @@ export const routes = [
   { path: '/reports', name: 'reports', component: ReportsPage, meta: { title: 'Аналитика' } },
   { path: '/profile', name: 'profile', component: ProfilePage, meta: { title: 'Настройки профиля' } },
   { path: '/employees', name: 'employees', component: EmployeesPage, meta: { title: 'Сотрудники' } },
+  { path: '/notifications', name: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления' } },
   { path: '/chat', name: 'chat', component: ChatPage, meta: { title: 'Сообщения' } },
   { path: '/about', redirect: { name: 'dashboard', query: { tab: 'about' } } },
 ] as const
