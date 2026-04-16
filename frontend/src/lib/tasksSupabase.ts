@@ -65,8 +65,19 @@ export type TaskEventRow = {
   created_at: string
 }
 
+export type TaskFileRow = {
+  id: string
+  task_id: string
+  file_path: string
+  file_name: string
+  file_size: number | null
+  created_at: string
+}
+
 /** Плейсхолдер «нет срока» в текстовом поле due_date. */
 const DUE_DATE_EMPTY_RE = /^[—\-–]+$/
+const TASK_FILES_TABLE = 'task_files'
+const TASK_FILES_BUCKET = 'task-attachments'
 
 /**
  * Приводит `tasks.due_date` (text) к `YYYY-MM-DD` для сравнения с фильтрами аналитики.
@@ -440,6 +451,62 @@ export async function addTaskEvent(
   if (error) {
     console.warn('Не удалось записать событие задачи', error)
   }
+}
+
+export async function loadTaskFiles(taskId: string): Promise<TaskFileRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from(TASK_FILES_TABLE)
+    .select('id, task_id, file_path, file_name, file_size, created_at')
+    .eq('task_id', taskId)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as TaskFileRow[]
+}
+
+export async function uploadTaskFile(taskId: string, file: File): Promise<TaskFileRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120)
+  const path = `tasks/${taskId}/${Date.now()}-${safeName}`
+  const { error: uploadError } = await supabase.storage.from(TASK_FILES_BUCKET).upload(path, file, {
+    cacheControl: '3600',
+    upsert: false,
+  })
+  if (uploadError) throw uploadError
+  const { data, error } = await supabase
+    .from(TASK_FILES_TABLE)
+    .insert({
+      task_id: taskId,
+      file_path: path,
+      file_name: file.name,
+      file_size: file.size,
+    })
+    .select('id, task_id, file_path, file_name, file_size, created_at')
+    .single()
+  if (error) throw error
+  return data as TaskFileRow
+}
+
+export async function deleteTaskFile(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { data: row, error: fetchError } = await supabase
+    .from(TASK_FILES_TABLE)
+    .select('id, file_path')
+    .eq('id', id)
+    .single()
+  if (fetchError || !row) throw fetchError || new Error('Файл не найден')
+  const storagePath = row.file_path as string
+  const { error: deleteError } = await supabase.from(TASK_FILES_TABLE).delete().eq('id', id)
+  if (deleteError) throw deleteError
+  if (storagePath && !storagePath.startsWith('http')) {
+    await supabase.storage.from(TASK_FILES_BUCKET).remove([storagePath])
+  }
+}
+
+export function getTaskFilePublicUrl(filePath: string): string {
+  if (!supabase) return ''
+  const { data } = supabase.storage.from(TASK_FILES_BUCKET).getPublicUrl(filePath)
+  return data.publicUrl
 }
 
 export async function deleteTask(id: string): Promise<void> {

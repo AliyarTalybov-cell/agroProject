@@ -18,10 +18,14 @@ import {
   addTaskComment,
   loadTaskEvents,
   addTaskEvent,
+  loadTaskFiles,
+  uploadTaskFile,
+  deleteTaskFile,
+  getTaskFilePublicUrl,
 } from '@/lib/tasksSupabase'
 import { loadFields as loadFieldsApi } from '@/lib/fieldsSupabase'
 import { loadWorkOperations, type WorkOperationRow } from '@/lib/reasonsAndOperations'
-import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow } from '@/lib/tasksSupabase'
+import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow, TaskFileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
@@ -36,6 +40,12 @@ interface AssigneeOption {
   id: string
   name: string
   initials: string
+}
+
+interface PendingTaskFile {
+  id: string
+  file: File
+  previewUrl: string | null
 }
 
 type Task = TaskType
@@ -71,11 +81,17 @@ const serverPagingMode = ref(false)
 const profiles = ref<ProfileRow[]>([])
 const taskComments = ref<TaskCommentRow[]>([])
 const taskEvents = ref<TaskEventRow[]>([])
+const taskFiles = ref<TaskFileRow[]>([])
 const commentsLoading = ref(false)
 const eventsLoading = ref(false)
+const fileUploading = ref(false)
+const createFileInputRef = ref<HTMLInputElement | null>(null)
+const detailFileInputRef = ref<HTMLInputElement | null>(null)
+const pendingCreateFiles = ref<PendingTaskFile[]>([])
 const newCommentMessage = ref('')
 const isEditingDetail = ref(false)
 const isSavingDetail = ref(false)
+const isTaskChatExpanded = ref(false)
 const isSendingComment = ref(false)
 const isMetaInitialLoading = ref(false)
 const assignees = computed<AssigneeOption[]>(() => {
@@ -265,6 +281,84 @@ const form = ref({
   workType: '',
   description: '',
 })
+
+const TASK_TITLE_MAX = 60
+const TASK_DESCRIPTION_MAX = 500
+
+function truncateTaskTitle(value: string | null | undefined): string {
+  const text = String(value ?? '').trim()
+  if (!text) return ''
+  return text.length > TASK_TITLE_MAX ? `${text.slice(0, TASK_TITLE_MAX).trimEnd()}...` : text
+}
+
+function isImageFile(fileName: string): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(fileName)
+}
+
+function isPdfFile(fileName: string): boolean {
+  return /\.pdf$/i.test(fileName)
+}
+
+function formatFileSize(bytes: number | null): string {
+  if (bytes == null) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function revokePendingFilePreview(file: PendingTaskFile) {
+  if (file.previewUrl) URL.revokeObjectURL(file.previewUrl)
+}
+
+function clearPendingCreateFiles() {
+  pendingCreateFiles.value.forEach(revokePendingFilePreview)
+  pendingCreateFiles.value = []
+  if (createFileInputRef.value) createFileInputRef.value.value = ''
+}
+
+function appendPendingFiles(fileList: FileList | null) {
+  if (!fileList?.length) return
+  const next = [...pendingCreateFiles.value]
+  for (const file of Array.from(fileList)) {
+    const duplicate = next.some((item) =>
+      item.file.name === file.name && item.file.size === file.size && item.file.lastModified === file.lastModified,
+    )
+    if (duplicate) continue
+    next.push({
+      id: crypto.randomUUID(),
+      file,
+      previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+    })
+  }
+  pendingCreateFiles.value = next
+}
+
+function triggerCreateFileInput() {
+  createFileInputRef.value?.click()
+}
+
+function onCreateFilesSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  appendPendingFiles(input.files)
+  input.value = ''
+}
+
+function removePendingCreateFile(id: string) {
+  const file = pendingCreateFiles.value.find((item) => item.id === id)
+  if (file) revokePendingFilePreview(file)
+  pendingCreateFiles.value = pendingCreateFiles.value.filter((item) => item.id !== id)
+}
+
+async function uploadPendingFiles(taskId: string) {
+  if (!pendingCreateFiles.value.length || !isSupabaseConfigured()) return
+  fileUploading.value = true
+  try {
+    await Promise.all(pendingCreateFiles.value.map((item) => uploadTaskFile(taskId, item.file)))
+  } finally {
+    fileUploading.value = false
+    clearPendingCreateFiles()
+  }
+}
 
 function parseDueDate(dueDate: string): Date | null {
   if (!dueDate || dueDate === '—') return null
@@ -492,18 +586,25 @@ async function loadMetaForTask(taskId: string) {
   if (!isSupabaseConfigured() || !auth.user.value) {
     taskComments.value = []
     taskEvents.value = []
+    taskFiles.value = []
     return
   }
   commentsLoading.value = true
   eventsLoading.value = true
   isMetaInitialLoading.value = true
   try {
-    const [comments, events] = await Promise.all([loadTaskComments(taskId), loadTaskEvents(taskId)])
+    const [comments, events, files] = await Promise.all([
+      loadTaskComments(taskId),
+      loadTaskEvents(taskId),
+      loadTaskFiles(taskId),
+    ])
     taskComments.value = comments
     taskEvents.value = events
+    taskFiles.value = files
   } catch {
     taskComments.value = []
     taskEvents.value = []
+    taskFiles.value = []
   } finally {
     commentsLoading.value = false
     eventsLoading.value = false
@@ -513,6 +614,7 @@ async function loadMetaForTask(taskId: string) {
 
 function openCreate() {
   editingTaskId.value = null
+  clearPendingCreateFiles()
   const d = new Date()
   const defaultAssigneeId = !isManager.value && currentUserAssignee.value
     ? currentUserAssignee.value.id
@@ -549,6 +651,7 @@ function openEdit() {
 function closeCreate() {
   showCreateModal.value = false
   editingTaskId.value = null
+  clearPendingCreateFiles()
 }
 
 async function createTask() {
@@ -559,7 +662,7 @@ async function createTask() {
   if (!editingTaskId.value) {
     if (!isSupabaseConfigured() || !auth.user.value) return
     try {
-      await createTaskApi(
+      const createdTask = await createTaskApi(
         {
           title,
           priority: form.value.priority,
@@ -572,6 +675,7 @@ async function createTask() {
         assignee.id,
         auth.user.value.id,
       )
+      await uploadPendingFiles(createdTask.id)
       await loadData()
       successModalOpen.value = true
     } catch {
@@ -679,18 +783,51 @@ function cancelDetailEdit() {
 async function openTask(id: string) {
   if (clickAfterDragGuard) return
   selectedTaskId.value = id
+  isTaskChatExpanded.value = false
   await loadMetaForTask(id)
 }
 function closeTask() {
   selectedTaskId.value = null
   taskComments.value = []
   taskEvents.value = []
+  taskFiles.value = []
   newCommentMessage.value = ''
+  isTaskChatExpanded.value = false
   isEditingDetail.value = false
   if (route.query.openTaskId) {
     const rest = { ...route.query }
     delete rest.openTaskId
     void router.replace({ query: rest })
+  }
+}
+
+function triggerDetailFileInput() {
+  if (selectedTaskId.value) detailFileInputRef.value?.click()
+}
+
+async function onDetailFilesSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  if (!files.length || !selectedTaskId.value || !isSupabaseConfigured()) return
+  fileUploading.value = true
+  try {
+    const uploaded = await Promise.all(files.map((file) => uploadTaskFile(selectedTaskId.value as string, file)))
+    taskFiles.value = [...uploaded.reverse(), ...taskFiles.value]
+  } catch (err) {
+    console.error(err)
+  } finally {
+    fileUploading.value = false
+    input.value = ''
+  }
+}
+
+async function removeTaskFileRow(fileRow: TaskFileRow) {
+  if (!isSupabaseConfigured()) return
+  try {
+    await deleteTaskFile(fileRow.id)
+    taskFiles.value = taskFiles.value.filter((file) => file.id !== fileRow.id)
+  } catch (err) {
+    console.error(err)
   }
 }
 
@@ -1067,26 +1204,22 @@ function statusClass(s: Status) {
             @dragend="onDragEnd"
           >
             <div class="task-card-head">
-              <span class="task-card-num">№ {{ getTaskNumber(task.id) }}</span>
-              <span class="task-card-title">{{ task.title }}</span>
+              <span class="task-card-num">{{ getTaskNumber(task.id) }}</span>
+              <span class="task-card-title">{{ truncateTaskTitle(task.title) }}</span>
               <span class="task-card-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
             </div>
-            <div class="task-card-meta">
-              <span class="task-pill" :class="priorityClass(task.priority)">
+            <div class="task-card-due">
+              <span class="task-card-due-date">
+                <template v-if="task.description === 'Просрочено'">
+                  <span class="task-overdue">Просрочено</span>
+                </template>
+                <template v-else>
+                  до {{ task.dueDate }}
+                </template>
+              </span>
+              <span class="task-pill task-pill-priority-compact" :class="priorityClass(task.priority)">
                 {{ task.priority === 'high' ? 'Высокий' : task.priority === 'medium' ? 'Средний' : 'Низкий' }}
               </span>
-              <span class="task-pill task-pill-field">{{ task.field }}</span>
-            </div>
-            <div v-if="task.workType" class="task-card-type">
-              {{ task.workType }}
-            </div>
-            <div class="task-card-due">
-              <template v-if="task.description === 'Просрочено'">
-                <span class="task-overdue">Просрочено</span>
-              </template>
-              <template v-else>
-                до {{ task.dueDate }}
-              </template>
             </div>
           </article>
           <div v-if="!tasksByStatus[col.key].length" class="task-column-empty">
@@ -1111,7 +1244,6 @@ function statusClass(s: Status) {
               <th>Название задачи</th>
               <th>Исполнитель</th>
               <th>Приоритет</th>
-              <th>Объект / поле</th>
               <th>Срок</th>
               <th>Статус</th>
             </tr>
@@ -1124,7 +1256,7 @@ function statusClass(s: Status) {
               @click="openTask(task.id)"
             >
               <td class="task-list-cell-num" data-label="№">{{ getTaskNumber(task.id) }}</td>
-              <td class="task-list-cell-title" data-label="Название задачи">{{ task.title }}</td>
+              <td class="task-list-cell-title" data-label="Название задачи">{{ truncateTaskTitle(task.title) }}</td>
               <td class="task-list-cell-assignee" data-label="Исполнитель">
                 <span class="task-list-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
                 <span class="task-list-assignee-name">{{ task.assignee.name }}</span>
@@ -1133,9 +1265,6 @@ function statusClass(s: Status) {
                 <span class="task-pill" :class="priorityClass(task.priority)">
                   {{ task.priority === 'high' ? 'Высокий' : task.priority === 'medium' ? 'Средний' : 'Низкий' }}
                 </span>
-              </td>
-              <td class="task-list-cell-field" data-label="Объект / поле">
-                <span class="task-pill task-pill-field">{{ task.field }}</span>
               </td>
               <td data-label="Срок" :class="{ 'task-cell-overdue': task.description === 'Просрочено' }">
                 <template v-if="task.description === 'Просрочено'">
@@ -1259,64 +1388,135 @@ function statusClass(s: Status) {
     <!-- Modal: New Task -->
     <Teleport to="body">
       <div v-if="showCreateModal" class="task-modal-backdrop" @click.self="closeCreate">
-        <div class="task-modal task-modal--create" role="dialog" aria-labelledby="task-modal-title">
-          <button type="button" class="task-modal-close" aria-label="Закрыть" @click="closeCreate">×</button>
-          <h2 id="task-modal-title" class="task-modal-title">{{ editingTaskId ? 'Редактировать задачу' : 'Новая задача' }}</h2>
-          <form class="task-form task-form--compact" @submit.prevent="createTask">
-            <div class="task-form-row">
-              <label class="task-form-label">Название задачи</label>
-              <input v-model="form.title" type="text" class="task-form-input" placeholder="Введите название..." />
+        <div class="task-modal task-modal--create" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
+          <form class="task-form task-form--create-design" @submit.prevent="createTask">
+            <div class="task-modal-header task-modal-header--create">
+              <div class="task-create-header-main">
+                <div class="task-create-header-copy">
+                  <h2 id="task-modal-title" class="task-modal-title">
+                    {{ editingTaskId ? 'Редактирование задачи' : 'Новая задача' }}
+                  </h2>
+                </div>
+              </div>
+              <button type="button" class="task-modal-close" aria-label="Закрыть" @click="closeCreate">
+                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" x2="6" y1="6" y2="18" />
+                  <line x1="6" x2="18" y1="6" y2="18" />
+                </svg>
+              </button>
             </div>
-            <div class="task-form-row task-form-row--two">
-              <div class="task-form-field">
-                <label class="task-form-label">Исполнитель</label>
-                <div v-if="isManager" class="task-form-select-wrap">
-                  <span
-                    class="task-form-avatar"
-                    :style="avatarStyleByUserId((assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.id)"
-                  >{{ (assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}</span>
-                  <select v-model="form.assigneeId" class="task-form-select">
-                    <option v-for="a in assignees" :key="a.id" :value="a.id">{{ a.name }}</option>
+            <div class="task-modal-body task-modal-body--create">
+              <div class="task-form-row task-form-row--design">
+                <label class="task-form-label">Название задачи</label>
+                <input
+                  v-model="form.title"
+                  type="text"
+                  class="task-form-input task-form-input--title"
+                  placeholder="Введите название..."
+                  :maxlength="TASK_TITLE_MAX"
+                />
+                <div class="task-form-counter">{{ form.title.length }}/{{ TASK_TITLE_MAX }}</div>
+              </div>
+              <div class="task-form-row task-form-row--two task-form-row--design">
+                <div class="task-form-field">
+                  <label class="task-form-label">Исполнитель</label>
+                  <div v-if="isManager" class="task-form-select-wrap">
+                    <span
+                      class="task-form-avatar"
+                      :style="avatarStyleByUserId((assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.id)"
+                    >{{ (assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}</span>
+                    <select v-model="form.assigneeId" class="task-form-select">
+                      <option v-for="a in assignees" :key="a.id" :value="a.id">{{ a.name }}</option>
+                    </select>
+                  </div>
+                  <div v-else class="task-form-static-assignee">Назначить себе</div>
+                </div>
+                <div class="task-form-field">
+                  <label class="task-form-label">Объект / поле</label>
+                  <select v-model="form.field" class="task-form-select">
+                    <option value="">Не выбрано</option>
+                    <option v-for="f in fields" :key="f" :value="f">{{ f }}</option>
                   </select>
                 </div>
-                <div v-else class="task-form-static-assignee">Назначить себе</div>
               </div>
-              <div class="task-form-field">
-                <label class="task-form-label">Объект / поле</label>
-                <select v-model="form.field" class="task-form-select">
-                  <option value="">Не выбрано</option>
-                  <option v-for="f in fields" :key="f" :value="f">{{ f }}</option>
-                </select>
+              <div class="task-form-row task-form-row--design task-form-row--priority">
+                <div class="task-form-field task-form-field--priority">
+                  <label class="task-form-label">Приоритет</label>
+                  <select v-model="form.priority" class="task-form-select">
+                    <option value="high">Высокий</option>
+                    <option value="medium">Средний</option>
+                    <option value="low">Низкий</option>
+                  </select>
+                </div>
+              </div>
+              <div class="task-form-row task-form-row--two task-form-row--design">
+                <div class="task-form-field">
+                  <label class="task-form-label">Срок выполнения</label>
+                  <input v-model="form.dueDate" type="text" class="task-form-input task-form-input--date" placeholder="ДД.ММ.ГГГГ" />
+                </div>
+                <div class="task-form-field">
+                  <label class="task-form-label">Тип работ</label>
+                  <select v-model="form.workType" class="task-form-select">
+                    <option value="">Не указано</option>
+                    <option v-for="w in workTypes" :key="w" :value="w">{{ w }}</option>
+                  </select>
+                </div>
+              </div>
+              <div class="task-form-row task-form-row--design">
+                <label class="task-form-label">Описание и инструкции</label>
+                <textarea
+                  v-model="form.description"
+                  class="task-form-textarea"
+                  placeholder="Добавьте подробности для исполнителя..."
+                  rows="4"
+                  :maxlength="TASK_DESCRIPTION_MAX"
+                ></textarea>
+                <div class="task-form-counter">{{ form.description.length }}/{{ TASK_DESCRIPTION_MAX }}</div>
+              </div>
+              <div class="task-form-row task-form-row--design">
+                <div class="task-file-section">
+                  <div class="task-file-section-head">
+                    <span class="task-form-label">Прикрепленные файлы</span>
+                    <button type="button" class="task-file-add-btn" :disabled="fileUploading" @click="triggerCreateFileInput">
+                      {{ fileUploading ? 'Загрузка...' : 'Добавить файлы' }}
+                    </button>
+                  </div>
+                  <div v-if="pendingCreateFiles.length" class="task-files-grid">
+                    <div v-for="file in pendingCreateFiles" :key="file.id" class="task-file-card">
+                      <div class="task-file-icon-box">
+                        <img v-if="file.previewUrl" class="task-file-thumb" :src="file.previewUrl" :alt="file.file.name" />
+                        <svg v-else-if="isPdfFile(file.file.name)" class="task-file-icon-pdf" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <path d="M14 2v6h6" />
+                          <path d="M9 13h6" />
+                          <path d="M9 17h6" />
+                        </svg>
+                        <svg v-else class="task-file-icon-doc" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <path d="M14 2v6h6" />
+                        </svg>
+                      </div>
+                      <div class="task-file-info">
+                        <span class="task-file-name">{{ file.file.name }}</span>
+                        <span class="task-file-size">{{ formatFileSize(file.file.size) }}</span>
+                      </div>
+                      <UiDeleteButton size="xs" @click="removePendingCreateFile(file.id)" />
+                    </div>
+                  </div>
+                  <button v-else type="button" class="task-file-dropzone" :disabled="fileUploading" @click="triggerCreateFileInput">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                    </svg>
+                    <span>Добавьте фото, PDF или документы к задаче</span>
+                  </button>
+                </div>
               </div>
             </div>
-            <div class="task-form-row">
-              <label class="task-form-label">Приоритет</label>
-              <div class="task-form-priority">
-                <button type="button" class="task-form-priority-btn" :class="{ 'task-form-priority-btn--active': form.priority === 'high' }" @click="form.priority = 'high'">высокий</button>
-                <button type="button" class="task-form-priority-btn" :class="{ 'task-form-priority-btn--active': form.priority === 'medium' }" @click="form.priority = 'medium'">Средний</button>
-                <button type="button" class="task-form-priority-btn" :class="{ 'task-form-priority-btn--active': form.priority === 'low' }" @click="form.priority = 'low'">низкий</button>
-              </div>
-            </div>
-            <div class="task-form-row task-form-row--two">
-              <div class="task-form-field">
-                <label class="task-form-label">Срок выполнения</label>
-                <input v-model="form.dueDate" type="text" class="task-form-input task-form-input--date" placeholder="ДД.ММ.ГГГГ" />
-              </div>
-              <div class="task-form-field">
-                <label class="task-form-label">Тип работ</label>
-                <select v-model="form.workType" class="task-form-select">
-                  <option value="">Не указано</option>
-                  <option v-for="w in workTypes" :key="w" :value="w">{{ w }}</option>
-                </select>
-              </div>
-            </div>
-            <div class="task-form-row">
-              <label class="task-form-label">Описание и инструкции</label>
-              <textarea v-model="form.description" class="task-form-textarea" placeholder="Добавьте подробности для исполнителя..." rows="3"></textarea>
-            </div>
-            <div class="task-form-actions">
+            <div class="task-form-actions task-form-actions--create">
               <button type="button" class="task-form-cancel" @click="closeCreate">Отмена</button>
-              <button type="submit" class="task-form-submit">{{ editingTaskId ? 'Сохранить' : 'Создать задачу' }}</button>
+              <button type="submit" class="task-form-submit" :disabled="!form.title.trim()">
+                {{ editingTaskId ? 'Сохранить изменения' : 'Создать задачу' }}
+              </button>
             </div>
           </form>
         </div>
@@ -1327,7 +1527,12 @@ function statusClass(s: Status) {
     <Teleport to="body">
       <div v-if="selectedTask" class="task-modal-backdrop" @click.self="closeTask">
         <div class="task-modal task-modal--detail" role="dialog" aria-labelledby="task-detail-title">
-          <button type="button" class="task-modal-close" aria-label="Закрыть" @click="closeTask">×</button>
+          <button type="button" class="task-modal-close task-modal-close--detail" aria-label="Закрыть" @click="closeTask">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" x2="6" y1="6" y2="18" />
+              <line x1="6" x2="18" y1="6" y2="18" />
+            </svg>
+          </button>
           <div class="task-detail-layout">
             <div v-if="isMetaInitialLoading" class="task-detail-loading-overlay" aria-hidden="true">
               <UiLoadingBar size="md" />
@@ -1351,10 +1556,11 @@ function statusClass(s: Status) {
                     type="text"
                     class="task-detail-title-input"
                     placeholder="Название задачи"
+                    :maxlength="TASK_TITLE_MAX"
                   />
                 </template>
                 <template v-else>
-                  {{ selectedTask.title }}
+                  {{ truncateTaskTitle(selectedTask.title) }}
                 </template>
               </h2>
               <dl class="task-detail-list">
@@ -1435,7 +1641,7 @@ function statusClass(s: Status) {
                 </div>
                 <div class="task-detail-item">
                   <dt class="task-detail-label">Локация</dt>
-                  <dd>
+                  <dd class="task-detail-value">
                     <template v-if="isEditingDetail">
                       <select v-model="form.field" class="task-form-select task-detail-input-inline">
                         <option value="">Не выбрано</option>
@@ -1445,7 +1651,7 @@ function statusClass(s: Status) {
                       </select>
                     </template>
                     <template v-else>
-                      <span class="task-pill task-pill-field">{{ selectedTask.field }}</span>
+                      <span class="task-detail-field-value">{{ selectedTask.field || 'Не выбрано' }}</span>
                     </template>
                   </dd>
                 </div>
@@ -1465,6 +1671,44 @@ function statusClass(s: Status) {
                     {{ selectedTask.description || 'Описание не указано' }}
                   </div>
                 </template>
+              </div>
+              <div class="task-detail-desc-wrap">
+                <div class="task-file-section-head">
+                  <span class="task-detail-label">Файлы задачи</span>
+                  <button type="button" class="task-file-add-btn" :disabled="fileUploading" @click="triggerDetailFileInput">
+                    {{ fileUploading ? 'Загрузка...' : 'Добавить файлы' }}
+                  </button>
+                </div>
+                <div v-if="taskFiles.length" class="task-files-grid">
+                  <a
+                    v-for="file in taskFiles"
+                    :key="file.id"
+                    :href="getTaskFilePublicUrl(file.file_path)"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="task-file-card"
+                  >
+                    <div class="task-file-icon-box">
+                      <img v-if="isImageFile(file.file_name)" class="task-file-thumb" :src="getTaskFilePublicUrl(file.file_path)" :alt="file.file_name" />
+                      <svg v-else-if="isPdfFile(file.file_name)" class="task-file-icon-pdf" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <path d="M14 2v6h6" />
+                        <path d="M9 13h6" />
+                        <path d="M9 17h6" />
+                      </svg>
+                      <svg v-else class="task-file-icon-doc" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <path d="M14 2v6h6" />
+                      </svg>
+                    </div>
+                    <div class="task-file-info">
+                      <span class="task-file-name">{{ file.file_name }}</span>
+                      <span class="task-file-size">{{ formatFileSize(file.file_size) }}</span>
+                    </div>
+                    <UiDeleteButton size="xs" @click.prevent="removeTaskFileRow(file)" />
+                  </a>
+                </div>
+                <div v-else class="task-file-empty">Файлы пока не прикреплены.</div>
               </div>
             </div>
             <aside class="task-detail-sidebar">
@@ -1535,11 +1779,21 @@ function statusClass(s: Status) {
             </aside>
           </div>
           <section class="task-chat">
-            <h3 class="task-chat-title">Обсуждение задачи</h3>
+            <div class="task-chat-header">
+              <h3 class="task-chat-title">Обсуждение задачи</h3>
+              <button
+                type="button"
+                class="task-chat-toggle"
+                :disabled="commentsLoading || !taskComments.length"
+                @click="isTaskChatExpanded = !isTaskChatExpanded"
+              >
+                {{ isTaskChatExpanded ? 'Скрыть' : 'Показать все' }}
+              </button>
+            </div>
             <div v-if="commentsLoading" class="task-chat-loading">
               <UiLoadingBar size="compact" />
             </div>
-            <div v-else class="task-chat-body">
+            <div v-else-if="isTaskChatExpanded" class="task-chat-body">
               <div v-if="!taskComments.length" class="task-chat-empty">
                 Пока нет комментариев. Напишите первый.
               </div>
@@ -1560,6 +1814,9 @@ function statusClass(s: Status) {
                   </div>
                 </li>
               </ul>
+            </div>
+            <div v-else class="task-chat-collapsed-hint">
+              {{ taskComments.length ? `Комментариев: ${taskComments.length}` : 'Пока нет комментариев. Напишите первый.' }}
             </div>
             <form class="task-chat-input-row" @submit.prevent="submitComment">
               <textarea
@@ -1616,6 +1873,22 @@ function statusClass(s: Status) {
       button-text="Отлично"
       @close="successModalOpen = false"
     />
+    <input
+      ref="createFileInputRef"
+      type="file"
+      class="task-file-input-hidden"
+      accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+      multiple
+      @change="onCreateFilesSelected"
+    />
+    <input
+      ref="detailFileInputRef"
+      type="file"
+      class="task-file-input-hidden"
+      accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+      multiple
+      @change="onDetailFilesSelected"
+    />
   </section>
 </template>
 
@@ -1643,6 +1916,9 @@ function statusClass(s: Status) {
   background: var(--chip-bg);
   color: var(--text-secondary);
   font-size: 0.9rem;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
 }
 
 /* Единая высота и стиль элементов шапки задач */
@@ -2088,10 +2364,13 @@ function statusClass(s: Status) {
   background: var(--bg-panel);
   border: 1px solid var(--border-color);
   border-radius: 12px;
-  padding: var(--space-md);
+  padding: 8px 10px;
   cursor: pointer;
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
   text-align: left;
+  display: flex;
+  flex-direction: column;
+  min-height: 84px;
 }
 
 .task-card:hover {
@@ -2113,39 +2392,52 @@ function statusClass(s: Status) {
 
 .task-card-head {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 2px;
+  margin-bottom: 2px;
 }
 
 .task-card-num {
   flex-shrink: 0;
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 600;
   color: var(--text-secondary);
+  line-height: 1.18;
+  margin-right: 2px;
 }
 
 .task-card-title {
-  font-size: 0.9375rem;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-primary);
   flex: 1;
   min-width: 0;
+  max-width: 100%;
+  line-height: 1.18;
+  min-height: calc(1.18em * 2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .task-card-avatar {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: var(--chip-bg);
   color: #fff;
-  font-size: 0.7rem;
+  font-size: 0.58rem;
   font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 .task-card-meta {
@@ -2177,6 +2469,16 @@ function statusClass(s: Status) {
   max-width: 180px;
 }
 
+.task-detail-field-value {
+  display: inline-block;
+  max-width: 100%;
+  font-size: inherit;
+  color: var(--text-primary);
+  line-height: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .task-list-cell-field {
   min-width: 130px;
 }
@@ -2203,8 +2505,24 @@ function statusClass(s: Status) {
 }
 
 .task-card-due {
-  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.66rem;
   color: var(--text-secondary);
+  margin-top: auto;
+}
+
+.task-card-due-date {
+  min-width: 0;
+}
+
+.task-pill-priority-compact {
+  flex-shrink: 0;
+  font-size: 0.5rem;
+  padding: 2px 6px;
+  letter-spacing: 0.03em;
 }
 
 .task-overdue {
@@ -2309,6 +2627,8 @@ function statusClass(s: Status) {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-primary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .task-list-row {
@@ -2330,6 +2650,9 @@ function statusClass(s: Status) {
   font-weight: 500;
   min-width: 240px;
   line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .task-list-cell-assignee {
@@ -2417,8 +2740,42 @@ function statusClass(s: Status) {
   animation: taskModalIn 0.25s ease;
 }
 
+.task-modal-header--create {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.task-create-header-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.task-create-header-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.task-modal-body--create {
+  padding: 12px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .task-modal--detail {
-  max-width: 960px;
+  width: min(calc(100vw - 48px), 940px);
+  max-width: 940px;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 @keyframes taskModalIn {
@@ -2433,13 +2790,10 @@ function statusClass(s: Status) {
 }
 
 .task-modal-close {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border: none;
-  background: rgba(0, 0, 0, 0.04);
+  background: transparent;
   color: var(--text-secondary);
   font-size: 1.5rem;
   line-height: 1;
@@ -2454,7 +2808,7 @@ function statusClass(s: Status) {
 }
 
 .task-modal-title {
-  margin: 0 0 var(--space-md);
+  margin: 0;
   font-size: 1rem;
   font-weight: 700;
   color: var(--text-primary);
@@ -2524,6 +2878,14 @@ function statusClass(s: Status) {
   margin-bottom: 0;
 }
 
+.task-form-row--design {
+  margin-bottom: 0;
+}
+
+.task-form-row--priority {
+  display: flex;
+}
+
 .task-form {
   width: 100%;
   box-sizing: border-box;
@@ -2531,8 +2893,8 @@ function statusClass(s: Status) {
 
 .task-form-row--two {
   display: grid;
-  grid-template-columns: calc((100% - 16px) / 2) calc((100% - 16px) / 2);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -2563,7 +2925,7 @@ function statusClass(s: Status) {
 }
 
 .task-form-row--two .task-form-label {
-  font-size: 0.6rem;
+  font-size: 0.7rem;
   min-height: 1.35em;
   line-height: 1.35;
   display: flex;
@@ -2579,16 +2941,16 @@ function statusClass(s: Status) {
 
 .task-form-row--two .task-form-input,
 .task-form-row--two .task-form-select {
-  font-size: 0.8125rem;
-  min-height: 32px;
-  height: 32px;
-  padding: 6px 10px;
+  font-size: 0.9375rem;
+  min-height: 44px;
+  height: 44px;
+  padding: 10px 12px;
   box-sizing: border-box;
 }
 
 .task-form-row--two .task-form-select-wrap {
-  min-height: 32px;
-  height: 32px;
+  min-height: 44px;
+  height: 44px;
   box-sizing: border-box;
 }
 
@@ -2599,42 +2961,112 @@ function statusClass(s: Status) {
   min-width: 0;
 }
 
+.task-form-field--priority {
+  width: min(100%, calc((100% - 16px) / 2));
+}
+
 .task-form-field .task-form-label {
   margin-bottom: 0;
 }
 
 .task-form-label {
   display: block;
-  font-size: 0.6rem;
-  font-weight: 700;
+  font-size: 0.64rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   color: var(--text-secondary);
-  margin-bottom: 4px;
+  margin-bottom: 5px;
   line-height: 1.3;
+}
+
+.task-form-counter {
+  margin-top: 4px;
+  text-align: right;
+  font-size: 0.68rem;
+  color: var(--text-secondary);
 }
 
 .task-form-input,
 .task-form-select,
 .task-form-textarea {
   width: 100%;
-  padding: 6px 10px;
+  padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--chip-bg);
+  background: var(--bg-panel);
   color: var(--text-primary);
-  font-size: 0.8125rem;
-  transition: border-color 0.2s ease;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  font-family: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
   box-sizing: border-box;
-  min-height: 32px;
+  min-height: 38px;
+}
+
+.task-modal--create {
+  width: min(calc(100vw - 48px), 620px);
+  max-width: 620px;
+  padding: 0;
+  background: #fff;
+  border-color: var(--border-color);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.task-modal--create .task-form-input,
+.task-modal--create .task-form-select,
+.task-modal--create .task-form-textarea,
+.task-modal--create .task-form-static-assignee {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  box-shadow: none;
+}
+
+.task-modal--create .task-form-input::placeholder,
+.task-modal--create .task-form-textarea::placeholder {
+  color: var(--text-secondary);
+}
+
+.task-modal--create .task-form-input:focus,
+.task-modal--create .task-form-select:focus,
+.task-modal--create .task-form-textarea:focus {
+  outline: none;
+  border-color: var(--agro);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--agro) 20%, transparent);
+}
+
+.task-modal--create .task-form-select-wrap {
+  align-items: center;
+  min-height: 38px;
 }
 
 .task-form-select {
-  min-height: 32px;
+  min-height: 38px;
+  height: 38px;
+}
+
+.task-modal--create .task-form-input,
+.task-modal--create .task-form-select,
+.task-modal--create .task-form-textarea {
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.task-form-input--title {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.task-modal--create .task-form-textarea {
+  min-height: 84px;
 }
 
 .task-form-textarea {
-  min-height: 64px;
+  min-height: 56px;
   font-size: 0.8125rem;
 }
 
@@ -2646,7 +3078,7 @@ function statusClass(s: Status) {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 32px;
+  min-height: 38px;
 }
 
 .task-form-select-wrap .task-form-select {
@@ -2657,10 +3089,10 @@ function statusClass(s: Status) {
 .task-form-avatar {
   width: 28px;
   height: 28px;
-  border-radius: 50%;
+  border-radius: 10px;
   background: #5a7c5e;
   color: #fff;
-  font-size: 0.65rem;
+  font-size: 0.68rem;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -2668,33 +3100,147 @@ function statusClass(s: Status) {
   flex-shrink: 0;
 }
 
-.task-form-priority {
-  display: flex;
-  gap: 0;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid #b87a50;
-}
-
-.task-form-priority-btn {
-  flex: 1;
-  padding: 6px 8px;
-  border: none;
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  font-size: 0.7rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease;
-}
-
-.task-form-priority-btn--active {
-  background: #b87a50;
-  color: #fff;
-}
-
 .task-form-textarea {
   resize: vertical;
+}
+
+.task-file-input-hidden {
+  display: none;
+}
+
+.task-file-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-file-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-file-add-btn {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.task-file-add-btn:hover:not(:disabled) {
+  border-color: var(--agro);
+  color: var(--agro);
+  background: var(--bg-panel-hover);
+}
+
+.task-file-add-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.task-file-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 58px;
+  padding: 10px;
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+}
+
+.task-file-dropzone:hover:not(:disabled) {
+  background: rgba(61, 92, 64, 0.05);
+  border-color: var(--agro);
+  color: var(--agro);
+}
+
+.task-files-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.task-file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: inherit;
+  text-decoration: none;
+}
+
+.task-file-icon-box {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.task-file-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.task-file-icon-pdf {
+  color: #dc2626;
+}
+
+.task-file-icon-doc {
+  color: var(--text-secondary);
+}
+
+.task-file-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-file-name {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-file-size {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.task-file-empty {
+  padding: 6px 0;
+  border: none;
+  border-radius: 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  background: transparent;
 }
 
 .task-form-actions {
@@ -2707,35 +3253,68 @@ function statusClass(s: Status) {
   border-top: 1px solid var(--border-color);
 }
 
+.task-form-actions--create {
+  padding: 12px 16px;
+  background: var(--bg-panel-hover);
+  border-top: 1px solid var(--border-color);
+  border-radius: 0 0 12px 12px;
+  margin-top: 0;
+}
+
+.task-form--create-design {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .task-form-cancel {
-  padding: 10px 16px;
-  border: none;
-  background: transparent;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
   color: var(--text-secondary);
-  font-size: 0.9375rem;
-  font-weight: 500;
+  font-size: 0.875rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: color 0.2s ease;
+  transition: color 0.2s ease, background 0.2s ease;
 }
 
 .task-form-cancel:hover {
+  background: var(--sidebar-hover-bg);
   color: var(--text-primary);
 }
 
 .task-form-submit {
-  padding: 10px 20px;
-  border-radius: 10px;
-  border: none;
+  height: 36px;
+  padding: 0 16px;
+  min-width: 152px;
+  border-radius: 8px;
+  border: 1px solid transparent;
   background: var(--accent-green);
-  color: #fff;
-  font-size: 0.9375rem;
-  font-weight: 600;
+  color: #ffffff;
+  font-size: 0.875rem;
+  font-weight: 700;
   cursor: pointer;
-  transition: background 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  box-shadow: none;
+  -webkit-text-fill-color: #ffffff;
+  appearance: none;
 }
 
 .task-form-submit:hover {
   background: var(--accent-green-hover);
+}
+
+.task-form-submit:disabled {
+  background: #b9c7bb;
+  border-color: #a7b8aa;
+  color: #ffffff;
+  cursor: not-allowed;
+  opacity: 1;
 }
 
 .task-form-actions--detail {
@@ -2749,31 +3328,34 @@ function statusClass(s: Status) {
 
 .task-detail-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-md);
-  margin-top: var(--space-lg);
-  padding-top: var(--space-md);
+  justify-content: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px 18px 18px;
   border-top: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  border-radius: 0 0 16px 16px;
 }
 
 .task-detail-btn {
-  padding: 10px 18px;
+  padding: 0 16px;
   border-radius: 10px;
-  font-size: 0.9375rem;
-  font-weight: 500;
+  font-size: 0.875rem;
+  font-weight: 600;
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease;
-  min-height: 44px;
+  min-height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  white-space: nowrap;
 }
 
 .task-detail-btn--edit {
   border: 1px solid var(--border-color);
-  background: var(--chip-bg);
+  background: var(--bg-panel);
   color: var(--text-primary);
 }
 
@@ -2784,13 +3366,14 @@ function statusClass(s: Status) {
 .task-detail-del-wrap {
   display: flex;
   align-items: center;
+  margin-left: auto;
 }
 
 .task-detail-btn--close {
   border: none;
   background: var(--accent-green);
   color: #fff;
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .task-detail-btn--close:hover {
@@ -2817,19 +3400,26 @@ function statusClass(s: Status) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: var(--space-md);
+  margin-bottom: 6px;
 }
 
 .task-detail-layout {
   display: grid;
-  grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1.4fr);
-  gap: var(--space-lg);
+  grid-template-columns: minmax(0, 1.62fr) minmax(260px, 0.88fr);
+  gap: 18px;
   position: relative;
+  padding: 18px 20px 12px;
+  overflow-y: auto;
+  max-height: 90vh;
+  align-items: start;
 }
 
 .task-detail-main {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  padding: 0;
+  gap: 14px;
 }
 
 .task-detail-loading-overlay {
@@ -2846,22 +3436,24 @@ function statusClass(s: Status) {
 .task-detail-sidebar {
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: 14px;
+  min-width: 0;
 }
 
 .task-detail-card {
   background: var(--bg-panel);
-  border-radius: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+  box-shadow: none;
 }
 
 .task-detail-card-title {
-  margin: 0 0 8px;
-  font-size: 0.8rem;
+  margin: 0 0 10px;
+  font-size: 0.76rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
   color: var(--text-secondary);
 }
 
@@ -2872,9 +3464,9 @@ function statusClass(s: Status) {
 }
 
 .task-detail-info-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   background: #5a7c5e;
   color: #fff;
   display: flex;
@@ -2934,7 +3526,7 @@ function statusClass(s: Status) {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 220px;
+  max-height: 260px;
   overflow-y: auto;
 }
 
@@ -2987,16 +3579,51 @@ function statusClass(s: Status) {
 }
 
 .task-chat {
-  margin-top: var(--space-lg);
-  padding-top: var(--space-md);
+  margin-top: 6px;
+  padding: 14px 20px 0;
+  border: none;
   border-top: 1px solid var(--border-color);
+  border-radius: 0;
+  background: transparent;
 }
 
 .task-chat-title {
-  margin: 0 0 8px;
-  font-size: 0.9rem;
+  margin: 0;
+  font-size: 1rem;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+.task-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.task-chat-toggle {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.task-chat-toggle:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  border-color: var(--agro);
+  color: var(--agro);
+}
+
+.task-chat-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .task-chat-loading {
@@ -3008,13 +3635,19 @@ function statusClass(s: Status) {
 }
 
 .task-chat-body {
-  max-height: 260px;
+  max-height: 240px;
   overflow-y: auto;
-  margin-bottom: var(--space-md);
+  margin-bottom: 12px;
 }
 
 .task-chat-empty {
   font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.task-chat-collapsed-hint {
+  margin-bottom: 14px;
+  font-size: 0.82rem;
   color: var(--text-secondary);
 }
 
@@ -3031,12 +3664,13 @@ function statusClass(s: Status) {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  padding: 8px 0;
 }
 
 .task-chat-avatar {
   width: 30px;
   height: 30px;
-  border-radius: 50%;
+  border-radius: 10px;
   background: #5a7c5e;
   color: #fff;
   font-size: 0.7rem;
@@ -3083,25 +3717,25 @@ function statusClass(s: Status) {
 .task-chat-input-row {
   display: flex;
   flex-direction: row;
-  gap: 8px;
+  gap: 10px;
   align-items: flex-end;
 }
 
 .task-chat-input {
   flex: 1;
-  min-height: 40px;
+  min-height: 44px;
   max-height: 120px;
   resize: vertical;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--border-color);
-  background: var(--chip-bg);
+  background: var(--bg-panel);
   font-size: 0.85rem;
   color: var(--text-primary);
 }
 
 .task-chat-send {
-  padding: 8px 14px;
+  padding: 0 18px;
   border-radius: 10px;
   border: none;
   background: var(--accent-green);
@@ -3110,7 +3744,7 @@ function statusClass(s: Status) {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  min-height: 40px;
+  min-height: 44px;
 }
 
 .task-chat-send:disabled {
@@ -3147,18 +3781,22 @@ function statusClass(s: Status) {
 .task-pill-status.status-done { background: #5a7c5e; }
 
 .task-detail-title {
-  margin: 0 0 var(--space-md);
-  font-size: 1.0625rem;
+  margin: 0;
+  font-size: 1.5rem;
   font-weight: 700;
   color: var(--text-primary);
-  line-height: 1.3;
+  line-height: 1.2;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .task-detail-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  margin: 0 0 var(--space-md);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 9px;
+  margin: 0;
 }
 
 .task-detail-list dd {
@@ -3168,34 +3806,43 @@ function statusClass(s: Status) {
 
 .task-detail-item {
   margin: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  min-height: 62px;
 }
 
 .task-detail-label {
   display: block;
-  font-size: 0.625rem;
+  font-size: 0.56rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   color: var(--text-secondary);
   margin-bottom: 4px;
 }
 
 .task-detail-value {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 6px;
   margin: 0;
-  font-size: 0.875rem;
+  font-size: 0.8rem;
   color: var(--text-primary);
+  min-width: 0;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .task-detail-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
   background: #5a7c5e;
   color: #fff;
-  font-size: 0.7rem;
+  font-size: 0.52rem;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
@@ -3204,13 +3851,14 @@ function statusClass(s: Status) {
 }
 
 .task-detail-status-select {
-  padding: 6px 10px;
-  border-radius: 8px;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: 7px;
   border: 1px solid var(--border-color);
-  background: var(--chip-bg);
+  background: var(--bg-panel);
   color: var(--text-primary);
-  font-size: 0.8125rem;
-  min-width: 160px;
+  font-size: 0.76rem;
+  min-width: 116px;
   cursor: pointer;
 }
 
@@ -3219,7 +3867,11 @@ function statusClass(s: Status) {
 }
 
 .task-detail-desc-wrap {
-  margin-bottom: var(--space-md);
+  margin-bottom: 0;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
 }
 
 .task-detail-desc-wrap .task-detail-label {
@@ -3227,12 +3879,48 @@ function statusClass(s: Status) {
 }
 
 .task-detail-desc {
-  padding: var(--space-sm) var(--space-md);
-  border-radius: 8px;
-  background: var(--chip-bg);
-  font-size: 0.8125rem;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.8rem;
   color: var(--text-primary);
-  line-height: 1.4;
+  line-height: 1.3;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.task-modal-close--detail {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid var(--border-color);
+  backdrop-filter: blur(8px);
+}
+
+.task-file-section-head {
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.task-file-section-head .task-detail-label,
+.task-file-section-head .task-form-label {
+  margin-bottom: 0;
+}
+
+.task-detail-desc-wrap .task-file-section {
+  gap: 8px;
+}
+
+.task-file-card {
+  box-shadow: none;
+}
+
+.task-file-empty {
+  font-size: 0.8rem;
+  padding: 6px 0;
 }
 
 /* ——— Тёмная тема (Context7: опора на CSS-переменные и контраст) ——— */
@@ -3264,21 +3952,6 @@ function statusClass(s: Status) {
 
 [data-theme='dark'] .task-form-input--date {
   color: #7aad7e;
-}
-
-[data-theme='dark'] .task-form-priority {
-  border-color: var(--warning-orange);
-}
-
-[data-theme='dark'] .task-form-priority-btn {
-  background: rgba(0, 0, 0, 0.25);
-  color: var(--text-primary);
-  border-color: var(--border-color);
-}
-
-[data-theme='dark'] .task-form-priority-btn--active {
-  background: var(--warning-orange);
-  color: #fff;
 }
 
 [data-theme='dark'] .task-filter-tab {
@@ -3381,12 +4054,12 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-detail-card {
-  background: rgba(22, 38, 28, 0.7);
+  background: rgba(22, 38, 28, 0.72);
   border-color: var(--border-color);
 }
 
 [data-theme='dark'] .task-chat-input {
-  background: rgba(22, 38, 28, 0.7);
+  background: rgba(22, 38, 28, 0.72);
   border-color: var(--border-color);
 }
 
@@ -3462,6 +4135,10 @@ function statusClass(s: Status) {
     grid-template-columns: 1fr;
   }
 
+  .task-form-field--priority {
+    width: 100%;
+  }
+
   .task-filter-row {
     flex-direction: column;
     align-items: stretch;
@@ -3530,6 +4207,22 @@ function statusClass(s: Status) {
 
   .task-detail-layout {
     grid-template-columns: 1fr;
+  }
+
+  .task-detail-list {
+    grid-template-columns: 1fr;
+  }
+
+  .task-detail-value,
+  .task-detail-input-inline,
+  .task-detail-status-select {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .task-detail-input-inline,
+  .task-detail-status-select {
+    width: 100%;
   }
 
   .task-detail-sidebar {
@@ -3656,8 +4349,16 @@ function statusClass(s: Status) {
 
   .task-list-cell-assignee {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
+    flex-wrap: wrap;
     gap: 10px;
+  }
+
+  .task-list-assignee-name {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .task-list-avatar {
@@ -3685,6 +4386,12 @@ function statusClass(s: Status) {
     overflow-y: auto;
   }
 
+  .task-modal--create .task-form-input,
+  .task-modal--create .task-form-select,
+  .task-modal--create .task-form-textarea {
+    max-width: 100%;
+  }
+
   .task-modal--detail,
   .task-modal--create {
     max-height: calc(100vh - 2 * var(--space-md));
@@ -3708,6 +4415,9 @@ function statusClass(s: Status) {
 
   .task-list-cell-title {
     font-size: 0.9rem;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .task-list-cell-assignee {
@@ -3743,6 +4453,20 @@ function statusClass(s: Status) {
   .task-modal--detail,
   .task-modal--create {
     max-height: calc(100vh - 2 * var(--space-sm));
+  }
+
+  .task-detail-title {
+    font-size: 1.2rem;
+    line-height: 1.22;
+  }
+
+  .task-detail-list {
+    gap: 6px;
+  }
+
+  .task-detail-item,
+  .task-detail-desc-wrap {
+    padding: 6px 7px;
   }
 
   .task-form-actions {

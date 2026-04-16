@@ -268,6 +268,36 @@ export type ForecastDayItem = {
   alert?: string
 }
 
+type ForecastCacheEntry = {
+  savedAt: number
+  items: ForecastDayItem[]
+}
+
+const FORECAST_CACHE_TTL_MS = 30 * 60 * 1000
+const forecastCacheByCoords = new Map<string, ForecastCacheEntry>()
+
+function forecastCacheKey(lat: number, lon: number): string {
+  // Округляем, чтобы близкие координаты не создавали лишние ключи
+  return `${lat.toFixed(3)},${lon.toFixed(3)}`
+}
+
+function getCachedForecast(lat: number, lon: number): ForecastDayItem[] | null {
+  const key = forecastCacheKey(lat, lon)
+  const cached = forecastCacheByCoords.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.savedAt > FORECAST_CACHE_TTL_MS) {
+    forecastCacheByCoords.delete(key)
+    return null
+  }
+  return cached.items
+}
+
+function setCachedForecast(lat: number, lon: number, items: ForecastDayItem[]) {
+  if (!items.length) return
+  const key = forecastCacheKey(lat, lon)
+  forecastCacheByCoords.set(key, { savedAt: Date.now(), items })
+}
+
 const GQL_FORECAST_QUERY = `
   query WeatherForecast($lat: Float!, $lon: Float!) {
     weatherByPoint(request: { lat: $lat, lon: $lon }) {
@@ -292,7 +322,12 @@ const GQL_FORECAST_QUERY = `
 
 export async function fetchForecast5(lat: number, lon: number): Promise<ForecastDayItem[]> {
   if (shouldSkipYandex()) {
-    return fetchForecast5Fallback(lat, lon)
+    const fallback = await fetchForecast5Fallback(lat, lon)
+    if (fallback.length) {
+      setCachedForecast(lat, lon, fallback)
+      return fallback
+    }
+    return getCachedForecast(lat, lon) ?? []
   }
   try {
     const response = await fetchWithTimeout(YANDEX_PROXY, {
@@ -324,7 +359,7 @@ export async function fetchForecast5(lat: number, lon: number): Promise<Forecast
     const dayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
     const monthNames: Record<number, string> = { 1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр', 5: 'Май', 6: 'Июн', 7: 'Июл', 8: 'Авг', 9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек' }
 
-    return days.map((day: any) => {
+    const mapped = days.map((day: any) => {
       const d = new Date(day.time)
       const dayLabel = dayLabels[d.getUTCDay()]
       const dateLabel = `${d.getUTCDate()} ${monthNames[d.getUTCMonth() + 1]}`
@@ -347,9 +382,16 @@ export async function fetchForecast5(lat: number, lon: number): Promise<Forecast
         alert,
       }
     })
+    setCachedForecast(lat, lon, mapped)
+    return mapped
   } catch (e) {
     console.warn('Forecast GraphQL API error, trying OpenWeather fallback:', e)
-    return fetchForecast5Fallback(lat, lon)
+    const fallback = await fetchForecast5Fallback(lat, lon)
+    if (fallback.length) {
+      setCachedForecast(lat, lon, fallback)
+      return fallback
+    }
+    return getCachedForecast(lat, lon) ?? []
   }
 }
 

@@ -201,6 +201,14 @@ function assigneeAvatarStyle(p: ProfileRow): Record<string, string> {
   return { background: avatarColorByPosition(p.position) }
 }
 
+function weekCardTitle(title: string): string {
+  const normalized = (title || '').replace(/\s+/g, ' ').trim()
+  const maxChars = 36
+  if (!normalized) return 'Без названия'
+  if (normalized.length <= maxChars) return normalized
+  return `${normalized.slice(0, maxChars - 1).trimEnd()}…`
+}
+
 const profilesNotAssigned = computed(() =>
   profiles.value.filter((p) => !taskAssignees.value.includes(p.id)),
 )
@@ -2129,7 +2137,7 @@ async function confirmDeleteTask() {
                 @dragend="onWeekEventDragEnd"
               >
                 <div class="day-event-time">{{ minutesToHhmm(event.start) }}<span v-if="event.task.endTime"> – {{ event.task.endTime }}</span></div>
-                <div class="day-event-title">{{ event.task.title }}</div>
+                <div class="day-event-title">{{ weekCardTitle(event.task.title) }}</div>
                 <div
                   v-if="dayEventAssignees(event.task.id).length"
                   class="day-event-assignees"
@@ -3907,6 +3915,7 @@ async function confirmDeleteTask() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: normal;
+  overflow-wrap: anywhere;
   padding-right: 4px;
   padding-bottom: 15px;
 }
@@ -6430,6 +6439,24 @@ async function confirmDeleteTask() {
   .week-view-scroll {
     width: 860px;
     min-width: 860px;
+  }
+
+  .week-event-card {
+    padding-bottom: 8px;
+  }
+
+  .week-event-card .day-event-time {
+    padding-right: 2px;
+  }
+
+  .week-event-card .day-event-title {
+    -webkit-line-clamp: 3;
+    padding-bottom: 2px;
+  }
+
+  .week-event-card .day-event-assignees,
+  .week-event-card .event-participation-pill {
+    display: none;
   }
 
   .month-view-wrap {
