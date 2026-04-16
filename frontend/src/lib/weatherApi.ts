@@ -3,6 +3,10 @@
  */
 
 const YANDEX_PROXY = '/api/weather'
+const YANDEX_TIMEOUT_MS = 4500
+const OPENWEATHER_TIMEOUT_MS = 5000
+const YANDEX_RATE_LIMIT_COOLDOWN_MS = 60_000
+let yandexRateLimitedUntil = 0
 
 export type WeatherData = {
   cityName: string
@@ -85,6 +89,24 @@ function parseWindDir(dir: string): string {
   return dirs[key] || dirs[key.toUpperCase()] || dir
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function shouldSkipYandex(): boolean {
+  return Date.now() < yandexRateLimitedUntil
+}
+
+function markYandexRateLimited() {
+  yandexRateLimitedUntil = Date.now() + YANDEX_RATE_LIMIT_COOLDOWN_MS
+}
+
 const GQL_NOW_QUERY = `
   query WeatherNow($lat: Float!, $lon: Float!) {
     weatherByPoint(request: { lat: $lat, lon: $lon }) {
@@ -133,8 +155,11 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
   }
 
   // Ключ на фронтенде больше не нужен, он подставляется в Serverless Function на Vercel
+  if (shouldSkipYandex()) {
+    return fetchWeatherFallback(lat, lon, label)
+  }
   try {
-    const response = await fetch(YANDEX_PROXY, {
+    const response = await fetchWithTimeout(YANDEX_PROXY, {
       method: 'POST',
       headers: {
         // 'X-Yandex-Weather-Key': key, // Ключ подставляется на сервере
@@ -144,9 +169,12 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
         query: GQL_NOW_QUERY,
         variables: { lat, lon }
       })
-    })
+    }, YANDEX_TIMEOUT_MS)
 
     if (!response.ok) {
+      if (response.status === 429) {
+        markYandexRateLimited()
+      }
       throw new Error(`Yandex HTTP Error: ${response.status}`);
     }
     const result = await response.json()
@@ -263,8 +291,11 @@ const GQL_FORECAST_QUERY = `
 `
 
 export async function fetchForecast5(lat: number, lon: number): Promise<ForecastDayItem[]> {
+  if (shouldSkipYandex()) {
+    return fetchForecast5Fallback(lat, lon)
+  }
   try {
-    const response = await fetch(YANDEX_PROXY, {
+    const response = await fetchWithTimeout(YANDEX_PROXY, {
       method: 'POST',
       headers: {
         // 'X-Yandex-Weather-Key': key, // Ключ подставляется на сервере
@@ -274,9 +305,12 @@ export async function fetchForecast5(lat: number, lon: number): Promise<Forecast
         query: GQL_FORECAST_QUERY,
         variables: { lat, lon }
       })
-    })
+    }, YANDEX_TIMEOUT_MS)
 
     if (!response.ok) {
+      if (response.status === 429) {
+        markYandexRateLimited()
+      }
       throw new Error(`Yandex HTTP Error: ${response.status}`)
     }
     const result = await response.json()
@@ -343,7 +377,11 @@ async function fetchWeatherFallback(lat: number, lon: number, cityName: string):
     lang: LANG,
   })
   try {
-    const response = await fetch(`${OPENWEATHER_BASE}?${params.toString()}`)
+    const response = await fetchWithTimeout(
+      `${OPENWEATHER_BASE}?${params.toString()}`,
+      { method: 'GET' },
+      OPENWEATHER_TIMEOUT_MS,
+    )
     if (!response.ok) return null
     const raw = await response.json()
     const weather = raw.weather?.[0]
@@ -395,7 +433,11 @@ async function fetchForecast5Fallback(lat: number, lon: number): Promise<Forecas
     cnt: '40',
   })
   try {
-    const response = await fetch(`${OPENWEATHER_FORECAST}?${params.toString()}`)
+    const response = await fetchWithTimeout(
+      `${OPENWEATHER_FORECAST}?${params.toString()}`,
+      { method: 'GET' },
+      OPENWEATHER_TIMEOUT_MS,
+    )
     if (!response.ok) return []
     const raw = await response.json()
     const list = raw?.list ?? []
