@@ -368,11 +368,16 @@ a {
   border-radius: 8px;
   padding: 4px 8px 4px 0;
   margin: -4px 0 -4px -8px;
-  transition: background 0.2s;
+  transition:
+    background 0.22s ease,
+    transform 0.22s ease,
+    box-shadow 0.22s ease;
 }
 
 .topbar-user-link:hover {
   background: var(--row-hover-bg);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
 }
 
 .topbar-user-avatar {
@@ -388,6 +393,12 @@ a {
   font-weight: 700;
   flex-shrink: 0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transform-origin: center;
+  transition: transform 0.28s ease;
+}
+
+.topbar-user-link:hover .topbar-user-avatar {
+  transform: scale(1.08);
 }
 
 .topbar-user-meta {

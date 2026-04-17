@@ -64,6 +64,8 @@ const messagesScrollEl = useTemplateRef<HTMLDivElement>('messagesScrollEl')
 const draft = ref('')
 const pendingAttachment = ref<File | null>(null)
 const attachBusy = ref(false)
+const sendClickAnimating = ref(false)
+let sendAnimTimer: ReturnType<typeof setTimeout> | null = null
 const fileInputRef = useTemplateRef<HTMLInputElement>('chatFileInput')
 const failedImagePreviewIds = ref<Record<string, true>>({})
 
@@ -483,6 +485,15 @@ async function onSend() {
     error.value = `Не больше ${CHAT_MESSAGE_MAX_CHARS} символов в сообщении`
     return
   }
+  if (sendAnimTimer) clearTimeout(sendAnimTimer)
+  sendClickAnimating.value = false
+  requestAnimationFrame(() => {
+    sendClickAnimating.value = true
+    sendAnimTimer = setTimeout(() => {
+      sendClickAnimating.value = false
+      sendAnimTimer = null
+    }, 410)
+  })
   error.value = null
   attachBusy.value = true
   try {
@@ -817,6 +828,7 @@ onUnmounted(() => {
   document.removeEventListener('keydown', onGlobalKeydown)
   stopRealtime()
   if (dmSearchTimer) clearTimeout(dmSearchTimer)
+  if (sendAnimTimer) clearTimeout(sendAnimTimer)
   if (presenceTicker) {
     clearInterval(presenceTicker)
     presenceTicker = null
@@ -835,7 +847,7 @@ onUnmounted(() => {
     <section class="chat-page__list" aria-label="Диалоги">
       <div class="chat-page__list-head">
         <div v-if="configured" class="chat-page__toolbar">
-          <button type="button" class="chat-page__toolbar-btn" @click="openDmModal">Написать</button>
+          <button type="button" class="chat-page__toolbar-btn chat-page__toolbar-btn--anim" @click="openDmModal">Написать</button>
           <button
             type="button"
             class="chat-page__toolbar-btn chat-page__toolbar-btn--refresh chat-page__toolbar-btn--icon"
@@ -865,7 +877,7 @@ onUnmounted(() => {
           <button
             v-if="isManager"
             type="button"
-            class="chat-page__toolbar-btn chat-page__toolbar-btn--primary"
+            class="chat-page__toolbar-btn chat-page__toolbar-btn--primary chat-page__toolbar-btn--anim"
             aria-label="Новая команда"
             @click="openGroupModal"
           >
@@ -1389,6 +1401,7 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="chat-page__send"
+                :class="{ 'chat-page__send--click-anim': sendClickAnimating }"
                 aria-label="Отправить"
                 :disabled="
                   chatLoading ||
@@ -1409,7 +1422,6 @@ onUnmounted(() => {
                     </svg>
                   </div>
                 </div>
-                <span>Send</span>
               </button>
             </div>
               </div>
@@ -3122,62 +3134,93 @@ a.chat-page__attach-preview {
 /* From Uiverse.io by adamgiebl — как в сниппете, только селектор .chat-page__send вместо button */
 .chat-page__send {
   font-family: inherit;
-  /* −15% к макету adamgiebl (20px → 17px) */
-  font-size: calc(20px * 0.85);
   background: var(--accent-green);
   color: #fff;
-  padding: 0.7em 1em;
-  padding-left: 0.9em;
+  width: 44px;
+  height: 40px;
+  padding: 0;
   display: flex;
+  justify-content: center;
   align-items: center;
   border: none;
   border-radius: calc(16px * 0.85);
   overflow: hidden;
-  transition: all 0.2s;
+  transition: background 0.2s ease, transform 0.2s ease;
   cursor: pointer;
   margin-left: 4px;
   flex-shrink: 0;
 }
 
-.chat-page__send span {
-  display: block;
-  margin-left: 0.3em;
-  transition: all 0.3s ease-in-out;
-}
-
 .chat-page__send svg {
   display: block;
   transform-origin: center center;
-  transition: transform 0.3s ease-in-out;
+  transition: transform 0.12s ease-out;
 }
 
 .chat-page__send:hover:not(:disabled) {
   background: var(--accent-green-hover);
 }
 
-.chat-page__send:hover .svg-wrapper {
-  animation: fly-1 0.6s ease-in-out infinite alternate;
-}
-
-.chat-page__send:hover svg {
-  transform: translateX(1.2em) rotate(45deg) scale(1.1);
-}
-
-.chat-page__send:hover span {
-  transform: translateX(5em);
+.chat-page__send:hover:not(:disabled) svg {
+  transform: rotate(18deg) scale(1.08);
 }
 
 .chat-page__send:active {
   transform: scale(0.95);
 }
 
-@keyframes fly-1 {
-  from {
-    transform: translateY(0.1em);
-  }
+.chat-page__send--click-anim .svg-wrapper {
+  animation: chat-send-fly-cycle 0.38s cubic-bezier(0.33, 1, 0.68, 1);
+  will-change: transform, opacity;
+}
 
-  to {
-    transform: translateY(-0.1em);
+@keyframes chat-send-fly-cycle {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  /* Повернуться вправо на месте */
+  18% {
+    transform: translate3d(0, 0, 0) scale(1.02) rotate(28deg);
+    opacity: 1;
+  }
+  /* Улететь вправо носиком вправо */
+  40% {
+    transform: translate3d(30px, -1px, 0) scale(1) rotate(34deg);
+    opacity: 0;
+  }
+  /* Прилететь слева бочком */
+  41% {
+    transform: translate3d(-30px, 0, 0) scale(0.98) rotate(-72deg);
+    opacity: 0;
+  }
+  68% {
+    transform: translate3d(-10px, 0, 0) scale(1) rotate(10deg);
+    opacity: 1;
+  }
+  /* Встать по центру, носик вверх */
+  100% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+.chat-page__send--click-anim svg {
+  animation: chat-send-nose-up 0.38s cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+@keyframes chat-send-nose-up {
+  0% {
+    transform: rotate(0deg);
+  }
+  42% {
+    transform: rotate(22deg);
+  }
+  68% {
+    transform: rotate(14deg);
+  }
+  100% {
+    transform: rotate(0deg);
   }
 }
 
@@ -3268,6 +3311,23 @@ a.chat-page__attach-preview {
 .chat-page__toolbar-btn--primary:hover:not(:disabled) {
   background: var(--accent-green-hover);
   border-color: var(--accent-green-hover);
+}
+
+.chat-page__toolbar-btn--anim {
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    transform 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.chat-page__toolbar-btn--anim:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.1);
+}
+
+.chat-page__toolbar-btn--anim:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
 }
 
 .chat-page__toolbar-btn--danger {
@@ -3599,21 +3659,8 @@ a.chat-page__attach-preview {
   .chat-page__send {
     position: relative;
     margin-left: 2px;
-    padding: 0.55em 0.65em;
-    padding-left: 0.7em;
-  }
-
-  /* Только иконка — подпись остаётся для скринридеров */
-  .chat-page__send span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
+    width: 42px;
+    height: 38px;
   }
 
   .chat-page__modal-backdrop {

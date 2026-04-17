@@ -3121,6 +3121,10 @@ async function confirmDeleteTask() {
   font-weight: 700;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(61, 92, 64, 0.35);
+  transition:
+    background 0.28s ease,
+    transform 0.28s ease,
+    box-shadow 0.28s ease;
 }
 
 .calendar-header-actions {
@@ -3148,11 +3152,19 @@ async function confirmDeleteTask() {
   font-weight: 600;
   padding: 6px 9px;
   border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background 0.28s ease,
+    color 0.28s ease,
+    transform 0.24s ease,
+    box-shadow 0.28s ease;
 }
 
 .calendar-view-switch-btn.is-active {
   color: #fff;
   background: var(--agro);
+  box-shadow: 0 4px 10px rgba(61, 92, 64, 0.28);
+  animation: calendar-view-pill-in 0.34s ease;
 }
 
 .calendar-view-switch-btn:disabled {
@@ -3162,11 +3174,41 @@ async function confirmDeleteTask() {
 
 .calendar-add-btn:hover {
   background: var(--agro-dark);
+  transform: translateY(-2px) scale(1.015);
+  box-shadow: 0 10px 18px rgba(61, 92, 64, 0.36);
 }
 
 .calendar-add-btn-icon {
   width: 15px;
   height: 15px;
+  transform-origin: center;
+  transition: transform 0.34s ease;
+}
+
+.calendar-add-btn:hover .calendar-add-btn-icon {
+  transform: rotate(48deg) scale(1.22);
+}
+
+.calendar-view-switch-btn:hover:not(.is-active):not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  transform: translateY(-2px) scale(1.04);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+}
+
+.calendar-view-switch-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+@keyframes calendar-view-pill-in {
+  0% {
+    transform: scale(0.94);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .calendar-layout {
@@ -5048,12 +5090,14 @@ async function confirmDeleteTask() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.2s ease, background 0.2s ease;
+  transform-origin: center;
+  transition: color 0.22s ease, background 0.22s ease, transform 0.26s ease;
 }
 
 .modal-close:hover {
   background: var(--sidebar-hover-bg);
   color: var(--text-primary);
+  transform: rotate(90deg) scale(1.08);
 }
 
 /* Макет: шапка */

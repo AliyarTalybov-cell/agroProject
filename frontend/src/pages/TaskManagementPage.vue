@@ -35,6 +35,8 @@ type ViewMode = 'kanban' | 'list'
 type FilterKey = 'all' | 'mine'
 type Priority = 'high' | 'medium' | 'low'
 type Status = 'todo' | 'in_progress' | 'review' | 'done'
+type TaskSortKey = 'number' | 'title' | 'assignee' | 'priority' | 'dueDate' | 'status'
+type SortDirection = 'asc' | 'desc'
 
 interface AssigneeOption {
   id: string
@@ -66,6 +68,8 @@ const searchTaskNumber = ref('')
 let searchByNumberTimeout: ReturnType<typeof setTimeout> | null = null
 const currentPage = ref(1)
 const pageSize = ref(10)
+const listSortKey = ref<TaskSortKey>('number')
+const listSortDirection = ref<SortDirection>('desc')
 const showCreateModal = ref(false)
 const editingTaskId = ref<string | null>(null)
 const successModalOpen = ref(false)
@@ -407,6 +411,47 @@ const filteredTasks = computed(() => {
   return list
 })
 
+const priorityRank: Record<Priority, number> = { low: 1, medium: 2, high: 3 }
+const statusRank: Record<Status, number> = { todo: 1, in_progress: 2, review: 3, done: 4 }
+
+function compareTaskValues(a: Task, b: Task, key: TaskSortKey): number {
+  if (key === 'number') return Number(a.number ?? 0) - Number(b.number ?? 0)
+  if (key === 'title') return (a.title ?? '').localeCompare((b.title ?? ''), 'ru', { sensitivity: 'base' })
+  if (key === 'assignee') {
+    return (a.assignee?.name ?? '').localeCompare((b.assignee?.name ?? ''), 'ru', { sensitivity: 'base' })
+  }
+  if (key === 'priority') return priorityRank[a.priority] - priorityRank[b.priority]
+  if (key === 'status') return statusRank[a.status] - statusRank[b.status]
+  const aDate = parseDueDate(a.dueDate)?.getTime() ?? Number.MAX_SAFE_INTEGER
+  const bDate = parseDueDate(b.dueDate)?.getTime() ?? Number.MAX_SAFE_INTEGER
+  return aDate - bDate
+}
+
+const sortedFilteredTasks = computed(() => {
+  const base = [...filteredTasks.value]
+  const key = listSortKey.value
+  const dir = listSortDirection.value === 'asc' ? 1 : -1
+  return base.sort((a, b) => {
+    const cmp = compareTaskValues(a, b, key)
+    if (cmp !== 0) return cmp * dir
+    return Number(b.number ?? 0) - Number(a.number ?? 0)
+  })
+})
+
+function setListSort(key: TaskSortKey) {
+  if (listSortKey.value === key) {
+    listSortDirection.value = listSortDirection.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    listSortKey.value = key
+    listSortDirection.value = key === 'number' ? 'desc' : 'asc'
+  }
+}
+
+function sortIndicator(key: TaskSortKey): 'none' | 'asc' | 'desc' {
+  if (listSortKey.value !== key) return 'none'
+  return listSortDirection.value
+}
+
 const totalFiltered = computed(() => (serverPagingMode.value ? serverTotal.value : filteredTasks.value.length))
 const totalPages = computed(() => Math.max(1, Math.ceil(totalFiltered.value / pageSize.value)))
 
@@ -443,8 +488,8 @@ function goToPage(page: number) {
 }
 
 const paginatedTasks = computed(() => {
-  if (serverPagingMode.value) return filteredTasks.value
-  const list = filteredTasks.value
+  if (serverPagingMode.value) return sortedFilteredTasks.value
+  const list = sortedFilteredTasks.value
   const start = (currentPage.value - 1) * pageSize.value
   return list.slice(start, start + pageSize.value)
 })
@@ -934,11 +979,11 @@ function escapeCsvCell(val: string): string {
 }
 
 function exportToExcel() {
-  const list = filteredTasks.value
+  const list = sortedFilteredTasks.value
   if (!list.length) return
   const headers = ['№', 'Название', 'Исполнитель', 'Приоритет', 'Поле', 'Срок', 'Статус', 'Тип работы', 'Описание']
-  const rows = list.map((t, i) => [
-    String(i + 1),
+  const rows = list.map((t) => [
+    String(t.number ?? ''),
     t.title,
     t.assignee.name,
     priorityLabel(t.priority),
@@ -966,11 +1011,11 @@ function escapeHtml(s: string): string {
 }
 
 async function exportToPdf() {
-  const list = filteredTasks.value
+  const list = sortedFilteredTasks.value
   if (!list.length) return
   const headers = ['№', 'Название', 'Исполнитель', 'Приоритет', 'Поле', 'Срок', 'Статус', 'Тип работы', 'Описание']
-  const rows = list.map((t, i) => [
-    String(i + 1),
+  const rows = list.map((t) => [
+    String(t.number ?? ''),
     escapeHtml(t.title),
     escapeHtml(t.assignee.name),
     escapeHtml(priorityLabel(t.priority)),
@@ -1147,27 +1192,39 @@ function statusClass(s: Status) {
         <div class="task-export-btns">
           <button
             type="button"
-            class="task-btn-export"
+            class="task-btn-export action_has has_saved"
             :disabled="!filteredTasks.length"
             title="Экспорт в PDF (предпросмотр)"
             @click="exportToPdf"
           >
-            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>
+            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" data-path="box" />
+              <path d="M14 2v6h6" data-path="line-top" />
+              <path d="M12 18v-6" data-path="line-bottom" />
+              <path d="M9 15h6" />
+            </svg>
             PDF
           </button>
           <button
             type="button"
-            class="task-btn-export"
+            class="task-btn-export action_has has_saved"
             :disabled="!filteredTasks.length"
             title="Экспорт в Excel"
             @click="exportToExcel"
           >
-            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/></svg>
+            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" data-path="box" />
+              <path d="M14 2v6h6" data-path="line-top" />
+              <path d="M8 13h2" data-path="line-bottom" />
+              <path d="M8 17h2" />
+              <path d="M14 13h2" />
+              <path d="M14 17h2" />
+            </svg>
             Excel
           </button>
         </div>
         <button type="button" class="task-btn-create" @click="openCreate">
-          <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
+          <svg class="task-header-icon task-btn-create-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
           Создать задачу
         </button>
       </div>
@@ -1240,12 +1297,42 @@ function statusClass(s: Status) {
         <table class="task-list-table">
           <thead>
             <tr>
-              <th class="task-list-cell-num">№</th>
-              <th>Название задачи</th>
-              <th>Исполнитель</th>
-              <th>Приоритет</th>
-              <th>Срок</th>
-              <th>Статус</th>
+              <th class="task-list-cell-num">
+                <button type="button" class="task-list-sort-btn" @click="setListSort('number')">
+                  №
+                  <span class="task-list-sort-indicator">{{ sortIndicator('number') === 'asc' ? '↑' : sortIndicator('number') === 'desc' ? '↓' : '↕' }}</span>
+                </button>
+              </th>
+              <th>
+                <button type="button" class="task-list-sort-btn" @click="setListSort('title')">
+                  Название задачи
+                  <span class="task-list-sort-indicator">{{ sortIndicator('title') === 'asc' ? '↑' : sortIndicator('title') === 'desc' ? '↓' : '↕' }}</span>
+                </button>
+              </th>
+              <th>
+                <button type="button" class="task-list-sort-btn" @click="setListSort('assignee')">
+                  Исполнитель
+                  <span class="task-list-sort-indicator">{{ sortIndicator('assignee') === 'asc' ? '↑' : sortIndicator('assignee') === 'desc' ? '↓' : '↕' }}</span>
+                </button>
+              </th>
+              <th>
+                <button type="button" class="task-list-sort-btn" @click="setListSort('priority')">
+                  Приоритет
+                  <span class="task-list-sort-indicator">{{ sortIndicator('priority') === 'asc' ? '↑' : sortIndicator('priority') === 'desc' ? '↓' : '↕' }}</span>
+                </button>
+              </th>
+              <th>
+                <button type="button" class="task-list-sort-btn" @click="setListSort('dueDate')">
+                  Срок
+                  <span class="task-list-sort-indicator">{{ sortIndicator('dueDate') === 'asc' ? '↑' : sortIndicator('dueDate') === 'desc' ? '↓' : '↕' }}</span>
+                </button>
+              </th>
+              <th>
+                <button type="button" class="task-list-sort-btn" @click="setListSort('status')">
+                  Статус
+                  <span class="task-list-sort-indicator">{{ sortIndicator('status') === 'asc' ? '↑' : sortIndicator('status') === 'desc' ? '↓' : '↕' }}</span>
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -1261,7 +1348,7 @@ function statusClass(s: Status) {
                 <span class="task-list-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
                 <span class="task-list-assignee-name">{{ task.assignee.name }}</span>
               </td>
-              <td data-label="Приоритет">
+              <td class="task-list-cell-priority" data-label="Приоритет">
                 <span class="task-pill" :class="priorityClass(task.priority)">
                   {{ task.priority === 'high' ? 'Высокий' : task.priority === 'medium' ? 'Средний' : 'Низкий' }}
                 </span>
@@ -2156,6 +2243,15 @@ function statusClass(s: Status) {
   background: var(--accent-green-hover);
 }
 
+.task-btn-create-icon {
+  transform-origin: center;
+  transition: transform 0.3s ease;
+}
+
+.task-btn-create:hover .task-btn-create-icon {
+  transform: rotate(52deg) scale(1.2);
+}
+
 .task-header-actions {
   display: flex;
   align-items: center;
@@ -2186,6 +2282,50 @@ function statusClass(s: Status) {
 .task-btn-export:hover:not(:disabled) {
   background: var(--sidebar-hover-bg);
   color: var(--text-primary);
+}
+
+/* Анимация как у кнопки вложения файла в чате */
+.task-btn-export.action_has {
+  --color: 220 9% 46%;
+  --color-has: 146 33% 30%;
+}
+
+[data-theme='dark'] .task-btn-export.action_has {
+  --color: 215 14% 55%;
+  --color-has: 97 55% 52%;
+}
+
+.task-btn-export.has_saved:hover:not(:disabled) {
+  border-color: hsl(var(--color-has));
+}
+
+.task-btn-export.has_saved:hover:not(:disabled) svg {
+  color: hsl(var(--color-has));
+}
+
+.task-btn-export.has_saved svg {
+  overflow: visible;
+  transform-origin: center;
+  transition: transform 0.22s ease;
+}
+
+.task-btn-export.has_saved:hover:not(:disabled) svg {
+  animation: task-export-file-hover 0.65s ease;
+}
+
+@keyframes task-export-file-hover {
+  0% {
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+  35% {
+    transform: translateY(-2px) scale(1.11) rotate(-8deg);
+  }
+  70% {
+    transform: translateY(-1px) scale(1.06) rotate(6deg);
+  }
+  100% {
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
 }
 
 .task-btn-export:disabled {
@@ -2608,12 +2748,12 @@ function statusClass(s: Status) {
 .task-list-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: 0.84rem;
   min-width: 980px;
 }
 
 .task-list-table th {
-  padding: 12px 16px;
+  padding: 11px 16px;
   text-align: left;
   font-size: 0.65rem;
   font-weight: 700;
@@ -2623,12 +2763,33 @@ function statusClass(s: Status) {
   border-bottom: 1px solid var(--border-color);
 }
 
+.task-list-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.task-list-sort-indicator {
+  font-size: 0.72rem;
+  line-height: 1;
+  opacity: 0.75;
+}
+
 .task-list-table td {
-  padding: 12px 16px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-primary);
   overflow-wrap: anywhere;
   word-break: break-word;
+  line-height: 1.25;
 }
 
 .task-list-row {
@@ -2641,10 +2802,15 @@ function statusClass(s: Status) {
 }
 
 .task-list-cell-num {
-  width: 2.5rem;
+  width: 3.4rem;
+  min-width: 3.4rem;
   text-align: center;
   font-weight: 600;
   color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .task-list-cell-title {
   font-weight: 500;
@@ -2688,6 +2854,19 @@ function statusClass(s: Status) {
 .task-cell-overdue {
   color: #b85450;
   font-weight: 500;
+}
+
+.task-list-cell-priority {
+  white-space: nowrap;
+}
+
+.task-list-cell-priority .task-pill {
+  min-width: 92px;
+  justify-content: center;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  line-height: 1;
 }
 
 .task-overdue-icon {
@@ -2799,12 +2978,14 @@ function statusClass(s: Status) {
   line-height: 1;
   cursor: pointer;
   border-radius: 8px;
-  transition: background 0.2s ease, color 0.2s ease;
+  transform-origin: center;
+  transition: background 0.22s ease, color 0.22s ease, transform 0.26s ease;
 }
 
 .task-modal-close:hover {
   background: rgba(0, 0, 0, 0.08);
   color: var(--text-primary);
+  transform: rotate(90deg) scale(1.08);
 }
 
 .task-modal-title {
@@ -4337,13 +4518,14 @@ function statusClass(s: Status) {
 
   .task-list-cell-num {
     text-align: left;
-    font-size: 0.9rem;
+    font-size: 0.82rem;
     font-weight: 700;
     color: var(--text-primary);
+    white-space: nowrap;
   }
 
   .task-list-cell-title {
-    font-size: 0.95rem;
+    font-size: 0.88rem;
     line-height: 1.35;
   }
 
@@ -4372,6 +4554,12 @@ function statusClass(s: Status) {
     max-width: 100%;
     white-space: normal;
     text-align: left;
+  }
+
+  .task-list-cell-priority .task-pill {
+    max-width: none;
+    white-space: nowrap;
+    text-align: center;
   }
 
   .task-card {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, nextTick } from 'vue'
+import { computed, ref, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '@/stores/auth'
 import {
@@ -145,7 +145,7 @@ async function loadFieldsData() {
   fieldsError.value = null
   fieldsLoading.value = true
   try {
-    const [rows, profileList] = await Promise.all([loadFieldsApi(), loadProfiles()])
+    const [rows, profileList] = await Promise.all([loadFieldsApi(searchText.value), loadProfiles()])
     profiles.value = profileList
     const profileMap = new Map(profileList.map((p) => [p.id, p]))
     fields.value = rows.map((r) => fieldRowToField(r, profileMap, crops.value))
@@ -302,6 +302,7 @@ const DEMO_FIELDS: Field[] = [
 
 const cropFilter = ref<CropKey>('all')
 const searchText = ref('')
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const selectedFieldId = ref<string | null>(null)
 const multiSelectedIds = ref<string[]>([])
 const pageSize = ref(10)
@@ -313,10 +314,20 @@ const filteredFields = computed(() => {
   const q = searchText.value.trim().toLowerCase()
   return fields.value.filter((f) => {
     const matchesCrop = cropFilter.value === 'all' ? true : f.cropKey === cropFilter.value
-    const hay = `${f.name} ${f.cropName} ${f.stage}`.toLowerCase()
-    const matchesSearch = q ? hay.includes(q) : true
-    return matchesCrop && matchesSearch
+    if (!matchesCrop) return false
+    if (isSupabaseConfigured()) return true
+    // Для демо-режима без БД оставляем локальный поиск только по названию поля.
+    return q ? (f.name || '').toLowerCase().includes(q) : true
   })
+})
+
+watch(searchText, () => {
+  currentPage.value = 1
+  if (!isSupabaseConfigured()) return
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    void loadFieldsData()
+  }, 300)
 })
 
 type FieldsSortKey = 'name' | 'area' | 'crop' | 'land' | 'location' | 'responsible'
@@ -1430,7 +1441,7 @@ onMounted(async () => {
               v-model="searchText"
               type="search"
               class="fields-search-input"
-              placeholder="Поиск по названию или культуре..."
+              placeholder="Поиск по названию поля..."
               autocomplete="off"
             />
           </div>
@@ -1915,7 +1926,6 @@ onMounted(async () => {
         <div class="modal modal-fields modal-fields--add" @click.stop>
           <header class="modal-header modal-header--fields">
             <h2 class="modal-title modal-title--fields">
-              <svg class="modal-title-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm0 4a1 1 0 0 0-1 1v2H9a1 1 0 0 0 0 2h2v2a1 1 0 0 0 2 0v-2h2a1 1 0 0 0 0-2h-2V9a1 1 0 0 0-1-1Z"/></svg>
               {{ fieldModalTitle }}
             </h2>
             <button type="button" class="modal-close" aria-label="Закрыть" @click="closeFieldModal">
@@ -2308,17 +2318,51 @@ onMounted(async () => {
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   cursor: pointer;
-  transition: color 0.2s, border-color 0.2s;
+  border-radius: 8px 8px 0 0;
+  transition:
+    color 0.26s ease,
+    border-color 0.26s ease,
+    background 0.26s ease,
+    transform 0.22s ease,
+    box-shadow 0.26s ease;
 }
 .fields-tab:hover {
   color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-green) 2.5%, transparent);
+  transform: translateY(-1px);
 }
 .fields-tab--active {
   color: var(--accent-green);
   border-bottom-color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 4%, transparent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent-green) 8%, transparent);
+  animation: fields-tab-pill-in 0.28s ease;
 }
 .fields-tab-panel {
   min-height: 200px;
+  animation: fields-tab-panel-in 0.3s ease;
+}
+
+@keyframes fields-tab-pill-in {
+  0% {
+    transform: scale(0.94);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes fields-tab-panel-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .refs-no-supabase {
   padding: var(--space-xl);
@@ -2339,7 +2383,10 @@ onMounted(async () => {
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    background 0.22s ease,
+    box-shadow 0.22s ease,
+    transform 0.22s ease;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 .fields-add-btn--highlight {
@@ -2363,11 +2410,19 @@ onMounted(async () => {
 }
 .fields-add-btn:hover {
   background: var(--accent-green-hover);
+  transform: translateY(-1px) scale(1.01);
+  box-shadow: 0 6px 14px rgba(61, 92, 64, 0.3);
 }
 .fields-add-btn-icon {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
+  transform-origin: center;
+  transition: transform 0.28s ease;
+}
+
+.fields-add-btn:hover .fields-add-btn-icon {
+  transform: rotate(52deg) scale(1.18);
 }
 .fields-card {
   background: var(--bg-panel);
@@ -2834,6 +2889,12 @@ onMounted(async () => {
   flex-shrink: 0;
   text-decoration: none;
 }
+
+.fields-action-btn svg {
+  transform-origin: center;
+  transition: transform 0.24s ease;
+}
+
 .fields-action-btn--disabled {
   cursor: default;
   opacity: 0.45;
@@ -2842,6 +2903,9 @@ onMounted(async () => {
 .fields-action-btn:hover {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
+}
+.fields-action-btn:hover svg {
+  transform: rotate(16deg) scale(1.08);
 }
 .fields-action-btn:first-child:hover {
   color: #2563eb;
@@ -3465,11 +3529,13 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.2s ease, background 0.2s ease;
+  transform-origin: center;
+  transition: color 0.22s ease, background 0.22s ease, transform 0.26s ease;
 }
 .modal-close:hover {
   color: var(--text-primary);
   background: var(--sidebar-hover-bg);
+  transform: rotate(90deg) scale(1.08);
 }
 .modal-close svg {
   width: 20px;

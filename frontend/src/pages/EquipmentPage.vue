@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, watch, nextTick } from 'vue'
 import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas'
 import {
@@ -54,6 +54,7 @@ const currentPage = ref(1)
 const editingId = ref<string | null>(null)
 const profiles = ref<ProfileRow[]>([])
 const implementOptions = ref<EquipmentImplementRow[]>([])
+const equipmentFormCardRef = ref<HTMLElement | null>(null)
 
 const implementsLoading = ref(false)
 const implementsSaving = ref(false)
@@ -293,6 +294,9 @@ function startEdit(row: EquipmentRow) {
     responsible_id: row.responsible_id ?? '',
     notes: row.notes ?? '',
   }
+  void nextTick(() => {
+    equipmentFormCardRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
 }
 
 async function saveEquipment() {
@@ -530,7 +534,7 @@ async function exportToPdf() {
     </nav>
 
     <!-- Новая единица техники -->
-    <div v-show="activeTab === 'equipment'" class="equipment-form-card card-rounded">
+    <div ref="equipmentFormCardRef" v-show="activeTab === 'equipment'" class="equipment-form-card card-rounded">
       <div class="equipment-section-head">
         <h2 class="equipment-form-title">
           <svg class="equipment-section-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
@@ -754,7 +758,7 @@ async function exportToPdf() {
                     title="Редактировать"
                     @click="startEdit(row)"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                    <svg class="equipment-action-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                   </button>
                   <UiDeleteButton size="sm" @click="removeEquipment(row)" />
                 </div>
@@ -891,7 +895,7 @@ async function exportToPdf() {
                     title="Редактировать"
                     @click="startEditImplement(row)"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                    <svg class="equipment-action-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                   </button>
                   <UiDeleteButton size="sm" @click="removeImplement(row)" />
                 </div>
@@ -981,16 +985,27 @@ async function exportToPdf() {
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   cursor: pointer;
-  transition: color 0.2s, border-color 0.2s;
+  border-radius: 8px 8px 0 0;
+  transition:
+    color 0.26s ease,
+    border-color 0.26s ease,
+    background 0.26s ease,
+    transform 0.22s ease,
+    box-shadow 0.26s ease;
 }
 
 .equipment-tab:hover {
   color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-green) 2.5%, transparent);
+  transform: translateY(-1px);
 }
 
 .equipment-tab--active {
   color: var(--accent-green);
   border-bottom-color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 4%, transparent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent-green) 8%, transparent);
+  animation: equipment-tab-pill-in 0.28s ease;
 }
 
 .equipment-form-card,
@@ -1001,6 +1016,29 @@ async function exportToPdf() {
   padding: var(--space-xl);
   margin-bottom: var(--space-xl);
   box-shadow: var(--shadow-card);
+  animation: equipment-tab-panel-in 0.3s ease;
+}
+
+@keyframes equipment-tab-pill-in {
+  0% {
+    transform: scale(0.94);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes equipment-tab-panel-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 [data-theme='dark'] .equipment-form-card,
@@ -1451,9 +1489,18 @@ async function exportToPdf() {
   cursor: pointer;
 }
 
+.equipment-action-icon {
+  transform-origin: center;
+  transition: transform 0.24s ease;
+}
+
 .equipment-action-btn:hover {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
+}
+
+.equipment-action-btn:hover .equipment-action-icon {
+  transform: rotate(18deg) scale(1.08);
 }
 
 .equipment-empty {

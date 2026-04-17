@@ -51,15 +51,20 @@ function normalizeFieldRow<T extends Record<string, unknown>>(row: T): FieldRow 
   }
 }
 
-export async function loadFields(): Promise<FieldRow[]> {
+export async function loadFields(nameQuery?: string): Promise<FieldRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase
+  const query = (nameQuery ?? '').trim()
+  let req = supabase
     .from(FIELDS_TABLE)
     .select(FIELDS_SELECT_WITH_GEOMETRY)
     .order('number', { ascending: true })
+  if (query) req = req.ilike('name', `%${query}%`)
+  const { data, error } = await req
   if (!error) return ((data ?? []) as Record<string, unknown>[]).map(normalizeFieldRow)
   if (!isMissingGeometryColumnError(error)) throw error
-  const fallback = await supabase.from(FIELDS_TABLE).select(FIELDS_SELECT_BASE).order('number', { ascending: true })
+  let fallbackReq = supabase.from(FIELDS_TABLE).select(FIELDS_SELECT_BASE).order('number', { ascending: true })
+  if (query) fallbackReq = fallbackReq.ilike('name', `%${query}%`)
+  const fallback = await fallbackReq
   if (fallback.error) throw fallback.error
   return ((fallback.data ?? []) as Record<string, unknown>[]).map(normalizeFieldRow)
 }
