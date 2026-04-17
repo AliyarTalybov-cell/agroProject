@@ -153,6 +153,14 @@ watch(
               </a>
             </li>
             <li>
+              <RouterLink class="nav-item" to="/news">
+                <span class="nav-item-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2z"/><path d="M8 8h8"/><path d="M8 12h8"/></svg>
+                </span>
+                Новости
+              </RouterLink>
+            </li>
+            <li>
               <RouterLink class="nav-item" to="/weather">
                 <span class="nav-item-icon" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>

@@ -16,6 +16,9 @@ import EmployeesPage from '@/pages/EmployeesPage.vue'
 import ChatPage from '@/pages/ChatPage.vue'
 import PortalRulesPage from '@/pages/PortalRulesPage.vue'
 import NotificationsPage from '@/pages/NotificationsPage.vue'
+import NewsPage from '@/pages/NewsPage.vue'
+import NewsDetailsPage from '@/pages/NewsDetailsPage.vue'
+import NewsEditorPage from '@/pages/NewsEditorPage.vue'
 import { getAuthUser, isAuthLoading } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
@@ -37,6 +40,10 @@ export const routes = [
   { path: '/employees', name: 'employees', component: EmployeesPage, meta: { title: 'Сотрудники' } },
   { path: '/notifications', name: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления' } },
   { path: '/chat', name: 'chat', component: ChatPage, meta: { title: 'Сообщения' } },
+  { path: '/news', name: 'news', component: NewsPage, meta: { title: 'Новости' } },
+  { path: '/news/new', name: 'news-new', component: NewsEditorPage, meta: { title: 'Новая новость', managerOnly: true } },
+  { path: '/news/:id', name: 'news-details', component: NewsDetailsPage, props: true, meta: { title: 'Новость' } },
+  { path: '/news/:id/edit', name: 'news-edit', component: NewsEditorPage, props: true, meta: { title: 'Редактировать новость', managerOnly: true } },
   { path: '/about', redirect: { name: 'dashboard', query: { tab: 'about' } } },
 ] as const
 
@@ -56,6 +63,10 @@ router.beforeEach(async (to) => {
   if (to.meta.public && user && !to.meta.allowWhenAuth) return { name: 'dashboard' }
   if (!to.meta.public && !user) return { name: 'login', query: { redirect: to.fullPath } }
   if (to.name === 'employees') {
+    const role = (user?.user_metadata as { role?: string } | undefined)?.role
+    if (role !== 'manager') return { name: 'dashboard' }
+  }
+  if (to.meta.managerOnly) {
     const role = (user?.user_metadata as { role?: string } | undefined)?.role
     if (role !== 'manager') return { name: 'dashboard' }
   }
