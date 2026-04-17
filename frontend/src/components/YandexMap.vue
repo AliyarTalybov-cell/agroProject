@@ -7,6 +7,8 @@ export type MapFieldMarker = {
   lon: number
   title: string
   subtitle?: string
+  geometryMode?: GeometryMode
+  polygonPoints?: LatLon[]
 }
 
 type GeometryMode = 'point' | 'polygon'
@@ -57,6 +59,7 @@ let mapMouseMoveHandler: ((e: any) => void) | null = null
 const draftPolygonPoints = ref<LatLon[]>([])
 const hoverPolygonPoint = ref<LatLon | null>(null)
 const fieldPlacemarks: any[] = []
+const fieldPolygons: any[] = []
 
 const isPolygonMode = computed(() => props.geometryMode === 'polygon')
 
@@ -70,12 +73,54 @@ function clearFieldPlacemarks() {
     }
   }
   fieldPlacemarks.length = 0
+  for (const p of fieldPolygons) {
+    try {
+      mapInstance.geoObjects.remove(p)
+    } catch {
+      /* noop */
+    }
+  }
+  fieldPolygons.length = 0
 }
 
 function syncFieldPlacemarks() {
   if (!mapInstance || !ymaps) return
   clearFieldPlacemarks()
   for (const p of props.fieldMarkers) {
+    if (p.geometryMode === 'polygon' && Array.isArray(p.polygonPoints) && p.polygonPoints.length >= 3) {
+      const poly = new ymaps.Polygon(
+        [p.polygonPoints],
+        {
+          balloonContentHeader: p.title,
+          balloonContentBody: p.subtitle || '',
+          hintContent: p.title,
+        },
+        {
+          fillColor: 'rgba(22, 163, 74, 0.22)',
+          strokeColor: '#16a34a',
+          strokeWidth: 2,
+          draggable: false,
+          interactivityModel: 'default#geoObject',
+        },
+      )
+      mapInstance.geoObjects.add(poly)
+      fieldPolygons.push(poly)
+      const centerMarker = new ymaps.Placemark(
+        [p.lat, p.lon],
+        {
+          balloonContentHeader: p.title,
+          balloonContentBody: p.subtitle || '',
+          hintContent: p.title,
+        },
+        {
+          preset: 'islands#darkGreenCircleDotIcon',
+          draggable: false,
+        },
+      )
+      mapInstance.geoObjects.add(centerMarker)
+      fieldPlacemarks.push(centerMarker)
+      continue
+    }
     const pm = new ymaps.Placemark(
       [p.lat, p.lon],
       {
@@ -340,8 +385,23 @@ function applyBoundsOrCenter() {
   }
   const markers = props.fieldMarkers ?? []
   if (props.fitFieldMarkers && markers.length > 0) {
-    const lats = markers.map((m) => m.lat)
-    const lons = markers.map((m) => m.lon)
+    const lats: number[] = []
+    const lons: number[] = []
+    for (const m of markers) {
+      if (m.geometryMode === 'polygon' && Array.isArray(m.polygonPoints) && m.polygonPoints.length >= 3) {
+        for (const p of m.polygonPoints) {
+          lats.push(p[0])
+          lons.push(p[1])
+        }
+      } else {
+        lats.push(m.lat)
+        lons.push(m.lon)
+      }
+    }
+    if (!lats.length || !lons.length) {
+      mapInstance.setCenter([props.lat, props.lon], props.zoom)
+      return
+    }
     lats.push(props.lat)
     lons.push(props.lon)
     const minLat = Math.min(...lats)
@@ -498,7 +558,7 @@ onBeforeUnmount(() => {
         <circle cx="12" cy="10" r="3" />
       </svg>
       <span class="ymap-hint-text">
-        <template v-if="fieldMarkers.length">Зелёные метки — ваши поля. </template>
+        <template v-if="fieldMarkers.length">Зелёные объекты — ваши поля. </template>
         <template v-if="geometryMode === 'polygon'">
           Нажмите «Начать контур», затем кликайте по карте для вершин.
         </template>

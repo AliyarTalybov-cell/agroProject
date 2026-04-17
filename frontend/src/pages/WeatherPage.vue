@@ -27,6 +27,21 @@ const error = ref(false)
 const pickedCoords = ref<{ lat: number; lon: number } | null>(null)
 const pickedCoordsCopied = ref(false)
 let pickedCoordsCopiedTimer: ReturnType<typeof setTimeout> | null = null
+type LatLon = [number, number]
+
+function fromPolygonGeoJson(geojson: Record<string, unknown> | null | undefined): LatLon[] {
+  if (!geojson || geojson.type !== 'Polygon' || !Array.isArray((geojson as { coordinates?: unknown }).coordinates)) return []
+  const ring = ((geojson as { coordinates: unknown[] }).coordinates[0] as unknown[]) || []
+  const points = ring
+    .map((p) => (Array.isArray(p) && p.length >= 2 ? [Number(p[1]), Number(p[0])] as LatLon : null))
+    .filter((p): p is LatLon => Boolean(p && Number.isFinite(p[0]) && Number.isFinite(p[1])))
+  if (points.length >= 2) {
+    const first = points[0]
+    const last = points[points.length - 1]
+    if (first[0] === last[0] && first[1] === last[1]) points.pop()
+  }
+  return points
+}
 
 async function copyPickedCoords() {
   const p = pickedCoords.value
@@ -313,18 +328,44 @@ const fieldsWithWeather = computed(() => {
   })
 })
 
-/** Метки полей на карте наблюдения (только с валидной геолокацией) */
+/** Геометрия полей на карте наблюдения: point -> метка, polygon -> контур */
 const weatherMapFieldMarkers = computed(() => {
   const cropMap = new Map(crops.value.map((c) => [c.key, c.label]))
-  const result: { id: string; lat: number; lon: number; title: string; subtitle?: string }[] = []
+  const result: Array<{
+    id: string
+    lat: number
+    lon: number
+    title: string
+    subtitle?: string
+    geometryMode?: 'point' | 'polygon'
+    polygonPoints?: LatLon[]
+  }> = []
   for (const f of fieldsSortedForWeather.value) {
     const coords = parseLatLonFromGeolocationString(f.geolocation)
-    if (!coords) continue
+    const geometryMode = ((f as { geometry_mode?: 'point' | 'polygon' | null }).geometry_mode ?? 'point')
+    const polygonPoints = fromPolygonGeoJson((f as { contour_geojson?: Record<string, unknown> | null }).contour_geojson ?? null)
+    if (!coords && polygonPoints.length < 3) continue
     const title = fieldDisplayTitle(f)
     const cropName = cropMap.get(f.crop_key) ?? f.crop_key ?? ''
     const addr = (f.address ?? '').trim()
     const subtitle = [cropName, addr].filter(Boolean).join(' · ') || undefined
-    result.push({ id: f.id, lat: coords.lat, lon: coords.lon, title, subtitle })
+    if (geometryMode === 'polygon' && polygonPoints.length >= 3) {
+      const center = {
+        lat: polygonPoints.reduce((sum, p) => sum + p[0], 0) / polygonPoints.length,
+        lon: polygonPoints.reduce((sum, p) => sum + p[1], 0) / polygonPoints.length,
+      }
+      result.push({
+        id: f.id,
+        lat: center.lat,
+        lon: center.lon,
+        title,
+        subtitle,
+        geometryMode: 'polygon',
+        polygonPoints,
+      })
+    } else if (coords) {
+      result.push({ id: f.id, lat: coords.lat, lon: coords.lon, title, subtitle, geometryMode: 'point' })
+    }
   }
   return result
 })
@@ -567,7 +608,7 @@ const weatherMapFieldMarkers = computed(() => {
           </button>
         </div>
         <p class="weather-map-hint">
-          Зелёными метками на карте отмечены поля, заведённые в системе (по сохранённым координатам). Красная метка —
+          Поля на карте показаны по их геометрии: точечные — зелёными метками, контурные — зелёными полигонами. Красная метка —
           точка, которую вы выбрали на карте или в поиске.
         </p>
       </div>
