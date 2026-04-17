@@ -406,7 +406,8 @@ export async function sendChatMessage(
 function sanitizeChatFileName(name: string): string {
   const base = name
     .normalize('NFKC')
-    .replace(/[^\p{L}\p{N}._-]/gu, '_')
+    // Для ключей Storage используем только ascii-символы — это избегает ошибок вида "Invalid key" в превью изображений.
+    .replace(/[^A-Za-z0-9._-]/g, '_')
     .slice(0, 180)
   return base || 'file'
 }

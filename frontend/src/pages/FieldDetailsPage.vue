@@ -19,7 +19,7 @@ import { isSupabaseConfigured } from '@/lib/supabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import YandexMap from '@/components/YandexMap.vue'
-import { resolveYandexAddressLine, parseLatLonFromGeolocationString } from '@/lib/yandexGeocode'
+import { resolveYandexAddressLine, resolveYandexAddressCandidates, parseLatLonFromGeolocationString } from '@/lib/yandexGeocode'
 
 const props = defineProps<{ id: string }>()
 
@@ -47,6 +47,8 @@ const editForm = ref({
   location_description: '',
   extra_info: '',
   geolocation: '',
+  geometry_mode: 'point' as 'point' | 'polygon',
+  contour_geojson: null as Record<string, unknown> | null,
   land_type: '',
   sowing_year: new Date().getFullYear(),
   responsible_id: '',
@@ -56,6 +58,14 @@ const editForm = ref({
 const schemeUploading = ref(false)
 const fieldMapAddressLoading = ref(false)
 const fieldMapAddressError = ref('')
+const editAddressCandidates = ref<string[]>([])
+const selectedEditAddressCandidate = ref('')
+const editAddressCandidatesLoading = ref(false)
+const editAddressManualTouched = ref(false)
+const editAddressLastAuto = ref('')
+const editFieldAreaAuto = ref<number | null>(null)
+const editFieldAreaManualTouched = ref(false)
+const editContourDraftPoints = ref<LatLon[]>([])
 const historyLoading = ref(false)
 const history = ref<FieldOperationHistoryRow[]>([])
 const historyPage = ref(1)
@@ -64,17 +74,126 @@ const historyTotal = ref(0)
 
 const isManager = computed(() => auth.userRole.value === 'manager')
 
+type LatLon = [number, number]
+type PolygonGeoJson = { type: 'Polygon'; coordinates: number[][][] }
+
+function fromPolygonGeoJson(geojson: Record<string, unknown> | null | undefined): LatLon[] {
+  if (!geojson || geojson.type !== 'Polygon' || !Array.isArray((geojson as { coordinates?: unknown }).coordinates)) return []
+  const ring = ((geojson as { coordinates: unknown[] }).coordinates[0] as unknown[]) || []
+  const points = ring
+    .map((p) => (Array.isArray(p) && p.length >= 2 ? [Number(p[1]), Number(p[0])] as LatLon : null))
+    .filter((p): p is LatLon => Boolean(p && Number.isFinite(p[0]) && Number.isFinite(p[1])))
+  if (points.length >= 2) {
+    const first = points[0]
+    const last = points[points.length - 1]
+    if (first[0] === last[0] && first[1] === last[1]) points.pop()
+  }
+  return points
+}
+
+function toPolygonGeoJson(points: LatLon[]): PolygonGeoJson | null {
+  if (!Array.isArray(points) || points.length < 3) return null
+  const ring = points.map(([lat, lon]) => [lon, lat])
+  const [fLon, fLat] = ring[0]!
+  const [lLon, lLat] = ring[ring.length - 1]!
+  if (fLon !== lLon || fLat !== lLat) ring.push([fLon, fLat])
+  return { type: 'Polygon', coordinates: [ring] }
+}
+
+function polygonCenter(points: LatLon[]): { lat: number; lon: number } | null {
+  if (!points.length) return null
+  const lat = points.reduce((s, p) => s + p[0], 0) / points.length
+  const lon = points.reduce((s, p) => s + p[1], 0) / points.length
+  return { lat, lon }
+}
+
+function contourSamplePoints(points: LatLon[], center: { lat: number; lon: number } | null): Array<{ lat: number; lon: number }> {
+  const src = points.filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))
+  if (!src.length && !center) return []
+  const out: Array<{ lat: number; lon: number }> = []
+  if (center) out.push({ lat: center.lat, lon: center.lon })
+  if (src.length) {
+    const idx = new Set<number>([
+      0,
+      Math.floor(src.length * 0.25),
+      Math.floor(src.length * 0.5),
+      Math.floor(src.length * 0.75),
+      src.length - 1,
+    ])
+    for (const i of idx) {
+      const p = src[Math.max(0, Math.min(i, src.length - 1))]!
+      out.push({ lat: p[0], lon: p[1] })
+    }
+  }
+  return out
+}
+
+function applyEditAddressCandidates(candidates: string[]) {
+  const list = [...new Set(candidates.map((x) => x.trim()).filter(Boolean))]
+  editAddressCandidates.value = list
+  selectedEditAddressCandidate.value = list[0] || ''
+  const current = editForm.value.address.trim()
+  if (!list.length) return
+  if (!current || !editAddressManualTouched.value) {
+    editForm.value.address = list[0]!
+    editAddressLastAuto.value = list[0]!
+    editAddressManualTouched.value = false
+  }
+}
+
+function onEditAddressInput() {
+  if (editForm.value.address !== editAddressLastAuto.value) {
+    editAddressManualTouched.value = true
+  }
+}
+
+function onEditAddressCandidateChange() {
+  if (!selectedEditAddressCandidate.value) return
+  editForm.value.address = selectedEditAddressCandidate.value
+  editAddressLastAuto.value = selectedEditAddressCandidate.value
+  editAddressManualTouched.value = false
+}
+
+let editContourAddressRequestId = 0
+async function suggestEditContourAddresses(points: LatLon[], center: { lat: number; lon: number } | null) {
+  const samples = contourSamplePoints(points, center)
+  if (!samples.length) return
+  const reqId = ++editContourAddressRequestId
+  editAddressCandidatesLoading.value = true
+  try {
+    const candidates = await resolveYandexAddressCandidates(samples, 8)
+    if (reqId !== editContourAddressRequestId) return
+    applyEditAddressCandidates(candidates)
+    if (!candidates.length) {
+      fieldMapAddressError.value = 'Не удалось подобрать адреса по контуру. Укажите адрес вручную.'
+    } else {
+      fieldMapAddressError.value = ''
+    }
+  } finally {
+    if (reqId === editContourAddressRequestId) editAddressCandidatesLoading.value = false
+  }
+}
+
+const fieldEditPolygonPoints = computed<LatLon[]>(() =>
+  editContourDraftPoints.value.length ? editContourDraftPoints.value : fromPolygonGeoJson(editForm.value.contour_geojson),
+)
+const fieldEditPolygonCenter = computed(() => polygonCenter(fieldEditPolygonPoints.value))
+
 const fieldEditMapCenter = computed(() => {
+  if (editForm.value.geometry_mode === 'polygon' && fieldEditPolygonCenter.value) return fieldEditPolygonCenter.value
   return parseLatLonFromGeolocationString(editForm.value.geolocation) ?? { lat: 55.7558, lon: 37.6176 }
 })
 
-/** Карта в режиме просмотра: только при заполненных адресе и валидной геолокации */
+/** Карта в режиме просмотра: при валидной точке или контуре. */
 const fieldViewMapCoords = computed(() => {
   if (!field.value) return null
-  const addr = ((field.value as { address?: string | null }).address ?? '').trim()
+  const contourPoints = fromPolygonGeoJson((field.value as { contour_geojson?: Record<string, unknown> | null }).contour_geojson ?? null)
+  if (contourPoints.length >= 3) {
+    const center = polygonCenter(contourPoints)
+    if (center) return center
+  }
   const geo = parseLatLonFromGeolocationString((field.value as { geolocation?: string | null }).geolocation)
-  if (!addr || !geo) return null
-  return geo
+  return geo ?? null
 })
 
 const responsibleName = computed(() => {
@@ -272,6 +391,8 @@ function startEditing() {
     location_description: field.value.location_description ?? '',
     extra_info: (field.value as { extra_info?: string | null }).extra_info ?? '',
     geolocation: (field.value as { geolocation?: string | null }).geolocation ?? '',
+    geometry_mode: (field.value as { geometry_mode?: 'point' | 'polygon' | null }).geometry_mode ?? 'point',
+    contour_geojson: (field.value as { contour_geojson?: Record<string, unknown> | null }).contour_geojson ?? null,
     land_type: field.value.land_type,
     sowing_year: field.value.sowing_year ?? new Date().getFullYear(),
     responsible_id: field.value.responsible_id ?? '',
@@ -279,6 +400,14 @@ function startEditing() {
     scheme_file_url: field.value.scheme_file_url ?? '',
   }
   saveError.value = null
+  editContourDraftPoints.value = fromPolygonGeoJson(editForm.value.contour_geojson)
+  editAddressCandidates.value = editForm.value.address.trim() ? [editForm.value.address.trim()] : []
+  selectedEditAddressCandidate.value = editAddressCandidates.value[0] || ''
+  editAddressCandidatesLoading.value = false
+  editAddressManualTouched.value = false
+  editAddressLastAuto.value = editForm.value.address.trim()
+  editFieldAreaAuto.value = null
+  editFieldAreaManualTouched.value = false
   isEditing.value = true
 }
 
@@ -287,23 +416,76 @@ function cancelEditing() {
   saveError.value = null
   fieldMapAddressLoading.value = false
   fieldMapAddressError.value = ''
+  editAddressCandidates.value = []
+  selectedEditAddressCandidate.value = ''
+  editAddressCandidatesLoading.value = false
+  editAddressManualTouched.value = false
+  editAddressLastAuto.value = ''
+  editFieldAreaAuto.value = null
+  editFieldAreaManualTouched.value = false
+  editContourDraftPoints.value = []
 }
 
 async function onPickFieldDetailsMap(coords: { lat: number; lon: number }) {
+  editForm.value.geometry_mode = 'point'
+  editForm.value.contour_geojson = null
+  editFieldAreaAuto.value = null
+  editFieldAreaManualTouched.value = false
   const lat = Number(coords.lat.toFixed(6))
   const lon = Number(coords.lon.toFixed(6))
   editForm.value.geolocation = `${lat}, ${lon}`
   fieldMapAddressError.value = ''
   fieldMapAddressLoading.value = true
+  editAddressCandidatesLoading.value = false
   try {
     const address = await resolveYandexAddressLine(lat, lon)
     if (address) {
-      editForm.value.address = address
+      applyEditAddressCandidates([address])
     } else {
       fieldMapAddressError.value = 'Не удалось определить адрес по выбранной точке.'
     }
   } finally {
     fieldMapAddressLoading.value = false
+  }
+}
+
+function setEditGeometryMode(mode: 'point' | 'polygon') {
+  editForm.value.geometry_mode = mode
+  fieldMapAddressError.value = ''
+  if (mode === 'point') {
+    editForm.value.contour_geojson = null
+    editContourDraftPoints.value = []
+    editAddressCandidates.value = editForm.value.address.trim() ? [editForm.value.address.trim()] : []
+    selectedEditAddressCandidate.value = editAddressCandidates.value[0] || ''
+    editAddressCandidatesLoading.value = false
+    editFieldAreaAuto.value = null
+    editFieldAreaManualTouched.value = false
+  } else {
+    editFieldAreaManualTouched.value = false
+  }
+}
+
+function onEditAreaInput() {
+  if (editForm.value.geometry_mode === 'polygon') editFieldAreaManualTouched.value = true
+}
+
+function onPickFieldDetailsPolygon(payload: { points: LatLon[]; areaHa: number; center: { lat: number; lon: number } | null }) {
+  editContourDraftPoints.value = payload.points
+  const geojson = toPolygonGeoJson(payload.points)
+  editForm.value.contour_geojson = geojson
+  if (geojson) {
+    editForm.value.geometry_mode = 'polygon'
+    if (payload.center) {
+      editForm.value.geolocation = `${payload.center.lat.toFixed(6)}, ${payload.center.lon.toFixed(6)}`
+    }
+    const rounded = Math.round(Math.max(0, payload.areaHa) * 100) / 100
+    editFieldAreaAuto.value = rounded
+    if (!editFieldAreaManualTouched.value) editForm.value.area = rounded
+    if (payload.points.length >= 3) {
+      void suggestEditContourAddresses(payload.points, payload.center)
+    }
+  } else {
+    editFieldAreaAuto.value = null
   }
 }
 
@@ -330,6 +512,8 @@ async function saveEditing() {
       location_description: editForm.value.location_description.trim() || null,
       extra_info: editForm.value.extra_info.trim() || null,
       geolocation: editForm.value.geolocation.trim() || null,
+      geometry_mode: editForm.value.geometry_mode,
+      contour_geojson: editForm.value.geometry_mode === 'polygon' ? toPolygonGeoJson(editContourDraftPoints.value) : null,
       land_type: editForm.value.land_type,
       sowing_year: editForm.value.sowing_year || null,
       responsible_id: editForm.value.responsible_id.trim() || null,
@@ -572,6 +756,8 @@ watch(
                 :lat="fieldViewMapCoords.lat"
                 :lon="fieldViewMapCoords.lon"
                 :zoom="14"
+                :geometry-mode="((field as any).geometry_mode ?? 'point')"
+                :polygon-points="fromPolygonGeoJson((field as any).contour_geojson)"
                 :marker-hint="(field.address || '').trim()"
               />
             </div>
@@ -586,7 +772,10 @@ watch(
               </label>
               <label class="field-details-edit-field">
                 <span class="field-details-edit-label">Площадь, га <span class="field-details-edit-required">*</span></span>
-                <input v-model.number="editForm.area" type="number" class="field-details-edit-input" min="0" step="0.01" required />
+                <input v-model.number="editForm.area" type="number" class="field-details-edit-input" min="0" step="0.01" required @input="onEditAreaInput" />
+                <span v-if="editForm.geometry_mode === 'polygon' && editFieldAreaAuto != null" class="field-details-geometry-area-hint">
+                  Авто по контуру: {{ editFieldAreaAuto }} га
+                </span>
               </label>
               <label class="field-details-edit-field">
                 <span class="field-details-edit-label">Кадастровый номер</span>
@@ -594,20 +783,62 @@ watch(
               </label>
               <label class="field-details-edit-field field-details-edit-field--full">
                 <span class="field-details-edit-label">Адрес</span>
-                <input v-model="editForm.address" type="text" class="field-details-edit-input" placeholder="Адрес" />
+                <input v-model="editForm.address" type="text" class="field-details-edit-input" placeholder="Адрес" @input="onEditAddressInput" />
+                <div v-if="editAddressCandidates.length" class="field-details-address-candidates">
+                  <span class="field-details-address-candidates-label">Варианты адреса по контуру</span>
+                  <select
+                    v-model="selectedEditAddressCandidate"
+                    class="field-details-edit-select field-details-address-candidates-select"
+                    @change="onEditAddressCandidateChange"
+                  >
+                    <option v-for="addr in editAddressCandidates" :key="addr" :value="addr">{{ addr }}</option>
+                  </select>
+                </div>
+                <p v-if="editAddressCandidatesLoading" class="field-details-map-status">Подбираем адреса по контуру...</p>
               </label>
               <div class="field-details-edit-field field-details-edit-field--full">
                 <span class="field-details-edit-label">Карта участка</span>
+                <div class="field-details-geometry-head">
+                  <span class="field-details-edit-label">Режим геометрии</span>
+                  <div class="field-details-geometry-switch" role="group" aria-label="Режим геометрии поля">
+                    <button
+                      type="button"
+                      class="field-details-geometry-switch-btn"
+                      :class="{ 'field-details-geometry-switch-btn--active': editForm.geometry_mode === 'point' }"
+                      @click="setEditGeometryMode('point')"
+                    >
+                      Точка
+                    </button>
+                    <button
+                      type="button"
+                      class="field-details-geometry-switch-btn"
+                      :class="{ 'field-details-geometry-switch-btn--active': editForm.geometry_mode === 'polygon' }"
+                      @click="setEditGeometryMode('polygon')"
+                    >
+                      Контур
+                    </button>
+                  </div>
+                </div>
                 <div class="field-details-map-picker">
                   <YandexMap
                     :key="'field-edit-' + (field?.id ?? props.id)"
                     :lat="fieldEditMapCenter.lat"
                     :lon="fieldEditMapCenter.lon"
                     :zoom="12"
+                    :geometry-mode="editForm.geometry_mode"
+                    :polygon-points="fieldEditPolygonPoints"
                     @pick="onPickFieldDetailsMap"
+                    @polygonChange="onPickFieldDetailsPolygon"
                   />
                 </div>
-                <p class="field-details-map-hint">Нажмите на карту, чтобы заполнить геолокацию и адрес.</p>
+                <p class="field-details-map-hint">
+                  <template v-if="editForm.geometry_mode === 'polygon'">
+                    Постройте контур поля на карте. Площадь считается автоматически, но может быть изменена вручную.
+                  </template>
+                  <template v-else>
+                    Нажмите на карту, чтобы заполнить геолокацию и адрес.
+                  </template>
+                </p>
                 <p v-if="fieldMapAddressLoading" class="field-details-map-status">Определяем адрес по координатам...</p>
                 <p
                   v-else-if="fieldMapAddressError"
@@ -1048,6 +1279,41 @@ watch(
   font-size: 0.8rem;
   color: var(--text-secondary);
 }
+.field-details-geometry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.field-details-geometry-switch {
+  display: inline-flex;
+  border: 1px solid var(--topbar-border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.field-details-geometry-switch-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 7px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.field-details-geometry-switch-btn + .field-details-geometry-switch-btn {
+  border-left: 1px solid var(--topbar-border);
+}
+.field-details-geometry-switch-btn--active {
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  color: var(--accent-green);
+}
+.field-details-geometry-area-hint {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
 .field-details-map-status {
   margin: 6px 0 0;
   font-size: 0.8rem;
@@ -1055,6 +1321,18 @@ watch(
 }
 .field-details-map-status--error {
   color: var(--warning-orange, #d97706);
+}
+.field-details-address-candidates {
+  margin-top: 8px;
+  display: grid;
+  gap: 4px;
+}
+.field-details-address-candidates-label {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+.field-details-address-candidates-select {
+  width: 100%;
 }
 .field-details-view-map {
   margin-top: 20px;

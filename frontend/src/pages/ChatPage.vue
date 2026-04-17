@@ -65,6 +65,7 @@ const draft = ref('')
 const pendingAttachment = ref<File | null>(null)
 const attachBusy = ref(false)
 const fileInputRef = useTemplateRef<HTMLInputElement>('chatFileInput')
+const failedImagePreviewIds = ref<Record<string, true>>({})
 
 /** Свайп «влево» для своих сообщений (px, отрицательное) */
 const SWIPE_DELETE_W = 76
@@ -521,6 +522,14 @@ function clearPendingAttachment() {
   if (fileInputRef.value) fileInputRef.value.value = ''
 }
 
+function markImagePreviewFailed(messageId: string) {
+  if (!messageId) return
+  failedImagePreviewIds.value = {
+    ...failedImagePreviewIds.value,
+    [messageId]: true,
+  }
+}
+
 function resetSwipeOffsets() {
   swipeDrag.value = null
   swipeDraggingId.value = null
@@ -656,6 +665,11 @@ function todayLabel(): string {
     'декабря',
   ]
   return `Сегодня, ${d.getDate()} ${months[d.getMonth()]}`
+}
+
+function isImageAttachmentName(fileName: string | null | undefined): boolean {
+  const name = String(fileName || '').toLowerCase()
+  return /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(name)
 }
 
 function incomingAvatar(block: { msg: UiChatMessage }) {
@@ -1216,7 +1230,29 @@ onUnmounted(() => {
                         <p>{{ block.msg.text }}</p>
                       </div>
                       <a
-                        v-if="block.msg.attachment?.url"
+                        v-if="
+                          block.msg.attachment?.url &&
+                          isImageAttachmentName(block.msg.attachment.name) &&
+                          !failedImagePreviewIds[block.msg.id]
+                        "
+                        :href="block.msg.attachment.url"
+                        class="chat-page__attach-preview"
+                        :class="block.msg.side === 'out' ? 'chat-page__attach-preview--out' : ''"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        :download="block.msg.attachment.name"
+                      >
+                        <img
+                          :src="block.msg.attachment.url"
+                          :alt="block.msg.attachment.name"
+                          class="chat-page__attach-preview-img"
+                          loading="lazy"
+                          @error="markImagePreviewFailed(block.msg.id)"
+                        />
+                        <span class="chat-page__attach-preview-name">{{ block.msg.attachment.name }}</span>
+                      </a>
+                      <a
+                        v-else-if="block.msg.attachment?.url"
                         :href="block.msg.attachment.url"
                         class="chat-page__attach"
                         :class="block.msg.side === 'out' ? 'chat-page__attach--out' : ''"
@@ -2789,6 +2825,50 @@ a.chat-page__attach {
   color: var(--accent-green);
 }
 
+a.chat-page__attach-preview {
+  text-decoration: none;
+  color: inherit;
+}
+
+.chat-page__attach-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  max-width: min(240px, 62vw);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  padding: 6px;
+  border-top-left-radius: 4px;
+  overflow: hidden;
+}
+
+.chat-page__attach-preview--out {
+  border-top-right-radius: 4px;
+  border-top-left-radius: 12px;
+}
+
+.chat-page__attach-preview-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 78%, var(--chip-bg));
+}
+
+.chat-page__attach-preview-name {
+  display: block;
+  padding: 0 2px 1px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-page__msg-foot {
   display: flex;
   align-items: center;
@@ -3473,6 +3553,15 @@ a.chat-page__attach {
   .chat-page__msg-row {
     margin-bottom: 16px;
     max-width: 100%;
+  }
+
+  .chat-page__attach-preview {
+    max-width: min(210px, 70vw);
+    padding: 5px;
+  }
+
+  .chat-page__attach-preview-name {
+    font-size: 0.6875rem;
   }
 
   .chat-page__composer-wrap {

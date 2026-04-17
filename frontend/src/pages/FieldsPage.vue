@@ -37,7 +37,7 @@ import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiSuccessModal from '@/components/UiSuccessModal.vue'
 import YandexMap from '@/components/YandexMap.vue'
-import { resolveYandexAddressLine } from '@/lib/yandexGeocode'
+import { resolveYandexAddressLine, resolveYandexAddressCandidates } from '@/lib/yandexGeocode'
 
 type CropKey = 'all' | 'wheat' | 'corn' | 'soy' | 'sunflower' | 'none' | 'meadow'
 
@@ -69,6 +69,8 @@ type Field = {
   locationDescription: string
   extraInfo: string
   geolocation: string
+  geometryMode: 'point' | 'polygon'
+  contourGeojson: Record<string, unknown> | null
   landType: string
   sowingYear: number
   responsibleId: string | null
@@ -84,6 +86,13 @@ type Field = {
   soilType: string
   moisture: string
   lastOperation: string
+}
+
+type LatLon = [number, number]
+
+type PolygonGeoJson = {
+  type: 'Polygon'
+  coordinates: number[][][]
 }
 
 const router = useRouter()
@@ -112,6 +121,8 @@ function fieldRowToField(row: FieldRow, profileMap: Map<string, ProfileRow>, cro
     geolocation: (row as { geolocation?: string | null }).geolocation ?? '',
     locationDescription: row.location_description ?? '',
     landType: row.land_type,
+    geometryMode: row.geometry_mode ?? 'point',
+    contourGeojson: row.contour_geojson ?? null,
     sowingYear: row.sowing_year ?? 0,
     responsibleId: row.responsible_id ?? null,
     responsiblePerson,
@@ -157,6 +168,8 @@ const DEMO_FIELDS: Field[] = [
     locationDescription: 'Северный участок, от дороги до лесополосы',
     extraInfo: '',
     geolocation: '',
+    geometryMode: 'point',
+    contourGeojson: null,
     landType: 'Пашня',
     sowingYear: 2024,
     responsibleId: null,
@@ -183,6 +196,8 @@ const DEMO_FIELDS: Field[] = [
     locationDescription: 'Западная граница хозяйства',
     extraInfo: '',
     geolocation: '',
+    geometryMode: 'point',
+    contourGeojson: null,
     landType: 'Пашня',
     sowingYear: 2024,
     responsibleId: null,
@@ -209,6 +224,8 @@ const DEMO_FIELDS: Field[] = [
     locationDescription: 'За рекой, южный склон',
     extraInfo: '',
     geolocation: '',
+    geometryMode: 'point',
+    contourGeojson: null,
     landType: 'Пашня',
     sowingYear: 2024,
     responsibleId: null,
@@ -235,6 +252,8 @@ const DEMO_FIELDS: Field[] = [
     locationDescription: 'Центральный массив',
     extraInfo: '',
     geolocation: '',
+    geometryMode: 'point',
+    contourGeojson: null,
     landType: 'Залежь',
     sowingYear: 0,
     responsibleId: null,
@@ -261,6 +280,8 @@ const DEMO_FIELDS: Field[] = [
     locationDescription: 'Пойменный луг',
     extraInfo: '',
     geolocation: '',
+    geometryMode: 'point',
+    contourGeojson: null,
     landType: 'Сенокос',
     sowingYear: 0,
     responsibleId: null,
@@ -423,9 +444,19 @@ const deleteConfirmFieldId = ref<string | null>(null)
 const newFieldName = ref('')
 const newFieldCadastral = ref('')
 const newFieldAddress = ref('')
+const newFieldAddressCandidates = ref<string[]>([])
+const selectedAddressCandidate = ref('')
+const fieldMapAddressCandidatesLoading = ref(false)
+const newFieldAddressManualTouched = ref(false)
+const newFieldAddressLastAuto = ref('')
 const newFieldGeo = ref('')
 const newFieldExtra = ref('')
 const newFieldArea = ref<number | ''>('')
+const newFieldGeometryMode = ref<'point' | 'polygon'>('point')
+const newFieldContourGeojson = ref<PolygonGeoJson | null>(null)
+const newFieldContourDraftPoints = ref<LatLon[]>([])
+const newFieldAreaAuto = ref<number | null>(null)
+const newFieldAreaManualTouched = ref(false)
 const newFieldLandType = ref('Пашня')
 const newFieldCropKey = ref('wheat')
 const newFieldSowingYear = ref(new Date().getFullYear())
@@ -448,12 +479,50 @@ const isFieldModalOpen = computed(() => isAddFieldOpen.value)
 const fieldModalTitle = computed(() => (editingFieldId.value ? 'Редактирование поля' : 'Новое поле'))
 const fieldToDelete = computed(() => (deleteConfirmFieldId.value ? fields.value.find((f) => f.id === deleteConfirmFieldId.value) : null))
 const fieldMapCenter = computed(() => {
+  const contourCenter = getPolygonCenterLatLon(newFieldContourGeojson.value)
+  if (contourCenter) return contourCenter
   const raw = newFieldGeo.value.trim()
   if (!raw) return { lat: 55.7558, lon: 37.6176 }
   const parts = raw.split(',').map((p) => Number(p.trim()))
   if (parts.length !== 2 || parts.some((n) => Number.isNaN(n))) return { lat: 55.7558, lon: 37.6176 }
   return { lat: parts[0], lon: parts[1] }
 })
+
+function toPolygonGeoJson(points: LatLon[]): PolygonGeoJson | null {
+  if (!Array.isArray(points) || points.length < 3) return null
+  const ring = points.map(([lat, lon]) => [lon, lat])
+  const [firstLon, firstLat] = ring[0]!
+  const [lastLon, lastLat] = ring[ring.length - 1]!
+  if (firstLon !== lastLon || firstLat !== lastLat) ring.push([firstLon, firstLat])
+  return { type: 'Polygon', coordinates: [ring] }
+}
+
+function fromPolygonGeoJson(geojson: PolygonGeoJson | Record<string, unknown> | null | undefined): LatLon[] {
+  if (!geojson || geojson.type !== 'Polygon' || !Array.isArray(geojson.coordinates)) return []
+  const ring = geojson.coordinates[0]
+  if (!Array.isArray(ring)) return []
+  const points = ring
+    .map((p) => (Array.isArray(p) && p.length >= 2 ? [Number(p[1]), Number(p[0])] as LatLon : null))
+    .filter((p): p is LatLon => Boolean(p && Number.isFinite(p[0]) && Number.isFinite(p[1])))
+  if (points.length >= 2) {
+    const first = points[0]
+    const last = points[points.length - 1]
+    if (first[0] === last[0] && first[1] === last[1]) points.pop()
+  }
+  return points
+}
+
+function getPolygonCenterLatLon(geojson: PolygonGeoJson | Record<string, unknown> | null | undefined): { lat: number; lon: number } | null {
+  const points = fromPolygonGeoJson(geojson)
+  if (!points.length) return null
+  const lat = points.reduce((s, p) => s + p[0], 0) / points.length
+  const lon = points.reduce((s, p) => s + p[1], 0) / points.length
+  return { lat, lon }
+}
+
+const fieldMapPolygonPoints = computed<LatLon[]>(() =>
+  newFieldContourDraftPoints.value.length ? newFieldContourDraftPoints.value : fromPolygonGeoJson(newFieldContourGeojson.value),
+)
 
 const CROP_OPTIONS_FALLBACK: { key: string; label: string }[] = [
   { key: 'wheat', label: 'Пшеница' },
@@ -486,9 +555,19 @@ async function openAddField() {
   newFieldName.value = ''
   newFieldCadastral.value = ''
   newFieldAddress.value = ''
+  newFieldAddressCandidates.value = []
+  selectedAddressCandidate.value = ''
+  fieldMapAddressCandidatesLoading.value = false
+  newFieldAddressManualTouched.value = false
+  newFieldAddressLastAuto.value = ''
   newFieldGeo.value = ''
   newFieldExtra.value = ''
   newFieldArea.value = ''
+  newFieldGeometryMode.value = 'point'
+  newFieldContourGeojson.value = null
+  newFieldContourDraftPoints.value = []
+  newFieldAreaAuto.value = null
+  newFieldAreaManualTouched.value = false
   newFieldLandType.value = landTypeOptions.value[0]?.name ?? 'Пашня'
   newFieldCropKey.value = cropOptions.value[0]?.key ?? 'wheat'
   newFieldSowingYear.value = new Date().getFullYear()
@@ -521,9 +600,19 @@ async function openEditField(f: Field) {
   newFieldName.value = f.name
   newFieldCadastral.value = f.cadastralNumber
   newFieldAddress.value = f.address
+  newFieldAddressCandidates.value = f.address ? [f.address] : []
+  selectedAddressCandidate.value = f.address || ''
+  fieldMapAddressCandidatesLoading.value = false
+  newFieldAddressManualTouched.value = false
+  newFieldAddressLastAuto.value = f.address || ''
   newFieldGeo.value = f.geolocation
   newFieldExtra.value = f.extraInfo
   newFieldArea.value = f.area
+  newFieldGeometryMode.value = f.geometryMode ?? 'point'
+  newFieldContourGeojson.value = (f.contourGeojson as PolygonGeoJson | null) ?? null
+  newFieldContourDraftPoints.value = fromPolygonGeoJson((f.contourGeojson as PolygonGeoJson | null) ?? null)
+  newFieldAreaAuto.value = null
+  newFieldAreaManualTouched.value = false
   newFieldLandType.value = f.landType
   newFieldCropKey.value = f.cropKey
   newFieldSowingYear.value = f.sowingYear
@@ -627,25 +716,143 @@ async function processSchemeFile(file: File) {
 function closeFieldModal() {
   isAddFieldOpen.value = false
   editingFieldId.value = null
+  newFieldAreaManualTouched.value = false
+  fieldMapAddressCandidatesLoading.value = false
+  newFieldAddressCandidates.value = []
+  selectedAddressCandidate.value = ''
   fieldMapAddressLoading.value = false
   fieldMapAddressError.value = ''
 }
 
 async function onPickFieldMap(coords: { lat: number; lon: number }) {
+  newFieldGeometryMode.value = 'point'
+  newFieldContourGeojson.value = null
+  newFieldContourDraftPoints.value = []
+  newFieldAreaAuto.value = null
   const lat = Number(coords.lat.toFixed(6))
   const lon = Number(coords.lon.toFixed(6))
   newFieldGeo.value = `${lat}, ${lon}`
   fieldMapAddressError.value = ''
   fieldMapAddressLoading.value = true
+  fieldMapAddressCandidatesLoading.value = false
   try {
     const address = await resolveYandexAddressLine(lat, lon)
     if (address) {
-      newFieldAddress.value = address
+      applyAddressCandidates([address])
     } else {
       fieldMapAddressError.value = 'Не удалось определить адрес по выбранной точке.'
     }
   } finally {
     fieldMapAddressLoading.value = false
+  }
+}
+
+function onFieldAddressInput() {
+  if (newFieldAddress.value !== newFieldAddressLastAuto.value) {
+    newFieldAddressManualTouched.value = true
+  }
+}
+
+function applyAddressCandidates(candidates: string[]) {
+  const list = [...new Set(candidates.map((x) => x.trim()).filter(Boolean))]
+  newFieldAddressCandidates.value = list
+  selectedAddressCandidate.value = list[0] || ''
+  const current = newFieldAddress.value.trim()
+  if (!list.length) return
+  if (!current || !newFieldAddressManualTouched.value) {
+    newFieldAddress.value = list[0]!
+    newFieldAddressLastAuto.value = list[0]!
+    newFieldAddressManualTouched.value = false
+  }
+}
+
+function contourSamplePoints(points: LatLon[], center: { lat: number; lon: number } | null): Array<{ lat: number; lon: number }> {
+  const src = points.filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))
+  if (!src.length && !center) return []
+  const out: Array<{ lat: number; lon: number }> = []
+  if (center) out.push({ lat: center.lat, lon: center.lon })
+  if (src.length) {
+    const idx = new Set<number>([
+      0,
+      Math.floor(src.length * 0.25),
+      Math.floor(src.length * 0.5),
+      Math.floor(src.length * 0.75),
+      src.length - 1,
+    ])
+    for (const i of idx) {
+      const p = src[Math.max(0, Math.min(i, src.length - 1))]!
+      out.push({ lat: p[0], lon: p[1] })
+    }
+  }
+  return out
+}
+
+let contourAddressRequestId = 0
+async function suggestContourAddresses(points: LatLon[], center: { lat: number; lon: number } | null) {
+  const samples = contourSamplePoints(points, center)
+  if (!samples.length) return
+  const reqId = ++contourAddressRequestId
+  fieldMapAddressCandidatesLoading.value = true
+  try {
+    const candidates = await resolveYandexAddressCandidates(samples, 8)
+    if (reqId !== contourAddressRequestId) return
+    applyAddressCandidates(candidates)
+    if (!candidates.length) {
+      fieldMapAddressError.value = 'Не удалось подобрать адреса по контуру. Укажите адрес вручную.'
+    } else {
+      fieldMapAddressError.value = ''
+    }
+  } finally {
+    if (reqId === contourAddressRequestId) fieldMapAddressCandidatesLoading.value = false
+  }
+}
+
+function onAddressCandidateChange() {
+  if (!selectedAddressCandidate.value) return
+  newFieldAddress.value = selectedAddressCandidate.value
+  newFieldAddressLastAuto.value = selectedAddressCandidate.value
+  newFieldAddressManualTouched.value = false
+}
+
+function onFieldAreaManualInput() {
+  if (newFieldGeometryMode.value === 'polygon') newFieldAreaManualTouched.value = true
+}
+
+function setFieldGeometryMode(mode: 'point' | 'polygon') {
+  newFieldGeometryMode.value = mode
+  fieldMapAddressError.value = ''
+  if (mode === 'point') {
+    newFieldContourGeojson.value = null
+    newFieldContourDraftPoints.value = []
+    newFieldAreaAuto.value = null
+    newFieldAreaManualTouched.value = false
+    newFieldAddressCandidates.value = newFieldAddress.value.trim() ? [newFieldAddress.value.trim()] : []
+    selectedAddressCandidate.value = newFieldAddressCandidates.value[0] || ''
+    fieldMapAddressCandidatesLoading.value = false
+    return
+  }
+  newFieldAreaManualTouched.value = false
+}
+
+function onFieldMapPolygonChange(payload: { points: LatLon[]; areaHa: number; center: { lat: number; lon: number } | null }) {
+  newFieldContourDraftPoints.value = payload.points
+  const geojson = toPolygonGeoJson(payload.points)
+  newFieldContourGeojson.value = geojson
+  if (geojson) {
+    newFieldGeometryMode.value = 'polygon'
+    if (payload.center) {
+      newFieldGeo.value = `${payload.center.lat.toFixed(6)}, ${payload.center.lon.toFixed(6)}`
+    }
+    const roundedArea = Math.round(Math.max(0, payload.areaHa) * 100) / 100
+    newFieldAreaAuto.value = roundedArea
+    if (!newFieldAreaManualTouched.value) {
+      newFieldArea.value = roundedArea
+    }
+    if (payload.points.length >= 3) {
+      void suggestContourAddresses(payload.points, payload.center)
+    }
+  } else {
+    newFieldAreaAuto.value = null
   }
 }
 
@@ -701,6 +908,9 @@ async function addField() {
   fieldFormError.value = ''
   const cropOpt = cropOptions.value.find((o) => o.key === newFieldCropKey.value)
   const cropName = cropOpt?.label ?? 'Пшеница'
+  const geometryMode = newFieldGeometryMode.value
+  const contourGeojson = geometryMode === 'polygon' ? toPolygonGeoJson(newFieldContourDraftPoints.value) : null
+  const geolocation = newFieldGeo.value.trim() || null
 
   if (editingFieldId.value) {
     if (isSupabaseConfigured()) {
@@ -712,7 +922,9 @@ async function addField() {
           address: newFieldAddress.value.trim() || null,
           location_description: newFieldLocationDesc.value.trim() || null,
           extra_info: newFieldExtra.value.trim() || null,
-          geolocation: newFieldGeo.value.trim() || null,
+          geolocation,
+          geometry_mode: geometryMode,
+          contour_geojson: contourGeojson,
           land_type: newFieldLandType.value,
           sowing_year: newFieldSowingYear.value,
           responsible_id: newFieldResponsibleId.value.trim() || null,
@@ -733,7 +945,9 @@ async function addField() {
         f.address = newFieldAddress.value.trim()
         f.locationDescription = newFieldLocationDesc.value.trim()
         f.extraInfo = newFieldExtra.value.trim()
-        f.geolocation = newFieldGeo.value.trim()
+        f.geolocation = geolocation || ''
+        f.geometryMode = geometryMode
+        f.contourGeojson = contourGeojson
         f.landType = newFieldLandType.value
         f.sowingYear = newFieldSowingYear.value
         f.responsibleId = newFieldResponsibleId.value || null
@@ -758,7 +972,9 @@ async function addField() {
         address: newFieldAddress.value.trim() || null,
         location_description: newFieldLocationDesc.value.trim() || null,
         extra_info: newFieldExtra.value.trim() || null,
-        geolocation: newFieldGeo.value.trim() || null,
+        geolocation,
+        geometry_mode: geometryMode,
+        contour_geojson: contourGeojson,
         land_type: newFieldLandType.value,
         sowing_year: newFieldSowingYear.value,
         responsible_id: newFieldResponsibleId.value.trim() || null,
@@ -785,7 +1001,9 @@ async function addField() {
         address: newFieldAddress.value.trim(),
         locationDescription: newFieldLocationDesc.value.trim(),
         extraInfo: newFieldExtra.value.trim(),
-        geolocation: newFieldGeo.value.trim(),
+        geolocation: geolocation || '',
+        geometryMode,
+        contourGeojson,
         landType: newFieldLandType.value,
         sowingYear: newFieldSowingYear.value,
         responsibleId: newFieldResponsibleId.value || null,
@@ -1732,9 +1950,13 @@ onMounted(async () => {
                     step="0.01"
                     class="modal-input"
                     placeholder="0.00"
+                    @input="onFieldAreaManualInput"
                   />
                   <span class="modal-input-suffix">га</span>
                 </div>
+                <span v-if="newFieldGeometryMode === 'polygon' && newFieldAreaAuto != null" class="field-geometry-area-hint">
+                  Авто по контуру: {{ newFieldAreaAuto }} га
+                </span>
               </label>
             </div>
             <div class="modal-form-section">
@@ -1745,23 +1967,60 @@ onMounted(async () => {
                   type="text"
                   class="modal-input"
                   placeholder="Например: Московская обл., Раменский р-н, д. Вялки"
+                  @input="onFieldAddressInput"
                 />
+                <div v-if="newFieldAddressCandidates.length" class="field-address-candidates">
+                  <span class="field-address-candidates-label">Варианты адреса по контуру</span>
+                  <select v-model="selectedAddressCandidate" class="modal-select field-address-candidates-select" @change="onAddressCandidateChange">
+                    <option v-for="addr in newFieldAddressCandidates" :key="addr" :value="addr">{{ addr }}</option>
+                  </select>
+                </div>
+                <p v-if="fieldMapAddressCandidatesLoading" class="field-map-picker-status">Подбираем адреса по контуру...</p>
               </label>
             </div>
             <div class="modal-form-section">
               <div class="modal-field modal-field--full">
                 <span class="modal-label">Карта участка</span>
+                <div class="field-geometry-head">
+                  <span class="modal-label">Режим геометрии</span>
+                  <div class="field-geometry-switch" role="group" aria-label="Режим геометрии поля">
+                    <button
+                      type="button"
+                      class="field-geometry-switch-btn"
+                      :class="{ 'field-geometry-switch-btn--active': newFieldGeometryMode === 'point' }"
+                      @click="setFieldGeometryMode('point')"
+                    >
+                      Точка
+                    </button>
+                    <button
+                      type="button"
+                      class="field-geometry-switch-btn"
+                      :class="{ 'field-geometry-switch-btn--active': newFieldGeometryMode === 'polygon' }"
+                      @click="setFieldGeometryMode('polygon')"
+                    >
+                      Контур
+                    </button>
+                  </div>
+                </div>
                 <div class="field-map-picker-wrap">
                   <YandexMap
                     :key="editingFieldId ?? 'new-field'"
                     :lat="fieldMapCenter.lat"
                     :lon="fieldMapCenter.lon"
                     :zoom="12"
+                    :geometry-mode="newFieldGeometryMode"
+                    :polygon-points="fieldMapPolygonPoints"
                     @pick="onPickFieldMap"
+                    @polygonChange="onFieldMapPolygonChange"
                   />
                 </div>
                 <p class="field-map-picker-note">
-                  Нажмите на карту, чтобы автоматически заполнить геолокацию и адрес.
+                  <template v-if="newFieldGeometryMode === 'polygon'">
+                    Постройте контур поля на карте. Площадь считается автоматически, но ее можно скорректировать вручную.
+                  </template>
+                  <template v-else>
+                    Нажмите на карту, чтобы автоматически заполнить геолокацию и адрес.
+                  </template>
                 </p>
                 <p v-if="fieldMapAddressLoading" class="field-map-picker-status">Определяем адрес по координатам...</p>
                 <p v-else-if="fieldMapAddressError" class="field-map-picker-status field-map-picker-status--error">{{ fieldMapAddressError }}</p>
@@ -3674,6 +3933,19 @@ onMounted(async () => {
 [data-theme='dark'] .modal.modal-fields--add .modal-input-suffix {
   color: rgba(255, 255, 255, 0.5);
 }
+[data-theme='dark'] .modal.modal-fields--add .field-geometry-switch {
+  border-color: var(--border-color);
+}
+[data-theme='dark'] .modal.modal-fields--add .field-geometry-switch-btn {
+  color: rgba(255, 255, 255, 0.72);
+}
+[data-theme='dark'] .modal.modal-fields--add .field-geometry-switch-btn--active {
+  background: color-mix(in srgb, var(--accent-green) 22%, transparent);
+  color: var(--accent-green);
+}
+[data-theme='dark'] .modal.modal-fields--add .field-address-candidates-label {
+  color: rgba(255, 255, 255, 0.62);
+}
 [data-theme='dark'] .modal.modal-fields--add .modal-dropzone-label {
   background: rgba(0, 0, 0, 0.25);
   border-color: rgba(255, 255, 255, 0.2);
@@ -3732,6 +4004,65 @@ onMounted(async () => {
   margin: 8px 0 0;
   font-size: 0.8rem;
   color: var(--text-secondary);
+}
+
+.field-geometry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.field-geometry-switch {
+  display: inline-flex;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  overflow: hidden;
+  width: fit-content;
+}
+
+.field-geometry-switch-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 7px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.field-geometry-switch-btn + .field-geometry-switch-btn {
+  border-left: 1px solid var(--border-color);
+}
+
+.field-geometry-switch-btn--active {
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  color: var(--accent-green);
+}
+
+.field-geometry-area-hint {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.field-address-candidates {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-address-candidates-label {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.field-address-candidates-select {
+  font-size: 0.82rem;
 }
 
 .field-map-picker-status {

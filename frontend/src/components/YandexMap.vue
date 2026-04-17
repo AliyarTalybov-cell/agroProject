@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 
 export type MapFieldMarker = {
   id: string
@@ -9,21 +9,21 @@ export type MapFieldMarker = {
   subtitle?: string
 }
 
+type GeometryMode = 'point' | 'polygon'
+type LatLon = [number, number]
+
 const props = withDefaults(
   defineProps<{
     lat?: number
     lon?: number
     zoom?: number
-    /** false — только просмотр: без поиска и клика, сразу метка в центре */
     interactive?: boolean
-    /** Текст подсказки/балуна у метки (например адрес поля) */
     markerHint?: string
-    /** Дополнительные метки (поля) — зелёные точки на карте */
     fieldMarkers?: MapFieldMarker[]
-    /** Вместе с точкой погоды (lat/lon) подогнать вид так, чтобы были видны все поля */
     fitFieldMarkers?: boolean
-    /** Подсказка поверх карты; иначе текст выводите снаружи под картой */
     overlayHint?: boolean
+    geometryMode?: GeometryMode
+    polygonPoints?: LatLon[]
   }>(),
   {
     lat: 55.7558,
@@ -34,18 +34,31 @@ const props = withDefaults(
     fieldMarkers: () => [],
     fitFieldMarkers: false,
     overlayHint: false,
+    geometryMode: 'point',
+    polygonPoints: () => [],
   },
 )
 
 const emit = defineEmits<{
   (e: 'pick', coords: { lat: number; lon: number }): void
+  (e: 'polygonChange', payload: { points: LatLon[]; areaHa: number; center: { lat: number; lon: number } | null }): void
 }>()
 
 const mapEl = ref<HTMLDivElement | null>(null)
+const isPolygonDrawing = ref(false)
 let mapInstance: any = null
 let placemark: any = null
+let polygonObject: any = null
+let polylineObject: any = null
 let ymaps: any = null
+let searchControl: any = null
+let mapClickHandler: ((e: any) => void) | null = null
+let mapMouseMoveHandler: ((e: any) => void) | null = null
+const draftPolygonPoints = ref<LatLon[]>([])
+const hoverPolygonPoint = ref<LatLon | null>(null)
 const fieldPlacemarks: any[] = []
+
+const isPolygonMode = computed(() => props.geometryMode === 'polygon')
 
 function clearFieldPlacemarks() {
   if (!mapInstance) return
@@ -80,9 +93,251 @@ function syncFieldPlacemarks() {
   }
 }
 
-/** Центр и масштаб: либо охват полей + точки погоды, либо только центр погоды */
+function areaHaFromPolygon(points: LatLon[]): number {
+  if (points.length < 3) return 0
+  const R = 6378137
+  const avgLatRad = points.reduce((s, p) => s + (p[0] * Math.PI) / 180, 0) / points.length
+  const toXY = (p: LatLon): [number, number] => {
+    const latRad = (p[0] * Math.PI) / 180
+    const lonRad = (p[1] * Math.PI) / 180
+    return [R * lonRad * Math.cos(avgLatRad), R * latRad]
+  }
+  const xy = points.map(toXY)
+  let area = 0
+  for (let i = 0; i < xy.length; i += 1) {
+    const [x1, y1] = xy[i]!
+    const [x2, y2] = xy[(i + 1) % xy.length]!
+    area += x1 * y2 - x2 * y1
+  }
+  return Math.abs(area) / 2 / 10000
+}
+
+function polygonCenter(points: LatLon[]): { lat: number; lon: number } | null {
+  if (!points.length) return null
+  const lat = points.reduce((s, p) => s + p[0], 0) / points.length
+  const lon = points.reduce((s, p) => s + p[1], 0) / points.length
+  return { lat, lon }
+}
+
+function emitPolygonChange() {
+  const points = draftPolygonPoints.value
+  emit('polygonChange', {
+    points,
+    areaHa: areaHaFromPolygon(points),
+    center: polygonCenter(points),
+  })
+}
+
+function ensurePolygonObject() {
+  if (!mapInstance || !ymaps) return
+  if (draftPolygonPoints.value.length < 3) {
+    removePolygonObject()
+    return
+  }
+  if (!polygonObject) {
+    polygonObject = new ymaps.Polygon(
+      [draftPolygonPoints.value],
+      {},
+      {
+        fillColor: 'rgba(22, 163, 74, 0.22)',
+        strokeColor: '#16a34a',
+        strokeWidth: 2,
+        interactivityModel: 'default#transparent',
+      },
+    )
+    mapInstance.geoObjects.add(polygonObject)
+  } else {
+    polygonObject.geometry.setCoordinates([draftPolygonPoints.value])
+  }
+}
+
+function removePolygonObject() {
+  if (!mapInstance || !polygonObject) return
+  try {
+    mapInstance.geoObjects.remove(polygonObject)
+  } catch {
+    /* noop */
+  }
+  polygonObject = null
+}
+
+function ensurePolylineObject() {
+  if (!mapInstance || !ymaps) return
+  const base = draftPolygonPoints.value
+  const withHover = hoverPolygonPoint.value && isPolygonDrawing.value ? [...base, hoverPolygonPoint.value] : base
+  if (withHover.length < 2) {
+    removePolylineObject()
+    return
+  }
+  if (!polylineObject) {
+    polylineObject = new ymaps.Polyline(
+      withHover,
+      {},
+      {
+        strokeColor: '#16a34a',
+        strokeWidth: 2,
+        strokeStyle: 'solid',
+        opacity: 0.95,
+        // Линия не должна перехватывать клики по карте (иначе следующая точка не ставится).
+        interactivityModel: 'default#transparent',
+      },
+    )
+    mapInstance.geoObjects.add(polylineObject)
+  } else {
+    polylineObject.geometry.setCoordinates(withHover)
+  }
+}
+
+function removePolylineObject() {
+  if (!mapInstance || !polylineObject) return
+  try {
+    mapInstance.geoObjects.remove(polylineObject)
+  } catch {
+    /* noop */
+  }
+  polylineObject = null
+}
+
+function clearPointMarker() {
+  if (!mapInstance || !placemark) return
+  try {
+    mapInstance.geoObjects.remove(placemark)
+  } catch {
+    /* noop */
+  }
+  placemark = null
+}
+
+function placeMark(lat: number, lon: number) {
+  if (!mapInstance || !ymaps) return
+  clearPointMarker()
+  const hint = props.markerHint?.trim()
+  placemark = new ymaps.Placemark(
+    [lat, lon],
+    hint ? { hintContent: hint, balloonContent: hint } : {},
+    { preset: 'islands#redDotIcon', draggable: false },
+  )
+  mapInstance.geoObjects.add(placemark)
+}
+
+function startPolygonDrawing() {
+  if (!props.interactive || !isPolygonMode.value) return
+  isPolygonDrawing.value = true
+  if (draftPolygonPoints.value.length >= 3) {
+    draftPolygonPoints.value = []
+    emitPolygonChange()
+  }
+  ensurePolygonObject()
+}
+
+function finishPolygonDrawing() {
+  isPolygonDrawing.value = false
+  hoverPolygonPoint.value = null
+  ensurePolygonObject()
+  removePolylineObject()
+  emitPolygonChange()
+}
+
+function clearPolygonDrawing() {
+  draftPolygonPoints.value = []
+  isPolygonDrawing.value = false
+  hoverPolygonPoint.value = null
+  removePolygonObject()
+  removePolylineObject()
+  emitPolygonChange()
+}
+
+function attachMapEvents() {
+  if (!mapInstance || !ymaps) return
+  if (searchControl) {
+    try {
+      mapInstance.controls.remove(searchControl)
+    } catch {
+      /* noop */
+    }
+    searchControl = null
+  }
+  if (mapClickHandler) {
+    mapInstance.events.remove('click', mapClickHandler)
+    mapClickHandler = null
+  }
+  if (mapMouseMoveHandler) {
+    mapInstance.events.remove('mousemove', mapMouseMoveHandler)
+    mapMouseMoveHandler = null
+  }
+  if (!props.interactive) return
+
+  searchControl = new ymaps.control.SearchControl({
+    options: { provider: 'yandex#search', noPlacemark: true },
+  })
+  mapInstance.controls.add(searchControl)
+  searchControl.events.add('resultselect', (e: any) => {
+    const index = e.get('index')
+    searchControl.getResult(index).then((res: any) => {
+      const coords = res.geometry.getCoordinates()
+      const [lat, lon] = coords as LatLon
+      if (isPolygonMode.value) {
+        if (!isPolygonDrawing.value) return
+        draftPolygonPoints.value = [...draftPolygonPoints.value, [lat, lon]]
+        ensurePolylineObject()
+        ensurePolygonObject()
+        emitPolygonChange()
+      } else {
+        emit('pick', { lat, lon })
+        placeMark(lat, lon)
+      }
+    })
+  })
+
+  mapClickHandler = (e: any) => {
+    const [lat, lon] = e.get('coords') as LatLon
+    if (isPolygonMode.value) {
+      if (!isPolygonDrawing.value) return
+      draftPolygonPoints.value = [...draftPolygonPoints.value, [lat, lon]]
+      hoverPolygonPoint.value = [lat, lon]
+      ensurePolylineObject()
+      ensurePolygonObject()
+      emitPolygonChange()
+      return
+    }
+    emit('pick', { lat, lon })
+    placeMark(lat, lon)
+  }
+  mapInstance.events.add('click', mapClickHandler)
+
+  mapMouseMoveHandler = (e: any) => {
+    if (!isPolygonMode.value || !isPolygonDrawing.value) return
+    if (!draftPolygonPoints.value.length) return
+    const [lat, lon] = e.get('coords') as LatLon
+    hoverPolygonPoint.value = [lat, lon]
+    ensurePolylineObject()
+  }
+  mapInstance.events.add('mousemove', mapMouseMoveHandler)
+}
+
 function applyBoundsOrCenter() {
   if (!mapInstance) return
+  const polygonPts = props.polygonPoints ?? []
+  if (polygonPts.length >= 3) {
+    const lats = polygonPts.map((p) => p[0])
+    const lons = polygonPts.map((p) => p[1])
+    const minLat = Math.min(...lats)
+    const maxLat = Math.max(...lats)
+    const minLon = Math.min(...lons)
+    const maxLon = Math.max(...lons)
+    const latSpan = maxLat - minLat
+    const lonSpan = maxLon - minLon
+    const span = Math.max(latSpan, lonSpan)
+    const pad = span * 0.18 + 0.0015
+    mapInstance.setBounds(
+      [
+        [minLat - pad, minLon - pad],
+        [maxLat + pad, maxLon + pad],
+      ],
+      { checkZoomRange: true, zoomMargin: props.interactive ? 42 : 26 },
+    )
+    return
+  }
   const markers = props.fieldMarkers ?? []
   if (props.fitFieldMarkers && markers.length > 0) {
     const lats = markers.map((m) => m.lat)
@@ -112,80 +367,62 @@ function applyBoundsOrCenter() {
   }
 }
 
+function syncGeometryVisuals() {
+  if (!mapInstance || !ymaps) return
+  if (isPolygonMode.value) {
+    clearPointMarker()
+    if (!isPolygonDrawing.value) hoverPolygonPoint.value = null
+    ensurePolylineObject()
+    ensurePolygonObject()
+    try {
+      mapInstance.behaviors.disable('dblClickZoom')
+    } catch {
+      /* noop */
+    }
+  } else {
+    removePolygonObject()
+    removePolylineObject()
+    hoverPolygonPoint.value = null
+    try {
+      mapInstance.behaviors.enable('dblClickZoom')
+    } catch {
+      /* noop */
+    }
+    if (!props.interactive) placeMark(props.lat, props.lon)
+  }
+}
+
 async function initMap() {
   if (!mapEl.value) return
-
   try {
     ymaps = (window as any).ymaps
     if (!ymaps) {
       console.error('ymaps не найден')
       return
     }
-
     await new Promise<void>((resolve) => ymaps.ready(resolve))
-
     mapInstance = new ymaps.Map(mapEl.value, {
       center: [props.lat, props.lon],
       zoom: props.zoom,
       controls: ['zoomControl', 'fullscreenControl'],
     })
-
-    if (props.interactive) {
-      const searchControl = new ymaps.control.SearchControl({
-        options: {
-          provider: 'yandex#search',
-          noPlacemark: true,
-        },
-      })
-      mapInstance.controls.add(searchControl)
-
-      searchControl.events.add('resultselect', (e: any) => {
-        const index = e.get('index')
-        searchControl.getResult(index).then((res: any) => {
-          const coords = res.geometry.getCoordinates()
-          const [lat, lon] = coords as [number, number]
-          emit('pick', { lat, lon })
-          placeMark(lat, lon)
-        })
-      })
-
-      mapInstance.events.add('click', (e: any) => {
-        const coords: [number, number] = e.get('coords')
-        const [lat, lon] = coords
-        emit('pick', { lat, lon })
-        placeMark(lat, lon)
-      })
-    } else {
-      placeMark(props.lat, props.lon)
-    }
-
+    attachMapEvents()
     syncFieldPlacemarks()
+    syncGeometryVisuals()
     applyBoundsOrCenter()
   } catch (err) {
     console.error('YandexMap init error:', err)
   }
 }
 
-function placeMark(lat: number, lon: number) {
-  if (!mapInstance || !ymaps) return
-
-  if (placemark) {
-    mapInstance.geoObjects.remove(placemark)
-    placemark = null
-  }
-
-  const hint = props.markerHint?.trim()
-  placemark = new ymaps.Placemark(
-    [lat, lon],
-    hint ? { hintContent: hint, balloonContent: hint } : {},
-    {
-      preset: 'islands#redDotIcon',
-      draggable: false,
-    },
-  )
-
-  mapInstance.geoObjects.add(placemark)
-}
+watch(
+  () => props.polygonPoints,
+  (points) => {
+    draftPolygonPoints.value = Array.isArray(points) ? points.map((p) => [p[0], p[1]]) : []
+    if (mapInstance && isPolygonMode.value) ensurePolygonObject()
+  },
+  { deep: true, immediate: true },
+)
 
 watch(
   [
@@ -196,13 +433,17 @@ watch(
     () => props.interactive,
     () => props.fitFieldMarkers,
     () => props.fieldMarkers,
+    () => props.geometryMode,
   ],
   () => {
     if (!mapInstance) return
+    attachMapEvents()
     syncFieldPlacemarks()
-    applyBoundsOrCenter()
-    if (!props.interactive) {
-      placeMark(props.lat, props.lon)
+    syncGeometryVisuals()
+    // Во время контурирования не двигаем/не масштабируем карту от внешних lat/lon,
+    // иначе кажется, что карта «прыгает» и мешает рисовать.
+    if (!(props.interactive && isPolygonMode.value && isPolygonDrawing.value)) {
+      applyBoundsOrCenter()
     }
   },
   { deep: true },
@@ -214,6 +455,12 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearFieldPlacemarks()
+  if (mapInstance && mapClickHandler) {
+    mapInstance.events.remove('click', mapClickHandler)
+  }
+  if (mapInstance && mapMouseMoveHandler) {
+    mapInstance.events.remove('mousemove', mapMouseMoveHandler)
+  }
   if (mapInstance) {
     try {
       mapInstance.destroy()
@@ -221,13 +468,29 @@ onBeforeUnmount(() => {
       /* noop */
     }
     mapInstance = null
-    placemark = null
   }
+  placemark = null
+  polygonObject = null
+  polylineObject = null
+  mapClickHandler = null
+  mapMouseMoveHandler = null
+  searchControl = null
 })
 </script>
 
 <template>
   <div class="ymap-wrapper">
+    <div v-if="interactive && geometryMode === 'polygon'" class="ymap-tools">
+      <button type="button" class="ymap-tool-btn" :class="{ 'ymap-tool-btn--active': isPolygonDrawing }" @click="startPolygonDrawing">
+        {{ isPolygonDrawing ? 'Контур: рисование…' : 'Начать контур' }}
+      </button>
+      <button type="button" class="ymap-tool-btn" :disabled="!isPolygonDrawing" @click="finishPolygonDrawing">
+        Завершить
+      </button>
+      <button type="button" class="ymap-tool-btn" :disabled="!draftPolygonPoints.length" @click="clearPolygonDrawing">
+        Очистить
+      </button>
+    </div>
     <div ref="mapEl" class="ymap-container" />
     <div v-if="interactive && overlayHint" class="ymap-hint">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -236,7 +499,12 @@ onBeforeUnmount(() => {
       </svg>
       <span class="ymap-hint-text">
         <template v-if="fieldMarkers.length">Зелёные метки — ваши поля. </template>
-        Нажмите на карту, чтобы выбрать точку наблюдения (красная метка).
+        <template v-if="geometryMode === 'polygon'">
+          Нажмите «Начать контур», затем кликайте по карте для вершин.
+        </template>
+        <template v-else>
+          Нажмите на карту, чтобы выбрать точку наблюдения (красная метка).
+        </template>
       </span>
     </div>
   </div>
@@ -246,7 +514,6 @@ onBeforeUnmount(() => {
 .ymap-wrapper {
   width: 100%;
   border-radius: 12px;
-  overflow: hidden;
   border: 1px solid var(--border-color);
   box-shadow: 0 2px 12px -4px rgba(0, 0, 0, 0.18);
   position: relative;
@@ -256,6 +523,36 @@ onBeforeUnmount(() => {
 .ymap-container {
   width: 100%;
   height: 400px;
+}
+
+.ymap-tools {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ymap-tool-btn {
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ymap-tool-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ymap-tool-btn--active {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
 }
 
 .ymap-hint {

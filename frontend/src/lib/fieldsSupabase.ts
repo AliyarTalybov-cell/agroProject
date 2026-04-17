@@ -10,6 +10,8 @@ export type FieldRow = {
   location_description: string | null
   extra_info: string | null
   geolocation: string | null
+  geometry_mode: 'point' | 'polygon'
+  contour_geojson: Record<string, unknown> | null
   land_type: string
   sowing_year: number | null
   responsible_id: string | null
@@ -32,30 +34,52 @@ export type FieldPhotoRow = {
 const FIELDS_TABLE = 'fields'
 const FIELD_PHOTOS_TABLE = 'field_photos'
 const STORAGE_BUCKET = 'field-schemes'
+const FIELDS_SELECT_BASE =
+  'id, number, name, area, cadastral_number, address, location_description, extra_info, geolocation, land_type, sowing_year, responsible_id, crop_key, scheme_file_url, created_at, updated_at'
+const FIELDS_SELECT_WITH_GEOMETRY = `${FIELDS_SELECT_BASE}, geometry_mode, contour_geojson`
+
+function isMissingGeometryColumnError(error: unknown): boolean {
+  const message = String((error as { message?: unknown })?.message ?? '')
+  return message.includes('geometry_mode') || message.includes('contour_geojson')
+}
+
+function normalizeFieldRow<T extends Record<string, unknown>>(row: T): FieldRow {
+  return {
+    ...(row as unknown as FieldRow),
+    geometry_mode: (row.geometry_mode as 'point' | 'polygon' | null) ?? 'point',
+    contour_geojson: (row.contour_geojson as Record<string, unknown> | null) ?? null,
+  }
+}
 
 export async function loadFields(): Promise<FieldRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from(FIELDS_TABLE)
-    .select(
-      'id, number, name, area, cadastral_number, address, location_description, extra_info, geolocation, land_type, sowing_year, responsible_id, crop_key, scheme_file_url, created_at, updated_at',
-    )
+    .select(FIELDS_SELECT_WITH_GEOMETRY)
     .order('number', { ascending: true })
-  if (error) throw error
-  return (data ?? []) as FieldRow[]
+  if (!error) return ((data ?? []) as Record<string, unknown>[]).map(normalizeFieldRow)
+  if (!isMissingGeometryColumnError(error)) throw error
+  const fallback = await supabase.from(FIELDS_TABLE).select(FIELDS_SELECT_BASE).order('number', { ascending: true })
+  if (fallback.error) throw fallback.error
+  return ((fallback.data ?? []) as Record<string, unknown>[]).map(normalizeFieldRow)
 }
 
 export async function getFieldById(id: string): Promise<FieldRow | null> {
   if (!supabase) return null
   const { data, error } = await supabase
     .from(FIELDS_TABLE)
-    .select(
-      'id, number, name, area, cadastral_number, address, location_description, extra_info, geolocation, land_type, sowing_year, responsible_id, crop_key, scheme_file_url, created_at, updated_at',
-    )
+    .select(FIELDS_SELECT_WITH_GEOMETRY)
     .eq('id', id)
     .maybeSingle()
-  if (error) throw error
-  return data as FieldRow | null
+  if (!error) return data ? normalizeFieldRow(data as Record<string, unknown>) : null
+  if (!isMissingGeometryColumnError(error)) throw error
+  const fallback = await supabase
+    .from(FIELDS_TABLE)
+    .select(FIELDS_SELECT_BASE)
+    .eq('id', id)
+    .maybeSingle()
+  if (fallback.error) throw fallback.error
+  return fallback.data ? normalizeFieldRow(fallback.data as Record<string, unknown>) : null
 }
 
 export async function addField(payload: {
@@ -67,6 +91,8 @@ export async function addField(payload: {
   location_description?: string | null
   extra_info?: string | null
   geolocation?: string | null
+  geometry_mode?: 'point' | 'polygon'
+  contour_geojson?: Record<string, unknown> | null
   land_type: string
   sowing_year?: number | null
   responsible_id?: string | null
@@ -75,28 +101,37 @@ export async function addField(payload: {
 }): Promise<FieldRow> {
   if (!supabase) throw new Error('Supabase не настроен')
   const now = new Date().toISOString()
+  const insertPayload = {
+    number: payload.number,
+    name: payload.name.trim(),
+    area: Number(payload.area),
+    cadastral_number: payload.cadastral_number?.trim() || null,
+    address: payload.address?.trim() || null,
+    location_description: payload.location_description?.trim() || null,
+    extra_info: payload.extra_info?.trim() || null,
+    geolocation: payload.geolocation?.trim() || null,
+    geometry_mode: payload.geometry_mode ?? 'point',
+    contour_geojson: payload.contour_geojson ?? null,
+    land_type: payload.land_type,
+    sowing_year: payload.sowing_year ?? null,
+    responsible_id: payload.responsible_id || null,
+    crop_key: payload.crop_key,
+    scheme_file_url: payload.scheme_file_url || null,
+    updated_at: now,
+  }
   const { data, error } = await supabase
     .from(FIELDS_TABLE)
-    .insert({
-      number: payload.number,
-      name: payload.name.trim(),
-      area: Number(payload.area),
-      cadastral_number: payload.cadastral_number?.trim() || null,
-      address: payload.address?.trim() || null,
-      location_description: payload.location_description?.trim() || null,
-      extra_info: payload.extra_info?.trim() || null,
-      geolocation: payload.geolocation?.trim() || null,
-      land_type: payload.land_type,
-      sowing_year: payload.sowing_year ?? null,
-      responsible_id: payload.responsible_id || null,
-      crop_key: payload.crop_key,
-      scheme_file_url: payload.scheme_file_url || null,
-      updated_at: now,
-    })
+    .insert(insertPayload)
     .select()
     .single()
-  if (error) throw error
-  return data as FieldRow
+  if (!error) return normalizeFieldRow(data as Record<string, unknown>)
+  if (!isMissingGeometryColumnError(error)) throw error
+  const fallbackInsert = { ...insertPayload } as Record<string, unknown>
+  delete fallbackInsert.geometry_mode
+  delete fallbackInsert.contour_geojson
+  const fallback = await supabase.from(FIELDS_TABLE).insert(fallbackInsert).select().single()
+  if (fallback.error) throw fallback.error
+  return normalizeFieldRow(fallback.data as Record<string, unknown>)
 }
 
 export async function updateField(
@@ -109,6 +144,8 @@ export async function updateField(
     location_description: string | null
     extra_info: string | null
     geolocation: string | null
+    geometry_mode: 'point' | 'polygon'
+    contour_geojson: Record<string, unknown> | null
     land_type: string
     sowing_year: number | null
     responsible_id: string | null
@@ -125,11 +162,18 @@ export async function updateField(
   if (payload.location_description !== undefined) updates.location_description = payload.location_description?.trim() || null
   if (payload.extra_info !== undefined) updates.extra_info = payload.extra_info?.trim() || null
   if (payload.geolocation !== undefined) updates.geolocation = payload.geolocation?.trim() || null
+  if (payload.geometry_mode !== undefined) updates.geometry_mode = payload.geometry_mode
+  if (payload.contour_geojson !== undefined) updates.contour_geojson = payload.contour_geojson ?? null
   if (payload.sowing_year !== undefined) updates.sowing_year = payload.sowing_year ?? null
   if (payload.responsible_id !== undefined) updates.responsible_id = payload.responsible_id || null
   if (payload.scheme_file_url !== undefined) updates.scheme_file_url = payload.scheme_file_url || null
   const { error } = await supabase.from(FIELDS_TABLE).update(updates).eq('id', id)
-  if (error) throw error
+  if (!error) return
+  if (!isMissingGeometryColumnError(error)) throw error
+  delete updates.geometry_mode
+  delete updates.contour_geojson
+  const fallback = await supabase.from(FIELDS_TABLE).update(updates).eq('id', id)
+  if (fallback.error) throw fallback.error
 }
 
 /** Загружает файл схемы в Storage и возвращает публичный URL. Бакет "field-schemes" должен быть создан в Dashboard и быть публичным. */

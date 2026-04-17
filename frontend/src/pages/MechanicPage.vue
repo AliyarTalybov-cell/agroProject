@@ -52,8 +52,8 @@ const workStartedAt = ref<string | null>(null)
 
 
 const timerStartISO = computed(() => {
-  if (active.value) return active.value.startISO
-  if (workStartedAt.value) return workStartedAt.value
+  if (active.value?.startISO) return active.value.startISO
+  if (activeOperation.value?.startISO) return activeOperation.value.startISO
   return null
 })
 
@@ -214,6 +214,18 @@ function refreshShiftHistory() {
   downtimeHistory.value = loadDowntimeEvents()
 }
 
+function toMs(iso: string | null | undefined): number {
+  if (!iso) return 0
+  const ms = new Date(iso).getTime()
+  return Number.isNaN(ms) ? 0 : ms
+}
+
+function lastFinishedActivityMs(): number {
+  const opMax = operationHistory.value.reduce((max, op) => Math.max(max, toMs(op.endISO)), 0)
+  const downMax = downtimeHistory.value.reduce((max, dt) => Math.max(max, toMs(dt.endISO)), 0)
+  return Math.max(opMax, downMax)
+}
+
 onMounted(async () => {
   refreshShiftHistory()
   const savedOp = loadActiveOperation()
@@ -224,7 +236,7 @@ onMounted(async () => {
     if (savedOp.fieldId) currentFieldId.value = savedOp.fieldId
   }
   timerInterval = setInterval(() => {
-    if (active.value || workStartedAt.value) timerTick.value += 1
+    if (active.value || activeOperation.value) timerTick.value += 1
   }, 1000)
   if (isSupabaseConfigured()) {
     try {
@@ -284,7 +296,10 @@ onMounted(async () => {
         try {
           const rows = await loadOperatorStatusesFromSupabase(true, uid)
           const row = rows[0]
-          if (row?.kind === 'operation') {
+          const staleByHistory = toMs(row?.started_at) > 0 && toMs(row?.started_at) <= lastFinishedActivityMs()
+          if (staleByHistory) {
+            void deleteOperatorStatus(uid)
+          } else if (row?.kind === 'operation') {
             const restored = {
               startISO: row.started_at,
               pausedAt: null,
@@ -372,6 +387,18 @@ onUnmounted(() => {
   if (timerInterval) clearInterval(timerInterval)
   window.removeEventListener('mousedown', onGlobalPointerDown)
 })
+
+watch(
+  activeOperation,
+  (op) => {
+    if (op?.startISO) {
+      if (workStartedAt.value !== op.startISO) workStartedAt.value = op.startISO
+      return
+    }
+    if (workStartedAt.value) workStartedAt.value = null
+  },
+  { immediate: true },
+)
 
 function onGlobalPointerDown(e: MouseEvent) {
   if (!isFieldsOpen.value) return
@@ -543,6 +570,22 @@ const pendingFieldArea = computed<number | null>(() => {
   return fields.value.find((f) => f.id === fieldId)?.area ?? null
 })
 
+const activeOperationFieldArea = computed<number | null>(() => {
+  const fieldId = activeOperation.value?.fieldId
+  if (!fieldId) return currentField.value?.area ?? null
+  return fields.value.find((f) => f.id === fieldId)?.area ?? currentField.value?.area ?? null
+})
+
+const finishProcessedHectaresMax = computed<number>(() => {
+  const planned = Number(activeOperation.value?.plannedHectares ?? 0)
+  if (Number.isFinite(planned) && planned > 0) return planned
+  const fieldArea = Number(activeOperationFieldArea.value ?? 0)
+  if (Number.isFinite(fieldArea) && fieldArea > 0) return fieldArea
+  const byProgress = Number(progressDone.value ?? 0)
+  if (Number.isFinite(byProgress) && byProgress > 0) return byProgress
+  return 1
+})
+
 function setDefaultPlannedHectares() {
   const area = pendingFieldArea.value
   if (Number.isFinite(area ?? NaN) && (area ?? 0) > 0) {
@@ -665,8 +708,9 @@ function openFinishNotesModal(type: 'downtime' | 'operation') {
   }
   if (type === 'operation') {
     const live = progressDone.value
-    const planned = Number(activeOperation.value?.plannedHectares ?? 0)
-    const initValue = Math.max(0, Math.min(planned || live, live || planned || 0))
+    const maxVal = finishProcessedHectaresMax.value
+    const initSource = live > 0 ? live : maxVal
+    const initValue = Math.max(0, Math.min(maxVal, initSource))
     finishProcessedHectares.value = Math.round(initValue * 10) / 10
   }
   finishNotesModalOpen.value = true
@@ -685,8 +729,11 @@ function confirmFinishNotes(notes: string | null) {
   const notesVal = notes?.trim() || undefined
   const fuelLeft =
     type === 'operation' && activeOperation.value?.equipmentId ? equipmentFuelLeftPercent.value : undefined
+  const processedMax = finishProcessedHectaresMax.value
   const processed =
-    type === 'operation' ? Math.max(0, Math.round(Number(finishProcessedHectares.value || 0) * 10) / 10) : undefined
+    type === 'operation'
+      ? Math.max(0, Math.min(processedMax, Math.round(Number(finishProcessedHectares.value || 0) * 10) / 10))
+      : undefined
   closeFinishNotesModal()
   if (type === 'downtime') {
     stopDowntimeWithNotes(notesVal)
@@ -1999,7 +2046,7 @@ function addField() {
                 v-model.number="finishProcessedHectares"
                 type="range"
                 min="0"
-                :max="activeOperation?.plannedHectares && activeOperation.plannedHectares > 0 ? activeOperation.plannedHectares : 1"
+                :max="finishProcessedHectaresMax"
                 step="0.1"
                 class="equipment-range"
               />
@@ -3219,20 +3266,14 @@ function addField() {
 
 .checkbox-text {
   transition: all 0.3s ease;
-  position: relative;
   font-size: 0.9rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .checkbox-text::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 0;
-  height: 2px;
-  background: var(--text-secondary);
-  transition: width 0.4s ease;
-  transform: translateY(-50%);
+  content: none;
 }
 
 .checkbox-label:hover .checkbox-box {
@@ -3265,10 +3306,13 @@ function addField() {
 
 .task-checkbox:checked + .checkbox-label .checkbox-text {
   color: var(--text-secondary);
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
 }
 
 .task-checkbox:checked + .checkbox-label .checkbox-text::after {
-  width: 100%;
+  content: none;
 }
 
 .checkbox-label:active .checkbox-box {
