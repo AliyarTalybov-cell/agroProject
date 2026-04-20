@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getAuthUser } from '@/stores/auth'
 import { createNewsPost, getNewsPostById, isSupabaseConfigured, updateNewsPost, uploadNewsImage } from '@/lib/newsSupabase'
+import { hasMeaningfulNewsContent, normalizeNewsContentToHtml, sanitizeNewsHtml } from '@/lib/newsContent'
 
 const route = useRoute()
 const router = useRouter()
@@ -14,7 +15,14 @@ const saving = ref(false)
 const publishing = ref(false)
 const uploadingCover = ref(false)
 const uploadingGallery = ref(false)
+const uploadingBodyImage = ref(false)
 const error = ref<string | null>(null)
+const contentEditor = ref<HTMLDivElement | null>(null)
+const bodyImageInput = ref<HTMLInputElement | null>(null)
+const showHtmlInsertPanel = ref(false)
+const htmlInsertDraft = ref('')
+const selectedImage = ref<HTMLImageElement | null>(null)
+const defaultImageSize = ref<'100' | '75' | '50'>('100')
 
 const form = ref({
   title: '',
@@ -27,6 +35,7 @@ const form = ref({
 })
 
 const pageTitle = computed(() => (isEdit.value ? 'Редактирование новости' : 'Новая новость'))
+const hasSelectedImage = computed(() => Boolean(selectedImage.value))
 
 function nowLocalDateTime(): string {
   const d = new Date()
@@ -41,6 +50,7 @@ function parseGallery(value: string): string[] {
 async function loadData() {
   if (!isEdit.value || !isSupabaseConfigured()) {
     form.value.publishedAt = nowLocalDateTime()
+    form.value.content = ''
     return
   }
   loading.value = true
@@ -57,9 +67,11 @@ async function loadData() {
       coverExcerptPosition: row.cover_excerpt_position ?? 'left-bottom',
       coverImageUrl: row.cover_image_url ?? '',
       publishedAt: row.published_at.slice(0, 16),
-      content: row.content,
+      content: normalizeNewsContentToHtml(row.content),
       galleryText: (row.gallery_urls ?? []).join('\n'),
     }
+    await nextTick()
+    syncEditorContent()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Не удалось загрузить новость'
   } finally {
@@ -88,7 +100,11 @@ async function persistPost(publishNow: boolean) {
     error.value = 'Supabase не настроен'
     return
   }
-  if (!form.value.title.trim() || !form.value.content.trim()) {
+  syncFormContentFromEditor()
+  const editorText = (contentEditor.value?.innerText || '').replace(/\u00a0/g, ' ').trim()
+  const editorHasMedia = Boolean(contentEditor.value?.querySelector('img, hr'))
+  const hasBodyContent = editorText.length > 0 || editorHasMedia || hasMeaningfulNewsContent(form.value.content)
+  if (!form.value.title.trim() || !hasBodyContent) {
     error.value = 'Заполните заголовок и основной текст'
     return
   }
@@ -106,7 +122,7 @@ async function persistPost(publishNow: boolean) {
         excerpt: form.value.excerpt || null,
         cover_excerpt_position: form.value.coverExcerptPosition,
         cover_image_url: form.value.coverImageUrl || null,
-        content: form.value.content,
+        content: sanitizeNewsHtml(form.value.content),
         gallery_urls: galleryUrls,
         published_at: publishedIso,
       })
@@ -119,7 +135,7 @@ async function persistPost(publishNow: boolean) {
         excerpt: form.value.excerpt || null,
         cover_excerpt_position: form.value.coverExcerptPosition,
         cover_image_url: form.value.coverImageUrl || null,
-        content: form.value.content,
+        content: sanitizeNewsHtml(form.value.content),
         gallery_urls: galleryUrls,
         published_at: publishedIso,
         created_by: createdBy,
@@ -173,7 +189,117 @@ async function onGalleryFilesPick(event: Event) {
   }
 }
 
-onMounted(() => void loadData())
+function syncEditorContent() {
+  if (!contentEditor.value) return
+  const safeHtml = normalizeNewsContentToHtml(form.value.content)
+  contentEditor.value.innerHTML = safeHtml
+  form.value.content = safeHtml
+}
+
+function syncFormContentFromEditor(rewriteEditor = true) {
+  if (!contentEditor.value) return
+  const safeHtml = sanitizeNewsHtml(contentEditor.value.innerHTML)
+  if (rewriteEditor) contentEditor.value.innerHTML = safeHtml
+  form.value.content = safeHtml
+}
+
+function onContentInput() {
+  if (!contentEditor.value) return
+  form.value.content = contentEditor.value.innerHTML
+}
+
+function onContentPaste() {
+  window.setTimeout(() => {
+    if (!contentEditor.value) return
+    form.value.content = contentEditor.value.innerHTML
+  }, 0)
+}
+
+function applyTextStyle(command: 'bold' | 'italic' | 'insertUnorderedList' | 'formatBlock') {
+  contentEditor.value?.focus()
+  if (command === 'formatBlock') {
+    document.execCommand(command, false, 'blockquote')
+  } else {
+    document.execCommand(command, false)
+  }
+  syncFormContentFromEditor()
+}
+
+function triggerBodyImagePicker() {
+  bodyImageInput.value?.click()
+}
+
+function insertHtmlAtCursor(html: string) {
+  const selection = window.getSelection()
+  if (!selection || !selection.rangeCount || !contentEditor.value) {
+    contentEditor.value?.insertAdjacentHTML('beforeend', html)
+    return
+  }
+  const range = selection.getRangeAt(0)
+  range.deleteContents()
+  const fragment = range.createContextualFragment(html)
+  range.insertNode(fragment)
+  selection.collapseToEnd()
+}
+
+async function onBodyImagePick(event: Event) {
+  const target = event.target as HTMLInputElement | null
+  const file = target?.files?.[0]
+  if (!file || !isSupabaseConfigured()) return
+  uploadingBodyImage.value = true
+  error.value = null
+  try {
+    const url = await uploadNewsImage(file, 'content')
+    insertHtmlAtCursor(`<p><img src="${url}" alt="Изображение новости" data-size="${defaultImageSize.value}"></p>`)
+    syncFormContentFromEditor()
+    const images = contentEditor.value?.querySelectorAll('img')
+    if (images && images.length > 0) {
+      selectedImage.value = images[images.length - 1] as HTMLImageElement
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Не удалось загрузить фото в текст новости'
+  } finally {
+    uploadingBodyImage.value = false
+    if (target) target.value = ''
+  }
+}
+
+function toggleHtmlInsertPanel() {
+  showHtmlInsertPanel.value = !showHtmlInsertPanel.value
+  if (showHtmlInsertPanel.value) htmlInsertDraft.value = ''
+}
+
+function insertHtmlContent() {
+  const sanitizedHtml = sanitizeNewsHtml(htmlInsertDraft.value)
+  if (!sanitizedHtml) return
+  contentEditor.value?.focus()
+  insertHtmlAtCursor(sanitizedHtml)
+  syncFormContentFromEditor()
+  htmlInsertDraft.value = ''
+  showHtmlInsertPanel.value = false
+}
+
+function onEditorClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  if (!target || target.tagName !== 'IMG') return
+  selectedImage.value = target as HTMLImageElement
+}
+
+function setSelectedImageSize(size: '100' | '75' | '50') {
+  defaultImageSize.value = size
+  const activeImage = selectedImage.value && selectedImage.value.isConnected
+    ? selectedImage.value
+    : contentEditor.value?.querySelector('img:last-of-type') ?? null
+  if (!activeImage) return
+  activeImage.setAttribute('data-size', size)
+  selectedImage.value = activeImage as HTMLImageElement
+  syncFormContentFromEditor()
+}
+
+onMounted(async () => {
+  await loadData()
+  syncEditorContent()
+})
 </script>
 
 <template>
@@ -184,7 +310,7 @@ onMounted(() => void loadData())
     </header>
 
     <p class="news-editor-hint">
-      Заполните шаблон: добавьте фото (URL), заголовок, подзаголовок и текстовые блоки.
+      Вставляйте текст прямо из источника: базовое форматирование сохранится. Фото можно добавить в обложку, галерею и в основной текст.
     </p>
     <p v-if="error" class="news-editor-error">{{ error }}</p>
 
@@ -226,10 +352,69 @@ onMounted(() => void loadData())
         </label>
       </div>
 
-      <label class="news-field">
+      <div class="news-field">
         <span>Основной текст новости</span>
-        <textarea v-model="form.content" rows="14" placeholder="Пишите текст блоками, разделяя абзацы пустой строкой. Для цитаты можно начать блок с «...»."></textarea>
-      </label>
+        <div class="news-editor-toolbar">
+          <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="applyTextStyle('bold')">
+            Ж
+          </button>
+          <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="applyTextStyle('italic')">
+            К
+          </button>
+          <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="applyTextStyle('insertUnorderedList')">
+            • Список
+          </button>
+          <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="applyTextStyle('formatBlock')">
+            Цитата
+          </button>
+          <button type="button" class="news-toolbar-btn" :disabled="uploadingBodyImage || saving || publishing || loading" @click="triggerBodyImagePicker">
+            {{ uploadingBodyImage ? 'Загрузка фото...' : 'Фото в текст' }}
+          </button>
+          <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="toggleHtmlInsertPanel">
+            Вставить HTML контент
+          </button>
+          <input ref="bodyImageInput" type="file" accept="image/*" class="news-hidden-input" :disabled="uploadingBodyImage || saving || publishing || loading" @change="onBodyImagePick" />
+        </div>
+        <div v-if="showHtmlInsertPanel" class="news-html-insert-panel">
+          <textarea
+            v-model="htmlInsertDraft"
+            class="news-html-insert-textarea"
+            rows="6"
+            placeholder="<h2>Заголовок</h2><p>Текст...</p><img src='https://...'>"
+          ></textarea>
+          <div class="news-html-insert-actions">
+            <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="insertHtmlContent">
+              Вставить HTML
+            </button>
+            <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="toggleHtmlInsertPanel">
+              Закрыть
+            </button>
+          </div>
+        </div>
+        <div class="news-image-size-row">
+          <span>{{ hasSelectedImage ? 'Размер выбранного фото:' : 'Размер нового фото:' }}</span>
+          <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="setSelectedImageSize('100')">
+            100%
+          </button>
+          <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="setSelectedImageSize('75')">
+            75%
+          </button>
+          <button type="button" class="news-toolbar-btn" :disabled="saving || publishing || loading" @click="setSelectedImageSize('50')">
+            50%
+          </button>
+        </div>
+        <div
+          ref="contentEditor"
+          class="news-rich-editor"
+          contenteditable="true"
+          role="textbox"
+          aria-multiline="true"
+          data-placeholder="Вставьте текст новости — форматирование, заголовки, списки и абзацы сохранятся приблизительно как в источнике."
+          @input="onContentInput"
+          @paste="onContentPaste"
+          @click="onEditorClick"
+        ></div>
+      </div>
 
       <label class="news-field">
         <span>Галерея (по одному URL на строку)</span>
@@ -346,6 +531,116 @@ onMounted(() => void loadData())
   min-height: 140px;
   line-height: 1.45;
 }
+.news-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.news-toolbar-btn {
+  height: 32px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text-primary);
+  padding: 0 10px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.16s ease;
+}
+.news-toolbar-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: var(--bg-panel-hover);
+  border-color: color-mix(in srgb, var(--accent-green) 38%, var(--border-color));
+}
+.news-toolbar-btn:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+.news-hidden-input {
+  display: none;
+}
+.news-html-insert-panel {
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.news-html-insert-textarea,
+.news-html-editor {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
+  color: var(--text-primary);
+  background: #fff;
+  line-height: 1.45;
+}
+.news-html-insert-actions,
+.news-image-size-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.news-image-size-row > span {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+.news-rich-editor {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9375rem;
+  font-weight: 400;
+  color: var(--text-primary);
+  background: #fff;
+  min-height: 220px;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.2s ease;
+}
+.news-rich-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-secondary);
+}
+.news-rich-editor:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent-green) 58%, var(--border-color));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 18%, transparent);
+}
+.news-rich-editor :deep(p) {
+  margin: 0 0 0.8rem;
+}
+.news-rich-editor :deep(blockquote) {
+  margin: 0 0 0.8rem;
+  padding: 0.6rem 0.8rem;
+  border-left: 3px solid var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 8%, transparent);
+  border-radius: 8px;
+}
+.news-rich-editor :deep(img) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.4rem 0 0.8rem;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.news-rich-editor :deep(img[data-size='100']) {
+  width: 100%;
+}
+.news-rich-editor :deep(img[data-size='75']) {
+  width: 75%;
+}
+.news-rich-editor :deep(img[data-size='50']) {
+  width: 50%;
+}
 .news-select {
   appearance: none;
   background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%), linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
@@ -418,6 +713,9 @@ onMounted(() => void loadData())
 [data-theme='dark'] .news-editor-form,
 [data-theme='dark'] .news-field input,
 [data-theme='dark'] .news-field textarea,
+[data-theme='dark'] .news-html-insert-textarea,
+[data-theme='dark'] .news-rich-editor,
+[data-theme='dark'] .news-toolbar-btn,
 [data-theme='dark'] .news-select,
 [data-theme='dark'] .news-upload-btn,
 [data-theme='dark'] .news-editor-btn--ghost,

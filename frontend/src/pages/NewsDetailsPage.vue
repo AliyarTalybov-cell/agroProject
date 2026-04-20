@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '@/stores/auth'
 import { deleteNewsPost, getNewsPostById, isSupabaseConfigured, type NewsPostRow } from '@/lib/newsSupabase'
+import { normalizeNewsContentToHtml } from '@/lib/newsContent'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const route = useRoute()
@@ -25,14 +26,7 @@ function formatDate(dateIso: string): string {
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.')
 }
 
-const textBlocks = computed(() => {
-  const raw = post.value?.content || ''
-  return raw.split(/\n{2,}/).map((x) => x.trim()).filter(Boolean)
-})
-
-function isQuoteBlock(block: string): boolean {
-  return block.startsWith('«') || block.startsWith('"')
-}
+const renderedBodyHtml = computed(() => normalizeNewsContentToHtml(post.value?.content || ''))
 
 const galleryImages = computed(() => post.value?.gallery_urls ?? [])
 const hasGalleryPager = computed(() => galleryImages.value.length > GALLERY_VISIBLE_COUNT)
@@ -160,12 +154,7 @@ onMounted(() => void loadData())
           <p class="news-cover-caption">{{ post.excerpt }}</p>
         </div>
       </div>
-      <div class="news-body">
-        <template v-for="(block, idx) in textBlocks" :key="idx">
-          <blockquote v-if="isQuoteBlock(block)" class="news-quote">{{ block }}</blockquote>
-          <p v-else class="news-paragraph">{{ block }}</p>
-        </template>
-      </div>
+      <div class="news-body news-rich-content" v-html="renderedBodyHtml" />
       <div v-if="galleryImages.length" class="news-gallery-wrap">
         <button
           v-if="hasGalleryPager"
@@ -295,8 +284,19 @@ onMounted(() => void loadData())
   text-shadow:0 2px 10px rgba(0,0,0,.4);
 }
 .news-body { display:flex; flex-direction:column; gap:.8rem; }
-.news-paragraph { margin:0; font-size:1.1rem; line-height:1.45; color:#1f2937; overflow-wrap:anywhere; }
-.news-quote { margin:0; padding:.8rem 1rem; border-left:4px solid var(--agro); background:rgba(24,100,58,.06); border-radius:10px; color:#2f3a34; font-style:italic; font-size:1.12rem; line-height:1.45; }
+.news-rich-content :deep(p) { margin:0 0 .9rem; font-size:1.1rem; line-height:1.45; color:#1f2937; overflow-wrap:anywhere; }
+.news-rich-content :deep(h2),
+.news-rich-content :deep(h3),
+.news-rich-content :deep(h4) { margin:.4rem 0 .7rem; line-height:1.3; color:#111827; }
+.news-rich-content :deep(ul),
+.news-rich-content :deep(ol) { margin:.2rem 0 .9rem; padding-left:1.25rem; }
+.news-rich-content :deep(li) { margin:.2rem 0; color:#1f2937; line-height:1.45; }
+.news-rich-content :deep(blockquote) { margin:0 0 .9rem; padding:.8rem 1rem; border-left:4px solid var(--agro); background:rgba(24,100,58,.06); border-radius:10px; color:#2f3a34; font-style:italic; font-size:1.12rem; line-height:1.45; }
+.news-rich-content :deep(img) { display:block; width:auto; max-width:100%; height:auto; margin:.35rem 0 .95rem; border-radius:12px; object-fit:cover; background:#eef2ef; }
+.news-rich-content :deep(img[data-size='100']) { width:100%; }
+.news-rich-content :deep(img[data-size='75']) { width:75%; }
+.news-rich-content :deep(img[data-size='50']) { width:50%; }
+.news-rich-content :deep(a) { color:var(--agro); text-decoration:underline; }
 .news-gallery-wrap { position:relative; display:flex; flex-direction:column; gap:.6rem; }
 .news-gallery { display:grid; gap:.75rem; grid-template-columns:repeat(4,minmax(0,1fr)); }
 .news-gallery.is-shifting-left .news-gallery-item-btn {
@@ -390,12 +390,17 @@ onMounted(() => void loadData())
   border-color: var(--border-color);
 }
 [data-theme='dark'] .news-title { color: var(--text-primary); }
-[data-theme='dark'] .news-paragraph { color: var(--text-primary); }
-[data-theme='dark'] .news-quote {
+[data-theme='dark'] .news-rich-content :deep(p),
+[data-theme='dark'] .news-rich-content :deep(li),
+[data-theme='dark'] .news-rich-content :deep(h2),
+[data-theme='dark'] .news-rich-content :deep(h3),
+[data-theme='dark'] .news-rich-content :deep(h4) { color: var(--text-primary); }
+[data-theme='dark'] .news-rich-content :deep(blockquote) {
   color: var(--text-primary);
   background: rgba(61,92,64,.18);
   border-left-color: var(--accent-green);
 }
+[data-theme='dark'] .news-rich-content :deep(a) { color: #86efac; }
 [data-theme='dark'] .news-gallery-img { border-color: var(--border-color); }
 [data-theme='dark'] .news-gallery-arrow {
   background: rgba(30,41,59,.9);
@@ -406,7 +411,8 @@ onMounted(() => void loadData())
   .news-article { padding: .95rem; }
   .news-title { font-size:1.65rem; }
   .news-cover-caption { font-size:1.7rem; max-width:85%; }
-  .news-paragraph, .news-quote { font-size:1.02rem; }
+  .news-rich-content :deep(p),
+  .news-rich-content :deep(blockquote) { font-size:1.02rem; }
 }
 @media (max-width:1100px) {
   .news-gallery { grid-template-columns:repeat(2,minmax(0,1fr)); gap:.6rem; }
@@ -427,7 +433,8 @@ onMounted(() => void loadData())
   .news-date { font-size:.86rem; }
   .news-cover-overlay { padding:.9rem 1rem; }
   .news-cover-caption { font-size:1.2rem; max-width:100%; line-height:1.18; }
-  .news-paragraph,.news-quote { font-size:.95rem; line-height:1.4; }
+  .news-rich-content :deep(p),
+  .news-rich-content :deep(blockquote) { font-size:.95rem; line-height:1.4; }
   .news-gallery { grid-template-columns:1fr; gap:.5rem; }
   .news-gallery-arrow { width:32px; height:32px; }
   .news-gallery-arrow--prev { left:.25rem; }
