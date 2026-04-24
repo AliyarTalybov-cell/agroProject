@@ -235,7 +235,13 @@ watch(
                   </RouterLink>
                 </li>
                 <li>
-                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': meliorationNavActive }" :to="{ path: '/lands', query: { tab: 'melioration' } }">
+                  <RouterLink
+                    class="nav-item nav-item--sub"
+                    :class="{ 'router-link-active': meliorationNavActive }"
+                    active-class=""
+                    exact-active-class=""
+                    :to="{ path: '/lands', query: { tab: 'melioration' } }"
+                  >
                     <span class="nav-item-icon" aria-hidden="true">
                       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M7 21v-7a3 3 0 0 1 3-3h4a3 3 0 0 1 3 3v7"/><path d="M12 11V3"/><path d="m8 7 4-4 4 4"/></svg>
                     </span>
@@ -364,7 +370,13 @@ watch(
               </button>
               <ul class="nav-submenu">
                 <li>
-                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': referencesNavActive }" :to="{ path: '/lands', query: { tab: 'rights-refs' } }">
+                  <RouterLink
+                    class="nav-item nav-item--sub"
+                    :class="{ 'router-link-active': referencesNavActive }"
+                    active-class=""
+                    exact-active-class=""
+                    :to="{ path: '/lands', query: { tab: 'rights-refs' } }"
+                  >
                     <span class="nav-item-icon" aria-hidden="true">
                       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12h6"/><path d="M12 9v6"/><path d="M4 5h16"/><path d="M4 12h16"/><path d="M4 19h16"/></svg>
                     </span>

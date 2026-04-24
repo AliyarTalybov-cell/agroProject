@@ -1366,12 +1366,13 @@ function formatRefDate(iso: string) {
   return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-type PageTab = 'fields' | 'downtime-reasons' | 'work-operations'
+type PageTab = 'fields' | 'downtime-reasons' | 'work-operations' | 'crops'
 const activeTab = ref<PageTab>('fields')
 const TABS: { id: PageTab; label: string }[] = [
   { id: 'fields', label: 'Управление полями' },
   { id: 'downtime-reasons', label: 'Причины простоя' },
   { id: 'work-operations', label: 'Операции для работы' },
+  { id: 'crops', label: 'Культуры' },
 ]
 const ROUTE_TAB_MAP: Record<string, PageTab> = {
   fields: 'fields',

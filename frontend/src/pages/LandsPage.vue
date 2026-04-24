@@ -6,6 +6,7 @@ import { jsPDF } from 'jspdf'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import YandexMap from '@/components/YandexMap.vue'
+import type { MapFieldMarker } from '@/components/YandexMap.vue'
 import { resolveYandexAddressCandidates, resolveYandexAddressLine } from '@/lib/yandexGeocode'
 import {
   addCropByLabel,
@@ -324,12 +325,12 @@ const detailsMapLat = computed(() => selectedLand.value?.center_lat ?? mapLat.va
 const detailsMapLon = computed(() => selectedLand.value?.center_lon ?? mapLon.value)
 const assignedFields = computed(() => fields.value.filter((f) => f.land_id === selectedLandId.value))
 const unassignedFields = computed(() => fields.value.filter((f) => !f.land_id || f.land_id !== selectedLandId.value))
-const assignedFieldMapMarkers = computed(() => assignedFields.value
-  .map((f) => {
+const assignedFieldMapMarkers = computed<MapFieldMarker[]>(() => assignedFields.value
+  .reduce<MapFieldMarker[]>((markers, f) => {
     const polygonPoints = fromPolygonGeoJson(f.contour_geojson as Record<string, unknown> | null)
     if (polygonPoints.length >= 3) {
       const center = polygonCenterFromPoints(polygonPoints)
-      return {
+      markers.push({
         id: f.id,
         lat: center?.lat ?? detailsMapLat.value,
         lon: center?.lon ?? detailsMapLon.value,
@@ -337,20 +338,21 @@ const assignedFieldMapMarkers = computed(() => assignedFields.value
         subtitle: f.cadastral_number ?? '',
         geometryMode: 'polygon' as const,
         polygonPoints,
-      }
+      })
+      return markers
     }
     const geo = parseGeolocationString(f.geolocation ?? '')
-    if (!geo) return null
-    return {
+    if (!geo) return markers
+    markers.push({
       id: f.id,
       lat: geo.lat,
       lon: geo.lon,
       title: `Поле №${f.number} ${f.name}`,
       subtitle: f.cadastral_number ?? '',
       geometryMode: 'point' as const,
-    }
-  })
-  .filter((m): m is { id: string; lat: number; lon: number; title: string; subtitle: string; geometryMode: 'point' | 'polygon'; polygonPoints?: LatLon[] } => Boolean(m)))
+    })
+    return markers
+  }, []))
 const cropRotationFieldMap = computed(() => new Map(fields.value.map((f) => [f.id, f])))
 const cropLabelMap = computed(() => new Map(crops.value.map((c) => [c.key, c.label])))
 const meliorationEntriesByTab = computed(() => {
@@ -2051,7 +2053,8 @@ function openMeliorationEditModal(entry: LandMeliorationEntryRow) {
   meliorationModalOpen.value = true
 }
 
-function closeMeliorationModal(force = false) {
+function closeMeliorationModal(forceOrEvent?: boolean | PointerEvent) {
+  const force = typeof forceOrEvent === 'boolean' ? forceOrEvent : false
   if (!force && saving.value) return
   meliorationModalOpen.value = false
   editingMeliorationId.value = null
