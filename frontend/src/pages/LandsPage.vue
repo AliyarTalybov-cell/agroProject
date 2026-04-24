@@ -209,7 +209,11 @@ const meliorationForm = ref({
 const deleteConfirmOpen = ref(false)
 const deleteConfirmTitle = ref('')
 const deleteConfirmText = ref('')
-const deleteTarget = ref<{ type: 'crop-rotation' | 'real-estate' | 'land-type' | 'land-category' | 'land-usage' | 'crop-ref' | 'melioration'; id: string } | null>(null)
+const deleteTarget = ref<{
+  type: 'crop-rotation' | 'real-estate' | 'land-type' | 'land-category' | 'land-usage' | 'crop-ref' | 'melioration'
+    | 'ownership-form' | 'right-type' | 'right-document-type' | 'holder-type' | 'right-holder'
+  id: string
+} | null>(null)
 const successModalOpen = ref(false)
 const successModalText = ref('')
 const realEstateForm = ref({
@@ -933,9 +937,16 @@ function onAddressCandidateChange() {
   tryFillRegionFromAddress(selectedAddressCandidate.value)
 }
 
+function ensureRefsSupabaseConfigured(): boolean {
+  if (isSupabaseConfigured()) return true
+  refsError.value = 'Справочники недоступны: подключите Supabase (проверьте VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY).'
+  return false
+}
+
 async function addLandType() {
   const name = newLandTypeName.value.trim()
-  if (!name || !isSupabaseConfigured()) return
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
   refsLoading.value = true
   refsError.value = null
   try {
@@ -951,7 +962,8 @@ async function addLandType() {
 
 async function addLandCategory() {
   const name = newLandCategoryName.value.trim()
-  if (!name || !isSupabaseConfigured()) return
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
   refsLoading.value = true
   refsError.value = null
   try {
@@ -1025,7 +1037,8 @@ async function editLandCategory(row: { id: string; name: string }) {
 
 async function addLandActualUseOption() {
   const name = newLandActualUseOptionName.value.trim()
-  if (!name || !isSupabaseConfigured()) return
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
   refsLoading.value = true
   refsError.value = null
   try {
@@ -1070,7 +1083,8 @@ async function editLandUsageOption(row: { id: string; name: string }) {
 
 async function addCropRef() {
   const label = newCropLabel.value.trim()
-  if (!label || !isSupabaseConfigured()) return
+  if (!label) return
+  if (!ensureRefsSupabaseConfigured()) return
   refsLoading.value = true
   refsError.value = null
   try {
@@ -1115,7 +1129,8 @@ async function removeCropRef(id: string) {
 
 async function addOwnershipForm() {
   const name = newOwnershipFormName.value.trim()
-  if (!name || !isSupabaseConfigured()) return
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
   refsLoading.value = true
   refsError.value = null
   try {
@@ -1160,7 +1175,8 @@ async function editOwnershipForm(row: LandRightRefRow) {
 
 async function addRightTypeRef() {
   const name = newRightTypeName.value.trim()
-  if (!name || !isSupabaseConfigured()) return
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
   refsLoading.value = true
   refsError.value = null
   try {
@@ -1205,7 +1221,8 @@ async function editRightTypeRef(row: LandRightRefRow) {
 
 async function addRightDocumentTypeRef() {
   const name = newRightDocumentTypeName.value.trim()
-  if (!name || !isSupabaseConfigured()) return
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
   refsLoading.value = true
   refsError.value = null
   try {
@@ -1250,7 +1267,8 @@ async function editRightDocumentTypeRef(row: LandRightRefRow) {
 
 async function addHolderTypeRef() {
   const name = newHolderTypeName.value.trim()
-  if (!name || !isSupabaseConfigured()) return
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
   refsLoading.value = true
   refsError.value = null
   try {
@@ -1295,7 +1313,8 @@ async function editHolderTypeRef(row: LandRightRefRow) {
 
 async function addRightHolderRef() {
   const name = newHolderName.value.trim()
-  if (!name || !isSupabaseConfigured()) return
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
   refsLoading.value = true
   refsError.value = null
   try {
@@ -1964,6 +1983,41 @@ function requestDeleteMelioration(id: string) {
   deleteConfirmOpen.value = true
 }
 
+function requestDeleteOwnershipForm(id: string) {
+  deleteTarget.value = { type: 'ownership-form', id }
+  deleteConfirmTitle.value = 'Удаление формы собственности'
+  deleteConfirmText.value = 'Форма собственности будет удалена из справочника.'
+  deleteConfirmOpen.value = true
+}
+
+function requestDeleteRightType(id: string) {
+  deleteTarget.value = { type: 'right-type', id }
+  deleteConfirmTitle.value = 'Удаление вида права'
+  deleteConfirmText.value = 'Вид права будет удален из справочника.'
+  deleteConfirmOpen.value = true
+}
+
+function requestDeleteRightDocumentType(id: string) {
+  deleteTarget.value = { type: 'right-document-type', id }
+  deleteConfirmTitle.value = 'Удаление типа документа'
+  deleteConfirmText.value = 'Тип подтверждающего документа будет удален из справочника.'
+  deleteConfirmOpen.value = true
+}
+
+function requestDeleteHolderType(id: string) {
+  deleteTarget.value = { type: 'holder-type', id }
+  deleteConfirmTitle.value = 'Удаление вида правообладания'
+  deleteConfirmText.value = 'Вид правообладания будет удален из справочника.'
+  deleteConfirmOpen.value = true
+}
+
+function requestDeleteRightHolder(id: string) {
+  deleteTarget.value = { type: 'right-holder', id }
+  deleteConfirmTitle.value = 'Удаление правообладателя'
+  deleteConfirmText.value = 'Правообладатель будет удален из справочника.'
+  deleteConfirmOpen.value = true
+}
+
 function closeDeleteConfirm() {
   if (saving.value || refsLoading.value) return
   deleteConfirmOpen.value = false
@@ -2223,6 +2277,16 @@ async function confirmDeleteTarget() {
     const id = deleteTarget.value.id
     await deleteLandMeliorationEntry(id)
     landMeliorationEntries.value = landMeliorationEntries.value.filter((x) => x.id !== id)
+  } else if (deleteTarget.value.type === 'ownership-form') {
+    await removeOwnershipForm(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'right-type') {
+    await removeRightTypeRef(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'right-document-type') {
+    await removeRightDocumentTypeRef(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'holder-type') {
+    await removeHolderTypeRef(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'right-holder') {
+    await removeRightHolderRef(deleteTarget.value.id)
   } else {
     await removeCropRef(deleteTarget.value.id)
   }
@@ -2692,7 +2756,7 @@ onMounted(() => void reloadAll())
                   <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editOwnershipForm(row)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                   </button>
-                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="removeOwnershipForm(row.id)" />
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteOwnershipForm(row.id)" />
                 </div>
               </div>
             </div>
@@ -2711,7 +2775,7 @@ onMounted(() => void reloadAll())
                   <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editRightTypeRef(row)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                   </button>
-                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="removeRightTypeRef(row.id)" />
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteRightType(row.id)" />
                 </div>
               </div>
             </div>
@@ -2730,7 +2794,7 @@ onMounted(() => void reloadAll())
                   <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editRightDocumentTypeRef(row)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                   </button>
-                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="removeRightDocumentTypeRef(row.id)" />
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteRightDocumentType(row.id)" />
                 </div>
               </div>
             </div>
@@ -2749,7 +2813,7 @@ onMounted(() => void reloadAll())
                   <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editHolderTypeRef(row)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                   </button>
-                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="removeHolderTypeRef(row.id)" />
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteHolderType(row.id)" />
                 </div>
               </div>
             </div>
@@ -2791,7 +2855,7 @@ onMounted(() => void reloadAll())
                   <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editRightHolderRef(row)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                   </button>
-                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="removeRightHolderRef(row.id)" />
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteRightHolder(row.id)" />
                 </div>
               </div>
             </div>
