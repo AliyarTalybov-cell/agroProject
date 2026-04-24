@@ -14,6 +14,7 @@ import {
 } from '@/lib/fieldsSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { loadCrops, loadLandTypes, type CropRow, type LandTypeRow } from '@/lib/landTypesAndCrops'
+import { loadLands, type LandRow } from '@/lib/landsSupabase'
 import { loadOperationsByFieldFromSupabase, type FieldOperationHistoryRow } from '@/lib/analyticsSupabase'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
@@ -32,6 +33,7 @@ const error = ref<string | null>(null)
 const profiles = ref<ProfileRow[]>([])
 const crops = ref<CropRow[]>([])
 const landTypes = ref<LandTypeRow[]>([])
+const lands = ref<LandRow[]>([])
 const photoUploading = ref(false)
 const photoFileInput = ref<HTMLInputElement | null>(null)
 const schemeFileInput = ref<HTMLInputElement | null>(null)
@@ -182,6 +184,31 @@ const fieldEditPolygonCenter = computed(() => polygonCenter(fieldEditPolygonPoin
 const fieldEditMapCenter = computed(() => {
   if (editForm.value.geometry_mode === 'polygon' && fieldEditPolygonCenter.value) return fieldEditPolygonCenter.value
   return parseLatLonFromGeolocationString(editForm.value.geolocation) ?? { lat: 55.7558, lon: 37.6176 }
+})
+
+const selectedLandContourMarkers = computed(() => {
+  const landId = field.value?.land_id
+  if (!landId) return []
+  const land = lands.value.find((l) => l.id === landId)
+  if (!land || !land.contour_geojson) return []
+  const polygonPoints = fromPolygonGeoJson(land.contour_geojson as Record<string, unknown>)
+  if (polygonPoints.length < 3) return []
+  const center = polygonCenter(polygonPoints)
+  return [
+    {
+      id: `land-${land.id}`,
+      lat: center?.lat ?? (land.center_lat ?? 55.7558),
+      lon: center?.lon ?? (land.center_lon ?? 37.6176),
+      title: `Контур земли: ${land.cadastral_number || land.name || 'Участок'}`,
+      subtitle: land.address || '',
+      geometryMode: 'polygon' as const,
+      polygonPoints,
+      interactive: false,
+      polygonStrokeColor: '#2563eb',
+      polygonFillColor: 'rgba(37, 99, 235, 0.16)',
+      centerPreset: 'islands#blueCircleDotIcon',
+    },
+  ]
 })
 
 /** Карта в режиме просмотра: при валидной точке или контуре. */
@@ -337,17 +364,19 @@ async function loadData() {
   loading.value = true
   error.value = null
   try {
-    const [fieldData, profileList, cropList, landTypesList, photosList] = await Promise.all([
+    const [fieldData, profileList, cropList, landTypesList, photosList, landsList] = await Promise.all([
       getFieldById(props.id),
       loadProfiles(),
       loadCrops(),
       loadLandTypes(),
       loadFieldPhotos(props.id),
+      loadLands(),
     ])
     field.value = fieldData
     profiles.value = profileList
     crops.value = cropList
     landTypes.value = landTypesList
+    lands.value = landsList
     photos.value = photosList
     if (!fieldData) error.value = 'Поле не найдено'
     await refreshHistory()
@@ -758,6 +787,8 @@ watch(
                 :zoom="14"
                 :geometry-mode="((field as any).geometry_mode ?? 'point')"
                 :polygon-points="fromPolygonGeoJson((field as any).contour_geojson)"
+                :field-markers="selectedLandContourMarkers"
+                :fit-field-markers="selectedLandContourMarkers.length > 0"
                 :marker-hint="(field.address || '').trim()"
               />
             </div>
@@ -827,6 +858,8 @@ watch(
                     :zoom="12"
                     :geometry-mode="editForm.geometry_mode"
                     :polygon-points="fieldEditPolygonPoints"
+                    :field-markers="selectedLandContourMarkers"
+                    :fit-field-markers="selectedLandContourMarkers.length > 0"
                     @pick="onPickFieldDetailsMap"
                     @polygonChange="onPickFieldDetailsPolygon"
                   />

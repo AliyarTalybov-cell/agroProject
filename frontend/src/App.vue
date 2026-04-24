@@ -13,12 +13,52 @@ const auth = useAuth()
 const isAuthLayout = computed(() => route.meta?.public === true)
 const pageTitle = computed(() => {
   if (route.name === 'dashboard' && route.query.tab === 'about') return 'О сервисе'
+  if (route.path.startsWith('/lands')) {
+    const landsTab = String(route.query.tab || '')
+    if (landsTab === 'melioration') return 'Мелиорация'
+    if (landsTab === 'rights-refs' || landsTab === 'land-refs' || landsTab === 'crops-refs' || landsTab === 'land-types' || landsTab === 'land-categories') {
+      return 'Справочники'
+    }
+  }
   return (route.meta?.title as string) || 'Обзор'
 })
 
 const dashboardHomeActive = computed(
   () => route.name === 'dashboard' && route.query.tab !== 'about',
 )
+const refsTabs = new Set(['downtime-reasons', 'work-operations'])
+const isFieldsReferencesTab = computed(
+  () => route.path.startsWith('/fields') && refsTabs.has(String(route.query.tab || '')),
+)
+const isLandsReferencesTab = computed(() => {
+  if (!route.path.startsWith('/lands')) return false
+  const tab = String(route.query.tab || '')
+  return tab === 'rights-refs' || tab === 'land-refs' || tab === 'crops-refs' || tab === 'land-types' || tab === 'land-categories'
+})
+const isLandsMeliorationTab = computed(
+  () => route.path.startsWith('/lands') && String(route.query.tab || '') === 'melioration',
+)
+const landsNavActive = computed(() => route.path.startsWith('/lands') && !isLandsReferencesTab.value && !isLandsMeliorationTab.value)
+const fieldsNavActive = computed(
+  () => route.path.startsWith('/field-details') || (route.path.startsWith('/fields') && !isFieldsReferencesTab.value),
+)
+const meliorationNavActive = computed(
+  () => isLandsMeliorationTab.value,
+)
+const settingsNavExpanded = ref(isFieldsReferencesTab.value || isLandsReferencesTab.value)
+const settingsNavActive = computed(() => false)
+const referencesNavActive = computed(() => isFieldsReferencesTab.value || isLandsReferencesTab.value)
+const landsNavExpanded = ref(
+  route.path.startsWith('/fields') || route.path.startsWith('/field-details') || isLandsMeliorationTab.value,
+)
+
+function toggleLandsNavSubmenu() {
+  landsNavExpanded.value = !landsNavExpanded.value
+}
+
+function toggleSettingsNavSubmenu() {
+  settingsNavExpanded.value = !settingsNavExpanded.value
+}
 
 function goDashboardHome() {
   closeMobileMenu()
@@ -168,13 +208,41 @@ watch(
                 Погода
               </RouterLink>
             </li>
-            <li>
-              <RouterLink class="nav-item" to="/fields">
+            <li class="nav-item-group" :class="{ 'nav-item-group--open': landsNavExpanded }">
+              <RouterLink class="nav-item" :class="{ 'router-link-active': landsNavActive }" active-class="" exact-active-class="" to="/lands">
                 <span class="nav-item-icon" aria-hidden="true">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7l8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
                 </span>
-                Поля и Культуры
+                Земли
               </RouterLink>
+              <button
+                type="button"
+                class="nav-submenu-toggle"
+                :class="{ 'is-open': landsNavExpanded }"
+                aria-label="Показать подпункты раздела Земли"
+                :aria-expanded="landsNavExpanded"
+                @click.stop="toggleLandsNavSubmenu"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <ul class="nav-submenu">
+                <li>
+                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': fieldsNavActive }" to="/fields">
+                    <span class="nav-item-icon" aria-hidden="true">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                    </span>
+                    Поля
+                  </RouterLink>
+                </li>
+                <li>
+                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': meliorationNavActive }" :to="{ path: '/lands', query: { tab: 'melioration' } }">
+                    <span class="nav-item-icon" aria-hidden="true">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M7 21v-7a3 3 0 0 1 3-3h4a3 3 0 0 1 3 3v7"/><path d="M12 11V3"/><path d="m8 7 4-4 4 4"/></svg>
+                    </span>
+                    Мелиорация
+                  </RouterLink>
+                </li>
+              </ul>
             </li>
             <li>
               <RouterLink class="nav-item" to="/equipment">
@@ -270,6 +338,40 @@ watch(
                 Чат
                 <span v-if="chatUnreadDisplay > 0" class="nav-item-badge">{{ chatUnreadDisplay > 99 ? '99+' : chatUnreadDisplay }}</span>
               </RouterLink>
+            </li>
+          </ul>
+        </div>
+
+        <div class="nav-section nav-section-secondary">
+          <div class="nav-section-label">НАСТРОЙКИ</div>
+          <ul class="nav-menu">
+            <li class="nav-item-group" :class="{ 'nav-item-group--open': settingsNavExpanded }">
+              <a href="#" class="nav-item" :class="{ 'router-link-active': settingsNavActive }" @click.prevent>
+                <span class="nav-item-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.82-.33 1.7 1.7 0 0 0-1.03 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.55 1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.64 8.4a1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.96 4.6a1.7 1.7 0 0 0 1.03-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.33 1.82 1.7 1.7 0 0 0 1.55 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1.03Z"/></svg>
+                </span>
+                Настройки
+              </a>
+              <button
+                type="button"
+                class="nav-submenu-toggle"
+                :class="{ 'is-open': settingsNavExpanded, 'is-active': referencesNavActive }"
+                aria-label="Показать подпункты раздела Настройки"
+                :aria-expanded="settingsNavExpanded"
+                @click.stop="toggleSettingsNavSubmenu"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <ul class="nav-submenu">
+                <li>
+                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': referencesNavActive }" :to="{ path: '/lands', query: { tab: 'rights-refs' } }">
+                    <span class="nav-item-icon" aria-hidden="true">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12h6"/><path d="M12 9v6"/><path d="M4 5h16"/><path d="M4 12h16"/><path d="M4 19h16"/></svg>
+                    </span>
+                    Справочники
+                  </RouterLink>
+                </li>
+              </ul>
             </li>
           </ul>
         </div>

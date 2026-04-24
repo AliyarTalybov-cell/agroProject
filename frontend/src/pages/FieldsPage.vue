@@ -17,13 +17,12 @@ import {
 import {
   loadLandTypes,
   loadCrops,
-  addLandType as addLandTypeApi,
   addCropByLabel as addCropApi,
-  deleteLandType as deleteLandTypeApi,
   deleteCrop as deleteCropApi,
   type LandTypeRow,
   type CropRow,
 } from '@/lib/landTypesAndCrops'
+import { loadLands as loadLandsApi, type LandRow } from '@/lib/landsSupabase'
 import {
   loadFields as loadFieldsApi,
   addField as addFieldApi,
@@ -71,6 +70,7 @@ type Field = {
   geolocation: string
   geometryMode: 'point' | 'polygon'
   contourGeojson: Record<string, unknown> | null
+  landId?: string | null
   landType: string
   sowingYear: number
   responsibleId: string | null
@@ -120,6 +120,7 @@ function fieldRowToField(row: FieldRow, profileMap: Map<string, ProfileRow>, cro
     extraInfo: (row as { extra_info?: string | null }).extra_info ?? '',
     geolocation: (row as { geolocation?: string | null }).geolocation ?? '',
     locationDescription: row.location_description ?? '',
+    landId: row.land_id ?? null,
     landType: row.land_type,
     geometryMode: row.geometry_mode ?? 'point',
     contourGeojson: row.contour_geojson ?? null,
@@ -492,6 +493,14 @@ const fieldToDelete = computed(() => (deleteConfirmFieldId.value ? fields.value.
 const fieldMapCenter = computed(() => {
   const contourCenter = getPolygonCenterLatLon(newFieldContourGeojson.value)
   if (contourCenter) return contourCenter
+  const selectedLand = selectedLandForField.value
+  if (selectedLand?.contour_geojson) {
+    const landContourCenter = getPolygonCenterLatLon(selectedLand.contour_geojson as PolygonGeoJson | Record<string, unknown>)
+    if (landContourCenter) return landContourCenter
+  }
+  if (selectedLand?.center_lat != null && selectedLand.center_lon != null) {
+    return { lat: Number(selectedLand.center_lat), lon: Number(selectedLand.center_lon) }
+  }
   const raw = newFieldGeo.value.trim()
   if (!raw) return { lat: 55.7558, lon: 37.6176 }
   const parts = raw.split(',').map((p) => Number(p.trim()))
@@ -546,18 +555,44 @@ const CROP_OPTIONS_FALLBACK: { key: string; label: string }[] = [
 
 const landTypes = ref<LandTypeRow[]>([])
 const crops = ref<CropRow[]>([])
+const lands = ref<LandRow[]>([])
+const newFieldLandId = ref('')
 
 const landTypeOptions = computed(() =>
   landTypes.value.length > 0 ? landTypes.value.map((t) => ({ name: t.name })) : LAND_TYPES_FALLBACK.map((name) => ({ name })),
 )
 const cropOptions = computed(() => (crops.value.length > 0 ? crops.value : CROP_OPTIONS_FALLBACK))
+const selectedLandForField = computed(() => lands.value.find((l) => l.id === newFieldLandId.value) ?? null)
+const selectedLandContourMarkers = computed(() => {
+  const land = selectedLandForField.value
+  if (!land || !land.contour_geojson) return []
+  const polygonPoints = fromPolygonGeoJson(land.contour_geojson as PolygonGeoJson | Record<string, unknown>)
+  if (polygonPoints.length < 3) return []
+  const center = getPolygonCenterLatLon(land.contour_geojson as PolygonGeoJson | Record<string, unknown>)
+  return [
+    {
+      id: `land-${land.id}`,
+      lat: center?.lat ?? (land.center_lat ?? 55.7558),
+      lon: center?.lon ?? (land.center_lon ?? 37.6176),
+      title: `Контур земли: ${land.cadastral_number || land.name || 'Участок'}`,
+      subtitle: land.address || '',
+      geometryMode: 'polygon' as const,
+      polygonPoints,
+      interactive: false,
+      polygonStrokeColor: '#2563eb',
+      polygonFillColor: 'rgba(37, 99, 235, 0.16)',
+      centerPreset: 'islands#blueCircleDotIcon',
+    },
+  ]
+})
 
 async function openAddField() {
   if (isSupabaseConfigured()) {
     try {
-      const [landTypesList, cropsList] = await Promise.all([loadLandTypes(), loadCrops()])
+      const [landTypesList, cropsList, landsList] = await Promise.all([loadLandTypes(), loadCrops(), loadLandsApi()])
       landTypes.value = landTypesList
       crops.value = cropsList
+      lands.value = landsList
     } catch (e) {
       fieldFormError.value = refsErrorMessage(e)
     }
@@ -580,6 +615,7 @@ async function openAddField() {
   newFieldAreaAuto.value = null
   newFieldAreaManualTouched.value = false
   newFieldLandType.value = landTypeOptions.value[0]?.name ?? 'Пашня'
+  newFieldLandId.value = ''
   newFieldCropKey.value = cropOptions.value[0]?.key ?? 'wheat'
   newFieldSowingYear.value = new Date().getFullYear()
   newFieldLocationDesc.value = ''
@@ -600,9 +636,10 @@ async function openAddField() {
 async function openEditField(f: Field) {
   if (isSupabaseConfigured()) {
     try {
-      const [landTypesList, cropsList] = await Promise.all([loadLandTypes(), loadCrops()])
+      const [landTypesList, cropsList, landsList] = await Promise.all([loadLandTypes(), loadCrops(), loadLandsApi()])
       landTypes.value = landTypesList
       crops.value = cropsList
+      lands.value = landsList
     } catch (e) {
       fieldFormError.value = refsErrorMessage(e)
     }
@@ -625,6 +662,7 @@ async function openEditField(f: Field) {
   newFieldAreaAuto.value = null
   newFieldAreaManualTouched.value = false
   newFieldLandType.value = f.landType
+  newFieldLandId.value = f.landId ?? ''
   newFieldCropKey.value = f.cropKey
   newFieldSowingYear.value = f.sowingYear
   newFieldLocationDesc.value = f.locationDescription
@@ -936,6 +974,7 @@ async function addField() {
           geolocation,
           geometry_mode: geometryMode,
           contour_geojson: contourGeojson,
+          land_id: newFieldLandId.value || null,
           land_type: newFieldLandType.value,
           sowing_year: newFieldSowingYear.value,
           responsible_id: newFieldResponsibleId.value.trim() || null,
@@ -959,6 +998,7 @@ async function addField() {
         f.geolocation = geolocation || ''
         f.geometryMode = geometryMode
         f.contourGeojson = contourGeojson
+        f.landId = newFieldLandId.value || null
         f.landType = newFieldLandType.value
         f.sowingYear = newFieldSowingYear.value
         f.responsibleId = newFieldResponsibleId.value || null
@@ -986,6 +1026,7 @@ async function addField() {
         geolocation,
         geometry_mode: geometryMode,
         contour_geojson: contourGeojson,
+        land_id: newFieldLandId.value || null,
         land_type: newFieldLandType.value,
         sowing_year: newFieldSowingYear.value,
         responsible_id: newFieldResponsibleId.value.trim() || null,
@@ -1015,6 +1056,7 @@ async function addField() {
         geolocation: geolocation || '',
         geometryMode,
         contourGeojson,
+        landId: newFieldLandId.value || null,
         landType: newFieldLandType.value,
         sowingYear: newFieldSowingYear.value,
         responsibleId: newFieldResponsibleId.value || null,
@@ -1120,7 +1162,6 @@ const REFS_PAGE_SIZE_OPTIONS = [5, 10, 20] as const
 const refsPageSize = ref(10)
 const refsPageReasons = ref(1)
 const refsPageOperations = ref(1)
-const refsPageLandTypes = ref(1)
 const refsPageCrops = ref(1)
 
 function refsPaginationPages(total: number, cur: number): (number | string)[] {
@@ -1152,12 +1193,6 @@ const paginatedOperations = computed(() => {
   return workOperations.value.slice(start, start + size)
 })
 const totalPagesOperations = computed(() => Math.max(1, Math.ceil(workOperations.value.length / refsPageSize.value)))
-const paginatedLandTypes = computed(() => {
-  const size = refsPageSize.value
-  const start = (refsPageLandTypes.value - 1) * size
-  return landTypes.value.slice(start, start + size)
-})
-const totalPagesLandTypes = computed(() => Math.max(1, Math.ceil(landTypes.value.length / refsPageSize.value)))
 const paginatedCrops = computed(() => {
   const size = refsPageSize.value
   const start = (refsPageCrops.value - 1) * size
@@ -1168,7 +1203,6 @@ const totalPagesCrops = computed(() => Math.max(1, Math.ceil(crops.value.length 
 function onRefsPageSizeChange() {
   refsPageReasons.value = Math.max(1, Math.min(refsPageReasons.value, totalPagesReasons.value))
   refsPageOperations.value = Math.max(1, Math.min(refsPageOperations.value, totalPagesOperations.value))
-  refsPageLandTypes.value = Math.max(1, Math.min(refsPageLandTypes.value, totalPagesLandTypes.value))
   refsPageCrops.value = Math.max(1, Math.min(refsPageCrops.value, totalPagesCrops.value))
 }
 
@@ -1178,9 +1212,6 @@ function setRefsPageReasons(p: number) {
 function setRefsPageOperations(p: number) {
   refsPageOperations.value = Math.max(1, Math.min(p, totalPagesOperations.value))
 }
-function setRefsPageLandTypes(p: number) {
-  refsPageLandTypes.value = Math.max(1, Math.min(p, totalPagesLandTypes.value))
-}
 function setRefsPageCrops(p: number) {
   refsPageCrops.value = Math.max(1, Math.min(p, totalPagesCrops.value))
 }
@@ -1188,18 +1219,15 @@ const newReasonLabel = ref('')
 const newReasonDesc = ref('')
 const newReasonCategory = ref<DowntimeCategory>('breakdown')
 const newOperationName = ref('')
-const newLandTypeName = ref('')
 const newCropLabel = ref('')
 const refsError = ref<string | null>(null)
 
 const deleteConfirmReasonId = ref<string | null>(null)
 const deleteConfirmOperationId = ref<string | null>(null)
-const deleteConfirmLandTypeId = ref<string | null>(null)
 const deleteConfirmCropId = ref<string | null>(null)
 
 const reasonToDelete = computed(() => deleteConfirmReasonId.value ? downtimeReasons.value.find((r) => r.id === deleteConfirmReasonId.value) : null)
 const operationToDelete = computed(() => deleteConfirmOperationId.value ? workOperations.value.find((op) => op.id === deleteConfirmOperationId.value) : null)
-const landTypeToDelete = computed(() => deleteConfirmLandTypeId.value ? landTypes.value.find((t) => t.id === deleteConfirmLandTypeId.value) : null)
 const cropToDelete = computed(() => deleteConfirmCropId.value ? crops.value.find((c) => c.id === deleteConfirmCropId.value) : null)
 
 function refsErrorMessage(e: unknown): string {
@@ -1301,39 +1329,6 @@ async function confirmDeleteOperation() {
   }
 }
 
-async function addLandType() {
-  const name = newLandTypeName.value.trim()
-  if (!name) return
-  refsError.value = null
-  try {
-    const row = await addLandTypeApi(name)
-    landTypes.value = [...landTypes.value, row]
-    newLandTypeName.value = ''
-  } catch (e) {
-    refsError.value = refsErrorMessage(e)
-  }
-}
-
-function openDeleteLandTypeConfirm(t: LandTypeRow) {
-  deleteConfirmLandTypeId.value = t.id
-}
-function closeDeleteLandTypeConfirm() {
-  deleteConfirmLandTypeId.value = null
-}
-async function confirmDeleteLandType() {
-  const id = deleteConfirmLandTypeId.value
-  if (!id) return
-  closeDeleteLandTypeConfirm()
-  refsError.value = null
-  try {
-    await deleteLandTypeApi(id)
-    landTypes.value = landTypes.value.filter((t) => t.id !== id)
-    refsPageLandTypes.value = Math.max(1, Math.min(refsPageLandTypes.value, totalPagesLandTypes.value))
-  } catch (e) {
-    refsError.value = refsErrorMessage(e)
-  }
-}
-
 async function addCrop() {
   const label = newCropLabel.value.trim()
   if (!label) return
@@ -1371,15 +1366,29 @@ function formatRefDate(iso: string) {
   return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-type PageTab = 'fields' | 'downtime-reasons' | 'work-operations' | 'land-types' | 'crops'
+type PageTab = 'fields' | 'downtime-reasons' | 'work-operations'
 const activeTab = ref<PageTab>('fields')
 const TABS: { id: PageTab; label: string }[] = [
   { id: 'fields', label: 'Управление полями' },
   { id: 'downtime-reasons', label: 'Причины простоя' },
   { id: 'work-operations', label: 'Операции для работы' },
-  { id: 'land-types', label: 'Типы земли' },
-  { id: 'crops', label: 'Культуры' },
 ]
+const ROUTE_TAB_MAP: Record<string, PageTab> = {
+  fields: 'fields',
+  'downtime-reasons': 'downtime-reasons',
+  'work-operations': 'work-operations',
+  crops: 'fields',
+  references: 'downtime-reasons',
+}
+
+watch(
+  () => String(route.query.tab || ''),
+  (tab) => {
+    const normalized = ROUTE_TAB_MAP[tab]
+    if (normalized && normalized !== activeTab.value) activeTab.value = normalized
+  },
+  { immediate: true },
+)
 
 onMounted(async () => {
   if (route.query.highlightAddField === '1') {
@@ -1796,67 +1805,6 @@ onMounted(async () => {
         <p v-else class="refs-no-supabase">Подключите Supabase для управления справочниками.</p>
       </div>
 
-      <div v-show="activeTab === 'land-types'" class="fields-tab-panel">
-        <div v-if="isSupabaseConfigured()" class="refs-card card">
-          <h2 class="refs-title">Типы земли</h2>
-          <p class="refs-desc refs-desc--small">Используются в форме добавления/редактирования поля и везде на бэкенде.</p>
-          <div v-if="refsError" class="refs-error">{{ refsError }}</div>
-          <div class="refs-block">
-            <div class="refs-add-row">
-              <input v-model="newLandTypeName" type="text" placeholder="Например: Пашня, Залежь" class="refs-input refs-input--wide" />
-              <button type="button" class="refs-btn" :disabled="refsLoading || !newLandTypeName.trim()" @click="addLandType">Добавить</button>
-            </div>
-            <div class="refs-table-wrap">
-              <table class="refs-table">
-                <thead>
-                  <tr>
-                    <th>Название</th>
-                    <th class="refs-th-actions">Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="t in paginatedLandTypes" :key="t.id">
-                    <td>{{ t.name }}</td>
-                    <td class="refs-cell-actions">
-                      <UiDeleteButton size="sm" :disabled="refsLoading" @click="openDeleteLandTypeConfirm(t)" />
-                    </td>
-                  </tr>
-                  <tr v-if="!landTypes.length && !refsLoading">
-                    <td colspan="2" class="refs-empty">Пока нет записей. Добавьте тип земли выше или выполните миграцию в SQL Editor.</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div v-if="landTypes.length > 0" class="refs-pagination">
-              <div class="refs-pagination-left">
-                <p class="refs-pagination-info">
-                  Показано от <span class="refs-pagination-num">{{ (refsPageLandTypes - 1) * refsPageSize + 1 }}</span> до <span class="refs-pagination-num">{{ Math.min(refsPageLandTypes * refsPageSize, landTypes.length) }}</span> из <span class="refs-pagination-num">{{ landTypes.length }}</span>
-                </p>
-                <label class="refs-pagination-size">
-                  Строк на странице:
-                  <select v-model.number="refsPageSize" class="refs-pagination-select" @change="onRefsPageSizeChange">
-                    <option v-for="n in REFS_PAGE_SIZE_OPTIONS" :key="n" :value="n">{{ n }}</option>
-                  </select>
-                </label>
-              </div>
-              <nav class="refs-pagination-nav" aria-label="Пагинация">
-                <button type="button" class="refs-page-btn refs-page-btn--edge" :disabled="refsPageLandTypes <= 1" aria-label="Предыдущая страница" @click="setRefsPageLandTypes(refsPageLandTypes - 1)">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
-                </button>
-                <template v-for="(p, i) in refsPaginationPages(totalPagesLandTypes, refsPageLandTypes)" :key="p === '...' ? `land-ellipsis-${i}` : p">
-                  <button v-if="p !== '...'" type="button" class="refs-page-btn" :class="{ 'refs-page-btn--active': p === refsPageLandTypes }" @click="setRefsPageLandTypes(p as number)">{{ p }}</button>
-                  <span v-else class="refs-page-ellipsis">…</span>
-                </template>
-                <button type="button" class="refs-page-btn refs-page-btn--edge" :disabled="refsPageLandTypes >= totalPagesLandTypes" aria-label="Следующая страница" @click="setRefsPageLandTypes(refsPageLandTypes + 1)">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
-                </button>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <p v-else class="refs-no-supabase">Подключите Supabase для управления справочниками.</p>
-      </div>
-
       <div v-show="activeTab === 'crops'" class="fields-tab-panel">
         <div v-if="isSupabaseConfigured()" class="refs-card card">
           <h2 class="refs-title">Культуры</h2>
@@ -1991,6 +1939,15 @@ onMounted(async () => {
             <div class="modal-form-section">
               <div class="modal-field modal-field--full">
                 <span class="modal-label">Карта участка</span>
+                <label class="modal-field modal-field--full field-map-land-select">
+                  <span class="modal-label">Земельный участок (контур для ориентира)</span>
+                  <select v-model="newFieldLandId" class="modal-select">
+                    <option value="">— Выберите участок, чтобы показать контур —</option>
+                    <option v-for="land in lands" :key="land.id" :value="land.id">
+                      {{ land.cadastral_number || `Участок №${land.number}` }}{{ land.address ? ` — ${land.address}` : '' }}
+                    </option>
+                  </select>
+                </label>
                 <div class="field-geometry-head">
                   <span class="modal-label">Режим геометрии</span>
                   <div class="field-geometry-switch" role="group" aria-label="Режим геометрии поля">
@@ -2020,10 +1977,16 @@ onMounted(async () => {
                     :zoom="12"
                     :geometry-mode="newFieldGeometryMode"
                     :polygon-points="fieldMapPolygonPoints"
+                    :field-markers="selectedLandContourMarkers"
+                    :fit-field-markers="selectedLandContourMarkers.length > 0"
+                    :overlay-hint="selectedLandContourMarkers.length > 0"
                     @pick="onPickFieldMap"
                     @polygonChange="onFieldMapPolygonChange"
                   />
                 </div>
+                <p v-if="!newFieldLandId" class="field-map-picker-note field-map-picker-note--warn">
+                  Выберите земельный участок выше, чтобы на карте отобразился его контур.
+                </p>
                 <p class="field-map-picker-note">
                   <template v-if="newFieldGeometryMode === 'polygon'">
                     Постройте контур поля на карте. Площадь считается автоматически, но ее можно скорректировать вручную.
@@ -2210,27 +2173,6 @@ onMounted(async () => {
           <div class="fields-confirm-actions">
             <button type="button" class="modal-btn-ghost" @click="closeDeleteOperationConfirm">Отмена</button>
             <UiDeleteButton size="md" @click="confirmDeleteOperation" />
-          </div>
-        </div>
-      </div>
-
-      <div
-        v-if="deleteConfirmLandTypeId"
-        class="fields-confirm-backdrop"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="refs-delete-land-type-title"
-        @click.self="closeDeleteLandTypeConfirm"
-      >
-        <div class="fields-confirm-modal">
-          <h2 id="refs-delete-land-type-title" class="fields-confirm-title">Удаление типа земли</h2>
-          <p class="fields-confirm-text">
-            <template v-if="landTypeToDelete">Вы уверены, что хотите удалить тип земли «{{ landTypeToDelete.name }}»?</template>
-            <template v-else>Вы уверены, что хотите удалить этот тип земли?</template>
-          </p>
-          <div class="fields-confirm-actions">
-            <button type="button" class="modal-btn-ghost" @click="closeDeleteLandTypeConfirm">Отмена</button>
-            <UiDeleteButton size="md" @click="confirmDeleteLandType" />
           </div>
         </div>
       </div>
@@ -4066,10 +4008,18 @@ onMounted(async () => {
   height: 280px;
 }
 
+.field-map-land-select {
+  margin-bottom: 8px;
+}
+
 .field-map-picker-note {
   margin: 8px 0 0;
   font-size: 0.8rem;
   color: var(--text-secondary);
+}
+
+.field-map-picker-note--warn {
+  color: #b45309;
 }
 
 .field-geometry-head {

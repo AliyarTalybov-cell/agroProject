@@ -12,6 +12,7 @@ export type FieldRow = {
   geolocation: string | null
   geometry_mode: 'point' | 'polygon'
   contour_geojson: Record<string, unknown> | null
+  land_id: string | null
   land_type: string
   sowing_year: number | null
   responsible_id: string | null
@@ -35,7 +36,7 @@ const FIELDS_TABLE = 'fields'
 const FIELD_PHOTOS_TABLE = 'field_photos'
 const STORAGE_BUCKET = 'field-schemes'
 const FIELDS_SELECT_BASE =
-  'id, number, name, area, cadastral_number, address, location_description, extra_info, geolocation, land_type, sowing_year, responsible_id, crop_key, scheme_file_url, created_at, updated_at'
+  'id, number, name, area, cadastral_number, address, location_description, extra_info, geolocation, land_id, land_type, sowing_year, responsible_id, crop_key, scheme_file_url, created_at, updated_at'
 const FIELDS_SELECT_WITH_GEOMETRY = `${FIELDS_SELECT_BASE}, geometry_mode, contour_geojson`
 
 function isMissingGeometryColumnError(error: unknown): boolean {
@@ -98,6 +99,7 @@ export async function addField(payload: {
   geolocation?: string | null
   geometry_mode?: 'point' | 'polygon'
   contour_geojson?: Record<string, unknown> | null
+  land_id?: string | null
   land_type: string
   sowing_year?: number | null
   responsible_id?: string | null
@@ -117,6 +119,7 @@ export async function addField(payload: {
     geolocation: payload.geolocation?.trim() || null,
     geometry_mode: payload.geometry_mode ?? 'point',
     contour_geojson: payload.contour_geojson ?? null,
+    land_id: payload.land_id || null,
     land_type: payload.land_type,
     sowing_year: payload.sowing_year ?? null,
     responsible_id: payload.responsible_id || null,
@@ -151,6 +154,7 @@ export async function updateField(
     geolocation: string | null
     geometry_mode: 'point' | 'polygon'
     contour_geojson: Record<string, unknown> | null
+    land_id: string | null
     land_type: string
     sowing_year: number | null
     responsible_id: string | null
@@ -169,6 +173,7 @@ export async function updateField(
   if (payload.geolocation !== undefined) updates.geolocation = payload.geolocation?.trim() || null
   if (payload.geometry_mode !== undefined) updates.geometry_mode = payload.geometry_mode
   if (payload.contour_geojson !== undefined) updates.contour_geojson = payload.contour_geojson ?? null
+  if (payload.land_id !== undefined) updates.land_id = payload.land_id || null
   if (payload.sowing_year !== undefined) updates.sowing_year = payload.sowing_year ?? null
   if (payload.responsible_id !== undefined) updates.responsible_id = payload.responsible_id || null
   if (payload.scheme_file_url !== undefined) updates.scheme_file_url = payload.scheme_file_url || null

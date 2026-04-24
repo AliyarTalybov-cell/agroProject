@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import DashboardPage from '@/pages/DashboardPage.vue'
 import FieldDetailsPage from '@/pages/FieldDetailsPage.vue'
 import FieldsPage from '@/pages/FieldsPage.vue'
+import LandsPage from '@/pages/LandsPage.vue'
 import LoginPage from '@/pages/LoginPage.vue'
 import ReportsPage from '@/pages/ReportsPage.vue'
 import TasksPage from '@/pages/TasksPage.vue'
@@ -28,6 +29,8 @@ export const routes = [
   { path: '/rules', name: 'rules', component: PortalRulesPage, meta: { title: 'Правила портала', public: true, allowWhenAuth: true } },
   { path: '/dashboard', name: 'dashboard', component: DashboardPage, meta: { title: 'Обзор' } },
   { path: '/weather', name: 'weather', component: WeatherPage, meta: { title: 'Погода и условия' } },
+  { path: '/lands', name: 'lands', component: LandsPage, meta: { title: 'Земли' } },
+  { path: '/lands/:id', name: 'land-details', component: LandsPage, props: true, meta: { title: 'Земельный участок' } },
   { path: '/fields', name: 'fields', component: FieldsPage, meta: { title: 'Поля и Культуры' } },
   { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true, meta: { title: 'Поле' } },
   { path: '/equipment', name: 'equipment', component: EquipmentPage, meta: { title: 'Управление техникой' } },

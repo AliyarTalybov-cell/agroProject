@@ -9,6 +9,10 @@ export type MapFieldMarker = {
   subtitle?: string
   geometryMode?: GeometryMode
   polygonPoints?: LatLon[]
+  interactive?: boolean
+  polygonStrokeColor?: string
+  polygonFillColor?: string
+  centerPreset?: string
 }
 
 type GeometryMode = 'point' | 'polygon'
@@ -26,6 +30,9 @@ const props = withDefaults(
     overlayHint?: boolean
     geometryMode?: GeometryMode
     polygonPoints?: LatLon[]
+    geometryStrokeColor?: string
+    geometryFillColor?: string
+    geometryMarkerPreset?: string
   }>(),
   {
     lat: 55.7558,
@@ -38,6 +45,9 @@ const props = withDefaults(
     overlayHint: false,
     geometryMode: 'point',
     polygonPoints: () => [],
+    geometryStrokeColor: '#16a34a',
+    geometryFillColor: 'rgba(22, 163, 74, 0.22)',
+    geometryMarkerPreset: 'islands#redDotIcon',
   },
 )
 
@@ -88,6 +98,7 @@ function syncFieldPlacemarks() {
   clearFieldPlacemarks()
   for (const p of props.fieldMarkers) {
     if (p.geometryMode === 'polygon' && Array.isArray(p.polygonPoints) && p.polygonPoints.length >= 3) {
+      const markerInteractive = p.interactive !== false
       const poly = new ymaps.Polygon(
         [p.polygonPoints],
         {
@@ -96,11 +107,11 @@ function syncFieldPlacemarks() {
           hintContent: p.title,
         },
         {
-          fillColor: 'rgba(22, 163, 74, 0.22)',
-          strokeColor: '#16a34a',
+          fillColor: p.polygonFillColor ?? 'rgba(22, 163, 74, 0.22)',
+          strokeColor: p.polygonStrokeColor ?? '#16a34a',
           strokeWidth: 2,
           draggable: false,
-          interactivityModel: 'default#geoObject',
+          interactivityModel: markerInteractive ? 'default#geoObject' : 'default#transparent',
         },
       )
       mapInstance.geoObjects.add(poly)
@@ -113,8 +124,9 @@ function syncFieldPlacemarks() {
           hintContent: p.title,
         },
         {
-          preset: 'islands#darkGreenCircleDotIcon',
+          preset: p.centerPreset ?? 'islands#darkGreenCircleDotIcon',
           draggable: false,
+          interactivityModel: markerInteractive ? 'default#geoObject' : 'default#transparent',
         },
       )
       mapInstance.geoObjects.add(centerMarker)
@@ -184,8 +196,8 @@ function ensurePolygonObject() {
       [draftPolygonPoints.value],
       {},
       {
-        fillColor: 'rgba(22, 163, 74, 0.22)',
-        strokeColor: '#16a34a',
+          fillColor: props.geometryFillColor,
+          strokeColor: props.geometryStrokeColor,
         strokeWidth: 2,
         interactivityModel: 'default#transparent',
       },
@@ -219,7 +231,7 @@ function ensurePolylineObject() {
       withHover,
       {},
       {
-        strokeColor: '#16a34a',
+        strokeColor: props.geometryStrokeColor,
         strokeWidth: 2,
         strokeStyle: 'solid',
         opacity: 0.95,
@@ -260,7 +272,7 @@ function placeMark(lat: number, lon: number) {
   placemark = new ymaps.Placemark(
     [lat, lon],
     hint ? { hintContent: hint, balloonContent: hint } : {},
-    { preset: 'islands#redDotIcon', draggable: false },
+    { preset: props.geometryMarkerPreset, draggable: false },
   )
   mapInstance.geoObjects.add(placemark)
 }
