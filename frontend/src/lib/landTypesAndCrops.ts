@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 export type LandTypeRow = {
   id: string
@@ -64,6 +65,7 @@ export async function updateLandType(id: string, name: string): Promise<void> {
 
 export async function deleteLandType(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_TYPES_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -92,6 +94,7 @@ export async function addLandCategory(name: string): Promise<LandCategoryRow> {
 
 export async function deleteLandCategory(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_CATEGORIES_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -154,6 +157,7 @@ export async function updateCrop(id: string, key: string, label: string): Promis
 
 export async function deleteCrop(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(CROPS_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -182,6 +186,7 @@ export async function addLandActualUseOption(name: string): Promise<LandActualUs
 
 export async function deleteLandActualUseOption(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_ACTUAL_USE_OPTIONS_TABLE).delete().eq('id', id)
   if (error) throw error
 }

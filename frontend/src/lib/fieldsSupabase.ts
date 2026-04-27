@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 export type FieldRow = {
   id: string
@@ -203,6 +204,7 @@ export async function uploadFieldScheme(file: File, fieldId?: string): Promise<s
 
 export async function deleteField(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(FIELDS_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -250,6 +252,7 @@ export async function addFieldPhoto(
 
 export async function deleteFieldPhoto(photoId: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { data: row, error: fetchError } = await supabase
     .from(FIELD_PHOTOS_TABLE)
     .select('id, file_url, file_path')

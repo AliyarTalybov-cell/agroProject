@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 export type EquipmentCondition = string
 
@@ -62,6 +63,8 @@ const EQUIPMENT_TYPES_REF_TABLE = 'equipment_type_refs'
 const EQUIPMENT_CONDITIONS_REF_TABLE = 'equipment_condition_refs'
 const EQUIPMENT_PHOTOS_TABLE = 'equipment_photos'
 const EQUIPMENT_PHOTOS_BUCKET = 'equipment-photos'
+const EQUIPMENT_DOCUMENTS_TABLE = 'equipment_documents'
+const EQUIPMENT_DOCUMENTS_BUCKET = 'equipment-documents'
 
 export type EquipmentPhotoRow = {
   id: string
@@ -70,6 +73,17 @@ export type EquipmentPhotoRow = {
   file_path?: string | null
   title: string | null
   description: string | null
+  created_at: string
+}
+
+export type EquipmentDocumentRow = {
+  id: string
+  equipment_id: string
+  file_url: string
+  file_path?: string | null
+  file_name: string
+  file_size: number | null
+  mime_type: string | null
   created_at: string
 }
 
@@ -175,6 +189,7 @@ export async function updateEquipment(
 
 export async function deleteEquipment(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(EQUIPMENT_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -259,6 +274,7 @@ export async function updateEquipmentImplement(
 
 export async function deleteEquipmentImplement(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(EQUIPMENT_IMPLEMENTS_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -311,6 +327,7 @@ export async function updateEquipmentTypeRef(
 
 export async function deleteEquipmentTypeRef(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(EQUIPMENT_TYPES_REF_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -362,6 +379,7 @@ export async function updateEquipmentConditionRef(
 
 export async function deleteEquipmentConditionRef(code: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(EQUIPMENT_CONDITIONS_REF_TABLE).delete().eq('code', code)
   if (error) throw error
 }
@@ -414,6 +432,7 @@ export async function addEquipmentPhoto(
 
 export async function deleteEquipmentPhoto(photoId: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
 
   // Сначала пробуем получить file_path (если колонки нет — просто удалим запись)
   let filePath: string | null = null
@@ -434,6 +453,74 @@ export async function deleteEquipmentPhoto(photoId: string): Promise<void> {
 
   if (filePath) {
     await supabase.storage.from(EQUIPMENT_PHOTOS_BUCKET).remove([filePath])
+  }
+}
+
+export async function loadEquipmentDocuments(equipmentId: string): Promise<EquipmentDocumentRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from(EQUIPMENT_DOCUMENTS_TABLE)
+    .select('id, equipment_id, file_url, file_path, file_name, file_size, mime_type, created_at')
+    .eq('equipment_id', equipmentId)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as EquipmentDocumentRow[]
+}
+
+export async function addEquipmentDocument(equipmentId: string, file: File): Promise<EquipmentDocumentRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const ext = file.name.split('.').pop()?.toLowerCase() || 'bin'
+  const baseName = file.name.replace(/\.[^.]+$/, '')
+  const safeBase = baseName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120)
+  const path = `${equipmentId}/${Date.now()}-${safeBase}.${ext}`
+
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from(EQUIPMENT_DOCUMENTS_BUCKET)
+    .upload(path, file, {
+      cacheControl: '3600',
+      upsert: true,
+      contentType: file.type || undefined,
+    })
+  if (uploadError) throw uploadError
+
+  const { data: urlData } = supabase.storage.from(EQUIPMENT_DOCUMENTS_BUCKET).getPublicUrl(uploadData.path)
+  const { data: row, error: rowError } = await supabase
+    .from(EQUIPMENT_DOCUMENTS_TABLE)
+    .insert({
+      equipment_id: equipmentId,
+      file_url: urlData.publicUrl,
+      file_path: uploadData.path,
+      file_name: file.name,
+      file_size: file.size,
+      mime_type: file.type || null,
+    })
+    .select('id, equipment_id, file_url, file_path, file_name, file_size, mime_type, created_at')
+    .single()
+  if (rowError) throw rowError
+  return row as EquipmentDocumentRow
+}
+
+export async function deleteEquipmentDocument(documentId: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
+
+  let filePath: string | null = null
+  try {
+    const { data: row, error: fetchError } = await supabase
+      .from(EQUIPMENT_DOCUMENTS_TABLE)
+      .select('id, file_path')
+      .eq('id', documentId)
+      .maybeSingle()
+    if (fetchError) throw fetchError
+    filePath = (row as { file_path?: string | null } | null)?.file_path ?? null
+  } catch {
+    filePath = null
+  }
+
+  const { error: delError } = await supabase.from(EQUIPMENT_DOCUMENTS_TABLE).delete().eq('id', documentId)
+  if (delError) throw delError
+  if (filePath) {
+    await supabase.storage.from(EQUIPMENT_DOCUMENTS_BUCKET).remove([filePath])
   }
 }
 

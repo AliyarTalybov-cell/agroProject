@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 export type NewsPostRow = {
   id: string
@@ -141,6 +142,7 @@ export async function updateNewsPost(
 
 export async function deleteNewsPost(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(NEWS_TABLE).delete().eq('id', id)
   if (error) throw error
 }

@@ -498,11 +498,10 @@ function escapeCsvCell(val: string): string {
 function exportToExcel() {
   const list = filteredList.value
   if (!list.length) return
-  const headers = ['№', 'Марка', 'Модель', 'Гос. номер', 'Заводской номер (VIN/PIN)', 'ЭПСМ/ПСМ', 'СВР', 'Свидетельство о регистрации', 'Дата регистрации', 'Дата снятия с учета', 'Тип техники', 'Год', 'Назначение/Культура', 'Состояние', 'Примечания']
+  const headers = ['№', 'Марка / Модель', 'Гос. номер', 'Заводской номер (VIN/PIN)', 'ЭПСМ/ПСМ', 'СВР', 'Свидетельство о регистрации', 'Дата регистрации', 'Дата снятия с учета', 'Тип техники', 'Орудие', 'Ответственный', 'Состояние']
   const rows = list.map((r, i) => [
     String(i + 1),
-    r.brand,
-    r.model ?? '',
+    `${r.brand}${r.model || r.year ? ` / ${r.model && r.year ? `${r.model} • ${r.year} г.в.` : r.model || (r.year ? `${r.year} г.в.` : '')}` : ''}`,
     r.license_plate,
     r.factory_number ?? '',
     r.epsm_psm ?? '',
@@ -511,10 +510,9 @@ function exportToExcel() {
     r.registration_date ?? '',
     r.deregistration_date ?? '',
     equipmentTypeLabel(r.equipment_type),
-    r.year ?? '',
-    r.purpose_crop ?? '',
+    implementLabelById(r.implement_id),
+    responsibleLabel(r.responsible_id),
     conditionLabel(r.condition),
-    (r.notes ?? '').replace(/\r?\n/g, ' '),
   ])
   const line = (arr: (string | number)[]) => arr.map((v) => escapeCsvCell(String(v))).join(CSV_SEP)
   const csv = '\uFEFF' + [line(headers), ...rows.map((r) => line(r))].join('\r\n')
@@ -536,11 +534,10 @@ function escapeHtml(s: string): string {
 async function exportToPdf() {
   const list = filteredList.value
   if (!list.length) return
-  const headers = ['№', 'Марка', 'Модель', 'Гос. номер', 'Заводской номер (VIN/PIN)', 'ЭПСМ/ПСМ', 'СВР', 'Свидетельство о регистрации', 'Дата регистрации', 'Дата снятия с учета', 'Тип', 'Состояние']
+  const headers = ['№', 'Марка / Модель', 'Гос. номер', 'Заводской номер (VIN/PIN)', 'ЭПСМ/ПСМ', 'СВР', 'Свидетельство о регистрации', 'Дата регистрации', 'Дата снятия с учета', 'Тип техники', 'Орудие', 'Ответственный', 'Состояние']
   const rows = list.map((r, i) => [
     String(i + 1),
-    escapeHtml(r.brand),
-    escapeHtml(r.model ?? ''),
+    escapeHtml(`${r.brand}${r.model || r.year ? ` / ${r.model && r.year ? `${r.model} • ${r.year} г.в.` : r.model || (r.year ? `${r.year} г.в.` : '')}` : ''}`),
     escapeHtml(r.license_plate),
     escapeHtml(r.factory_number ?? ''),
     escapeHtml(r.epsm_psm ?? ''),
@@ -549,6 +546,8 @@ async function exportToPdf() {
     escapeHtml(r.registration_date ?? ''),
     escapeHtml(r.deregistration_date ?? ''),
     escapeHtml(equipmentTypeLabel(r.equipment_type)),
+    escapeHtml(implementLabelById(r.implement_id)),
+    escapeHtml(responsibleLabel(r.responsible_id)),
     escapeHtml(conditionLabel(r.condition)),
   ])
   const tableRows = rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')
@@ -835,12 +834,12 @@ async function exportToPdf() {
               autocomplete="off"
             />
           </div>
-          <button type="button" class="equipment-export-btn" :disabled="!filteredList.length" title="Экспорт в Excel" @click="exportToExcel">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+          <button type="button" class="equipment-export-btn task-btn-export action_has has_saved" :disabled="!filteredList.length" title="Экспорт в Excel" @click="exportToExcel">
+            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
             Excel
           </button>
-          <button type="button" class="equipment-export-btn" :disabled="!filteredList.length" title="Экспорт в PDF" @click="exportToPdf">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/></svg>
+          <button type="button" class="equipment-export-btn task-btn-export action_has has_saved" :disabled="!filteredList.length" title="Экспорт в PDF" @click="exportToPdf">
+            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/></svg>
             PDF
           </button>
         </div>
@@ -849,8 +848,8 @@ async function exportToPdf() {
       <div v-if="loading" class="equipment-loading" role="status" aria-live="polite">
         <UiLoadingBar />
       </div>
-      <div v-else class="table-wrapper">
-        <table class="equipment-table" aria-label="Список техники">
+      <div v-else class="table-wrapper table-wrapper--swipe">
+        <table class="equipment-table equipment-table--main" aria-label="Список техники">
           <thead>
             <tr>
               <th>Марка / Модель</th>
@@ -1502,6 +1501,47 @@ async function exportToPdf() {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.task-header-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.task-btn-export.action_has {
+  --color: 220 9% 46%;
+  --color-has: 146 33% 30%;
+}
+
+[data-theme='dark'] .task-btn-export.action_has {
+  --color: 215 14% 55%;
+  --color-has: 97 55% 52%;
+}
+
+.task-btn-export.has_saved:hover:not(:disabled) {
+  border-color: hsl(var(--color-has));
+}
+
+.task-btn-export.has_saved:hover:not(:disabled) svg {
+  color: hsl(var(--color-has));
+}
+
+.task-btn-export.has_saved svg {
+  overflow: visible;
+  transform-origin: center;
+  transition: transform 0.22s ease;
+}
+
+.task-btn-export.has_saved:hover:not(:disabled) svg {
+  animation: equipment-export-file-hover 0.65s ease;
+}
+
+@keyframes equipment-export-file-hover {
+  0% { transform: translateY(0) scale(1) rotate(0deg); }
+  35% { transform: translateY(-2px) scale(1.11) rotate(-8deg); }
+  70% { transform: translateY(-1px) scale(1.06) rotate(6deg); }
+  100% { transform: translateY(0) scale(1) rotate(0deg); }
+}
+
 .equipment-loading {
   display: flex;
   align-items: center;
@@ -1512,14 +1552,23 @@ async function exportToPdf() {
 
 .table-wrapper {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   /* место под плашку «Удалить» под иконкой (UiDeleteButton) */
   padding-bottom: 52px;
+}
+
+.table-wrapper--swipe {
+  touch-action: pan-x;
 }
 
 .equipment-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.9375rem;
+}
+
+.equipment-table--main {
+  min-width: 1760px;
 }
 
 .equipment-table th,

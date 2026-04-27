@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 export type CalendarTaskRow = {
   id: string
@@ -163,6 +164,7 @@ export async function setTaskAssignees(
   },
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error: delError } = await supabase.from(ASSIGNEES_TABLE).delete().eq('task_id', taskId)
   if (delError) throw delError
   if (userIds.length === 0) return
@@ -194,6 +196,7 @@ export async function updateTaskAssigneeStatus(
 
 export async function removeTaskAssignee(taskId: string, userId: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase
     .from(ASSIGNEES_TABLE)
     .delete()
@@ -277,6 +280,7 @@ export async function updateCalendarTask(
 
 export async function deleteCalendarTask(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -318,6 +322,7 @@ export async function uploadTaskFile(taskId: string, file: File): Promise<Calend
 
 export async function deleteTaskFile(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { data: row, error: fetchError } = await supabase
     .from(FILES_TABLE)
     .select('id, file_path')

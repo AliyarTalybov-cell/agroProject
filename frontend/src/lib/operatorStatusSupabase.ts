@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 export type OperatorStatusKind = 'operation' | 'downtime'
 
@@ -59,6 +60,7 @@ export async function upsertOperatorStatus(input: UpsertOperatorStatusInput): Pr
 /** Убрать строку, когда операция/простой завершены. */
 export async function deleteOperatorStatus(userId: string): Promise<void> {
   if (!supabase) return
+  assertCanDelete()
   const { error } = await supabase.from(TABLE).delete().eq('user_id', userId)
   if (error) {
     console.warn('operator_status delete failed', error)

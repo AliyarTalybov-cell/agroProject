@@ -65,10 +65,6 @@ router.beforeEach(async (to) => {
   const user = getAuthUser()
   if (to.meta.public && user && !to.meta.allowWhenAuth) return { name: 'dashboard' }
   if (!to.meta.public && !user) return { name: 'login', query: { redirect: to.fullPath } }
-  if (to.name === 'employees') {
-    const role = (user?.user_metadata as { role?: string } | undefined)?.role
-    if (role !== 'manager') return { name: 'dashboard' }
-  }
   if (to.meta.managerOnly) {
     const role = (user?.user_metadata as { role?: string } | undefined)?.role
     if (role !== 'manager') return { name: 'dashboard' }

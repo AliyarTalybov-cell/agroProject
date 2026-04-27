@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 export type LandTypeRow = {
   id: string
@@ -367,6 +368,7 @@ export async function updateLand(
 
 export async function deleteLand(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LANDS_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -430,6 +432,7 @@ export async function addLandRight(payload: {
 
 export async function deleteLandRight(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_RIGHTS_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -508,6 +511,7 @@ export async function addLandRightOwnershipForm(name: string): Promise<LandRight
 
 export async function deleteLandRightOwnershipForm(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_RIGHT_OWNERSHIP_FORMS_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -534,6 +538,7 @@ export async function addLandRightType(name: string): Promise<LandRightRefRow> {
 
 export async function deleteLandRightType(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_RIGHT_TYPES_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -560,6 +565,7 @@ export async function addLandRightDocumentType(name: string): Promise<LandRightR
 
 export async function deleteLandRightDocumentType(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_RIGHT_DOCUMENT_TYPES_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -586,6 +592,7 @@ export async function addLandRightHolderType(name: string): Promise<LandRightRef
 
 export async function deleteLandRightHolderType(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_RIGHT_HOLDER_TYPES_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -619,6 +626,7 @@ export async function addLandMeliorationType(name: string): Promise<LandRightRef
 
 export async function deleteLandMeliorationType(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_MELIORATION_TYPES_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -645,6 +653,7 @@ export async function addLandMeliorationSubtype(name: string): Promise<LandRight
 
 export async function deleteLandMeliorationSubtype(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -680,6 +689,7 @@ export async function addLandRightHolder(payload: {
 
 export async function deleteLandRightHolder(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_RIGHT_HOLDERS_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -813,6 +823,7 @@ export async function updateLandUser(
 
 export async function deleteLandUser(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_USERS_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -902,6 +913,7 @@ export async function updateLandCropRotation(
 
 export async function deleteLandCropRotation(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_CROP_ROTATIONS_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -1083,6 +1095,7 @@ export async function addLandMeliorationEntry(payload: {
 
 export async function deleteLandMeliorationEntry(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_MELIORATION_ENTRIES_TABLE).delete().eq('id', id)
   if (error) throw error
 }
@@ -1134,6 +1147,7 @@ export async function updateLandMeliorationEntry(
 
 export async function deleteLandRealEstateObject(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from(LAND_REAL_ESTATE_OBJECTS_TABLE).delete().eq('id', id)
   if (error) throw error
 }

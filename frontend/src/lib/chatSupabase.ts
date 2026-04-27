@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 /** Бейдж в сайдбаре (обновляется опросом и после действий в чате) */
 export const chatTotalUnread = ref(0)
@@ -469,6 +470,7 @@ export async function sendChatMessageWithFile(
  */
 export async function deleteChatMessage(messageId: string): Promise<void> {
   if (!supabase) throw new Error('Нет подключения')
+  assertCanDelete()
   const {
     data: { user },
   } = await supabase.auth.getUser()

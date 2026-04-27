@@ -9,9 +9,13 @@ import {
   loadEquipmentTypeRefs,
   loadEquipmentConditionRefs,
   loadEquipmentPhotos,
+  loadEquipmentDocuments,
   addEquipmentPhoto,
+  addEquipmentDocument,
   deleteEquipmentPhoto,
+  deleteEquipmentDocument,
   type EquipmentPhotoRow,
+  type EquipmentDocumentRow,
   type EquipmentImplementRow,
   type EquipmentRow,
 } from '@/lib/equipmentSupabase'
@@ -45,9 +49,14 @@ const error = ref<string | null>(null)
 
 const equipment = ref<EquipmentRow | null>(null)
 const photos = ref<EquipmentPhotoRow[]>([])
+const documents = ref<EquipmentDocumentRow[]>([])
 const photoUploading = ref(false)
+const documentUploading = ref(false)
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const documentInputRef = ref<HTMLInputElement | null>(null)
+const documentPreviewOpen = ref(false)
+const documentPreview = ref<{ url: string; name: string } | null>(null)
 
 const profiles = ref<ProfileRow[]>([])
 const implementOptions = ref<EquipmentImplementRow[]>([])
@@ -290,9 +299,10 @@ async function refreshAll() {
       return
     }
 
-    const [eq, ph, profileList, implementList, typeRefs, conditionRefs] = await Promise.all([
+    const [eq, ph, docs, profileList, implementList, typeRefs, conditionRefs] = await Promise.all([
       getEquipmentById(id),
       loadEquipmentPhotos(id),
+      loadEquipmentDocuments(id),
       loadProfiles(),
       loadEquipmentImplementsOptions(),
       loadEquipmentTypeRefs(),
@@ -300,6 +310,7 @@ async function refreshAll() {
     ])
     equipment.value = eq
     photos.value = ph
+    documents.value = docs
     profiles.value = profileList
     implementOptions.value = implementList
     equipmentTypeOptions.value = typeRefs.map((x) => ({ value: x.code, label: x.name }))
@@ -342,6 +353,10 @@ function triggerPhotoUpload() {
   fileInputRef.value?.click()
 }
 
+function triggerDocumentUpload() {
+  documentInputRef.value?.click()
+}
+
 async function onPhotoFileChange(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
@@ -362,6 +377,57 @@ async function onPhotoFileChange(e: Event) {
   }
 }
 
+function formatDocumentSize(size: number | null): string {
+  if (size == null || Number.isNaN(size)) return '—'
+  if (size < 1024) return `${size} Б`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} КБ`
+  return `${(size / (1024 * 1024)).toFixed(1)} МБ`
+}
+
+function getDocumentExt(name: string): string {
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return ''
+  return name.slice(dot + 1).toUpperCase()
+}
+
+function isImageDocument(doc: EquipmentDocumentRow): boolean {
+  const mime = String(doc.mime_type || '').toLowerCase()
+  if (mime.startsWith('image/')) return true
+  const ext = getDocumentExt(doc.file_name).toLowerCase()
+  return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'].includes(ext)
+}
+
+function openDocumentPreview(doc: EquipmentDocumentRow) {
+  if (!isImageDocument(doc)) return
+  documentPreview.value = { url: doc.file_url, name: doc.file_name }
+  documentPreviewOpen.value = true
+}
+
+function closeDocumentPreview() {
+  documentPreviewOpen.value = false
+  documentPreview.value = null
+}
+
+async function onDocumentFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (!isSupabaseConfigured()) return
+  const id = equipmentId.value
+  if (!id) return
+
+  documentUploading.value = true
+  try {
+    await addEquipmentDocument(id, file)
+    documents.value = await loadEquipmentDocuments(id)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Не удалось загрузить документ'
+  } finally {
+    documentUploading.value = false
+    input.value = ''
+  }
+}
+
 async function onDeletePhoto(photo: EquipmentPhotoRow) {
   if (!confirm('Удалить фото?')) return
   try {
@@ -369,6 +435,16 @@ async function onDeletePhoto(photo: EquipmentPhotoRow) {
     photos.value = photos.value.filter((p) => p.id !== photo.id)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Не удалось удалить фото'
+  }
+}
+
+async function onDeleteDocument(document: EquipmentDocumentRow) {
+  if (!confirm('Удалить документ?')) return
+  try {
+    await deleteEquipmentDocument(document.id)
+    documents.value = documents.value.filter((d) => d.id !== document.id)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Не удалось удалить документ'
   }
 }
 
@@ -432,6 +508,79 @@ onMounted(refreshAll)
             <li class="field-details-item">
               <span class="field-details-item-icon" aria-hidden="true">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 5h18" />
+                  <path d="M3 12h18" />
+                  <path d="M3 19h18" />
+                </svg>
+              </span>
+              <span class="field-details-item-label">Заводской номер (VIN/PIN)</span>
+              <span class="field-details-item-value">{{ equipment.factory_number || '—' }}</span>
+            </li>
+
+            <li class="field-details-item">
+              <span class="field-details-item-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="5" width="18" height="14" rx="2" />
+                  <path d="M7 9h10" />
+                  <path d="M7 13h6" />
+                </svg>
+              </span>
+              <span class="field-details-item-label">ЭПСМ/ПСМ</span>
+              <span class="field-details-item-value">{{ equipment.epsm_psm || '—' }}</span>
+            </li>
+
+            <li class="field-details-item">
+              <span class="field-details-item-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="5" width="18" height="14" rx="2" />
+                  <path d="M8 10h8" />
+                  <path d="M8 14h4" />
+                </svg>
+              </span>
+              <span class="field-details-item-label">СВР</span>
+              <span class="field-details-item-value">{{ equipment.svr_number || '—' }}</span>
+            </li>
+
+            <li class="field-details-item">
+              <span class="field-details-item-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                </svg>
+              </span>
+              <span class="field-details-item-label">Свидетельство о регистрации</span>
+              <span class="field-details-item-value">{{ equipment.registration_certificate || '—' }}</span>
+            </li>
+
+            <li class="field-details-item">
+              <span class="field-details-item-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+                  <line x1="16" x2="16" y1="2" y2="6" />
+                  <line x1="8" x2="8" y1="2" y2="6" />
+                  <line x1="3" x2="21" y1="10" y2="10" />
+                </svg>
+              </span>
+              <span class="field-details-item-label">Дата регистрации</span>
+              <span class="field-details-item-value">{{ equipment.registration_date || '—' }}</span>
+            </li>
+
+            <li class="field-details-item">
+              <span class="field-details-item-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect width="18" height="18" x="3" y="4" rx="2" ry="2" />
+                  <line x1="16" x2="16" y1="2" y2="6" />
+                  <line x1="8" x2="8" y1="2" y2="6" />
+                  <line x1="3" x2="21" y1="10" y2="10" />
+                </svg>
+              </span>
+              <span class="field-details-item-label">Дата снятия с учета</span>
+              <span class="field-details-item-value">{{ equipment.deregistration_date || '—' }}</span>
+            </li>
+
+            <li class="field-details-item">
+              <span class="field-details-item-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M3 12l2-2 4 4 12-12 2 2L9 16l-4-4z" />
                 </svg>
               </span>
@@ -477,6 +626,51 @@ onMounted(refreshAll)
               <span class="field-details-item-value">{{ responsibleLabel }}</span>
             </li>
           </ul>
+
+          <div class="equipment-documents-block">
+            <div class="equipment-documents-header">
+              <h2 class="equipment-documents-title">Документы техники</h2>
+              <input
+                ref="documentInputRef"
+                type="file"
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf,.jpg,.jpeg,.png,.webp,.heic,.heif,.zip,.rar,.7z"
+                class="field-details-file-hidden"
+                aria-hidden="true"
+                @change="onDocumentFileChange"
+              />
+              <button type="button" class="field-details-upload-btn" :disabled="documentUploading" @click="triggerDocumentUpload">
+                {{ documentUploading ? 'Загрузка…' : '+ Добавить документ' }}
+              </button>
+            </div>
+            <div v-if="documents.length" class="equipment-documents-list">
+              <div v-for="doc in documents" :key="doc.id" class="equipment-documents-item">
+                <button
+                  v-if="isImageDocument(doc)"
+                  type="button"
+                  class="equipment-documents-thumb-btn"
+                  :title="`Предпросмотр: ${doc.file_name}`"
+                  @click="openDocumentPreview(doc)"
+                >
+                  <img :src="doc.file_url" :alt="doc.file_name" class="equipment-documents-thumb" loading="lazy" />
+                </button>
+                <div v-else class="equipment-documents-icon" aria-hidden="true">{{ getDocumentExt(doc.file_name) || 'FILE' }}</div>
+                <div class="equipment-documents-main">
+                  <a :href="doc.file_url" target="_blank" rel="noopener noreferrer" class="equipment-documents-link">
+                    {{ doc.file_name }}
+                  </a>
+                  <span class="equipment-documents-meta">
+                    {{ formatDocumentSize(doc.file_size) }} ·
+                    {{ doc.created_at ? new Date(doc.created_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—' }}
+                  </span>
+                </div>
+                <div class="equipment-documents-actions">
+                  <a :href="doc.file_url" target="_blank" rel="noopener noreferrer" class="equipment-documents-open-link">Открыть</a>
+                  <UiDeleteButton size="xs" @click.prevent="onDeleteDocument(doc)" />
+                </div>
+              </div>
+            </div>
+            <p v-else class="field-details-muted">Документы пока не добавлены.</p>
+          </div>
 
           <div v-if="equipment.notes" class="field-details-notes">
             <div class="field-details-notes-block">
@@ -781,6 +975,20 @@ onMounted(refreshAll)
         </template>
       </section>
     </template>
+
+    <teleport to="body">
+      <div v-if="documentPreviewOpen && documentPreview" class="doc-preview-backdrop" role="dialog" aria-modal="true" aria-label="Предпросмотр документа" @click.self="closeDocumentPreview">
+        <div class="doc-preview-modal">
+          <div class="doc-preview-head">
+            <div class="doc-preview-title">{{ documentPreview.name }}</div>
+            <button type="button" class="doc-preview-close" aria-label="Закрыть предпросмотр" @click="closeDocumentPreview">×</button>
+          </div>
+          <div class="doc-preview-body">
+            <img :src="documentPreview.url" :alt="documentPreview.name" class="doc-preview-image" />
+          </div>
+        </div>
+      </div>
+    </teleport>
   </div>
 </template>
 
@@ -929,6 +1137,173 @@ onMounted(refreshAll)
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+.equipment-documents-block {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--topbar-border);
+}
+.equipment-documents-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.equipment-documents-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.equipment-documents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.equipment-documents-item {
+  border: 1px solid var(--topbar-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--bg-base);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.equipment-documents-thumb-btn {
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--topbar-border);
+  border-radius: 8px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg-panel);
+  cursor: zoom-in;
+  flex-shrink: 0;
+}
+.equipment-documents-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.equipment-documents-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  border: 1px solid var(--topbar-border);
+  background: linear-gradient(135deg, rgba(61, 92, 64, 0.12), rgba(61, 92, 64, 0.2));
+  color: var(--text-primary);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.equipment-documents-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+}
+.equipment-documents-link {
+  color: var(--text-primary);
+  font-weight: 600;
+  text-decoration: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.equipment-documents-link:hover {
+  text-decoration: underline;
+}
+.equipment-documents-meta {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.equipment-documents-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.equipment-documents-open-link {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  border: 1px solid var(--topbar-border);
+  border-radius: 8px;
+  padding: 4px 8px;
+}
+.equipment-documents-open-link:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+.doc-preview-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  background: rgba(15, 23, 42, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.doc-preview-modal {
+  width: min(1100px, 96vw);
+  max-height: 92vh;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+}
+.doc-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+.doc-preview-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-preview-close {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+.doc-preview-body {
+  padding: 12px;
+  max-height: calc(92vh - 58px);
+  overflow: auto;
+}
+.doc-preview-image {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  max-height: calc(92vh - 92px);
+  border-radius: 10px;
+  border: 1px solid var(--topbar-border);
 }
 .field-details-notes-label {
   font-size: 0.8rem;
@@ -1924,6 +2299,21 @@ onMounted(refreshAll)
   }
   .field-details-name {
     font-size: 1.05rem;
+  }
+  .equipment-documents-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .equipment-documents-item {
+    align-items: flex-start;
+  }
+  .equipment-documents-meta {
+    white-space: normal;
+  }
+  .equipment-documents-actions {
+    margin-left: auto;
+    flex-direction: column;
+    align-items: flex-end;
   }
   .equipment-history-op-title {
     font-size: 0.88rem;

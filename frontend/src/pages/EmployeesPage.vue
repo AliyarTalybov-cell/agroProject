@@ -150,6 +150,7 @@ function goPage(next: number) {
 }
 
 function openEmployee(e: EmployeeRow) {
+  if (!canManage.value) return
   selected.value = e
   editOpen.value = true
 }
@@ -194,11 +195,10 @@ function openEmployee(e: EmployeeRow) {
       Supabase не настроен. Добавьте `VITE_SUPABASE_URL` и `VITE_SUPABASE_ANON_KEY` в `frontend/.env.local`.
     </div>
 
-    <div v-else-if="!canManage" class="emp-empty card" role="status">
-      Раздел доступен только роли <b>Руководитель</b>.
-    </div>
-
     <div v-else class="emp-content">
+      <div v-if="!canManage" class="emp-alert" role="status">
+        Доступен режим просмотра. Создание и редактирование сотрудников доступны только роли <b>Руководитель</b>.
+      </div>
       <div v-if="error" class="emp-alert emp-alert--error" role="alert">{{ error }}</div>
 
       <div v-if="loading" class="emp-loading" role="status" aria-live="polite">
@@ -206,7 +206,15 @@ function openEmployee(e: EmployeeRow) {
       </div>
 
       <div v-else class="emp-grid">
-        <article v-for="e in employees" :key="e.id" class="emp-card" tabindex="0" @click="openEmployee(e)" @keydown.enter="openEmployee(e)">
+        <article
+          v-for="e in employees"
+          :key="e.id"
+          class="emp-card"
+          :class="{ 'emp-card--readonly': !canManage }"
+          :tabindex="canManage ? 0 : -1"
+          @click="openEmployee(e)"
+          @keydown.enter="openEmployee(e)"
+        >
           <div class="emp-card-head">
             <div class="emp-avatar" :style="{ background: avatarColor(e.position) }">
               {{ initials(e.display_name, e.email) }}
@@ -291,6 +299,7 @@ function openEmployee(e: EmployeeRow) {
     </div>
 
     <EmployeeCreateModal
+      v-if="canManage"
       :open="createOpen"
       :positions="positions"
       @close="createOpen = false"
@@ -298,6 +307,7 @@ function openEmployee(e: EmployeeRow) {
     />
 
     <EmployeeEditModal
+      v-if="canManage"
       :open="editOpen"
       :employee="selected"
       :positions="positions"
@@ -513,6 +523,14 @@ function openEmployee(e: EmployeeRow) {
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
 }
 
+.emp-card--readonly {
+  cursor: default;
+}
+
+.emp-card--readonly:hover {
+  transform: none;
+}
+
 [data-theme='dark'] .emp-card:hover {
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
 }
@@ -654,7 +672,9 @@ function openEmployee(e: EmployeeRow) {
 .emp-alert {
   padding: 12px 14px;
   border-radius: 12px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
   margin-bottom: 12px;
 }
 .emp-alert--error {

@@ -10,7 +10,6 @@ const auth = useAuth()
 const mode = ref<'login' | 'register'>('login')
 const email = ref('')
 const password = ref('')
-const role = ref<'worker' | 'manager'>('worker')
 const error = ref<string | null>(null)
 const loading = ref(false)
 
@@ -45,7 +44,7 @@ async function submit() {
     if (mode.value === 'login') {
       await auth.login(trimmedEmail, trimmedPassword)
     } else {
-      await auth.register(trimmedEmail, trimmedPassword, role.value)
+      await auth.register(trimmedEmail, trimmedPassword)
     }
     const redirect = (route.query.redirect as string) || '/dashboard'
     router.push(redirect)
@@ -112,17 +111,6 @@ async function submit() {
           autocomplete="current-password"
           required
         />
-      </div>
-
-      <div v-if="mode === 'register'" class="input_container input_container--select">
-        <label class="input_label" for="auth-role">Роль</label>
-        <select id="auth-role" v-model="role" class="input_field input_field--select">
-          <option value="worker">Работник</option>
-          <option value="manager">Руководитель</option>
-        </select>
-        <p class="role_hint">
-          Работник видит только свои данные; руководитель — по всем сотрудникам.
-        </p>
       </div>
 
       <p v-if="error" class="auth_error" role="alert">{{ error }}</p>

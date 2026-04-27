@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 export type DowntimeCategory = 'breakdown' | 'rain' | 'fuel' | 'waiting'
 
@@ -46,6 +47,7 @@ export async function addDowntimeReason(
 
 export async function deleteDowntimeReason(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from('downtime_reasons').delete().eq('id', id)
   if (error) throw error
 }
@@ -73,6 +75,7 @@ export async function addWorkOperation(name: string, createdBy: string | null): 
 
 export async function deleteWorkOperation(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from('work_operations').delete().eq('id', id)
   if (error) throw error
 }

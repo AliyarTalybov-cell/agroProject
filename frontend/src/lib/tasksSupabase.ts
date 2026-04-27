@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { assertCanDelete } from '@/lib/deletePermissions'
 
 export type TaskPriority = 'high' | 'medium' | 'low'
 export type TaskStatus = 'todo' | 'in_progress' | 'review' | 'done'
@@ -489,6 +490,7 @@ export async function uploadTaskFile(taskId: string, file: File): Promise<TaskFi
 
 export async function deleteTaskFile(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { data: row, error: fetchError } = await supabase
     .from(TASK_FILES_TABLE)
     .select('id, file_path')
@@ -511,6 +513,7 @@ export function getTaskFilePublicUrl(filePath: string): string {
 
 export async function deleteTask(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
   const { error } = await supabase.from('tasks').delete().eq('id', id)
   if (error) throw error
 }
