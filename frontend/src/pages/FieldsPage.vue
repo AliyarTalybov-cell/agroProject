@@ -1895,7 +1895,7 @@ onMounted(async () => {
                 <span class="modal-label modal-label--with-help">
                   Тип земли
                   <RefFieldHelp
-                    text="Не хватает типа земли? Добавьте его в справочнике земель."
+                    text="Не хватает типа земли? Добавьте его в"
                     :to="{ path: '/lands', query: { tab: 'land-refs' } }"
                     link-label="Справочники земель"
                   />
@@ -1908,7 +1908,7 @@ onMounted(async () => {
                 <span class="modal-label modal-label--with-help">
                   Культура
                   <RefFieldHelp
-                    text="Нет нужной культуры? Добавьте ее в справочнике СХ культур."
+                    text="Нет нужной культуры? Добавьте ее в"
                     :to="{ path: '/lands', query: { tab: 'crops-refs' } }"
                     link-label="Справочники СХ культур"
                   />

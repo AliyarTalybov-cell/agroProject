@@ -25,6 +25,7 @@ import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiTrashIcon from '@/components/UiTrashIcon.vue'
+import RefFieldHelp from '@/components/RefFieldHelp.vue'
 
 const DEFAULT_EQUIPMENT_TYPES = [
   { code: 'tractor', name: 'Трактор' },
@@ -673,7 +674,14 @@ async function exportToPdf() {
           />
         </div>
         <div class="equipment-form-field">
-          <label class="equipment-label" for="eq-type">Тип техники</label>
+          <label class="equipment-label equipment-label--with-help" for="eq-type">
+            <span>Тип техники</span>
+            <RefFieldHelp
+              text="Нет нужного типа техники? Добавьте его в"
+              :to="{ path: '/lands', query: { tab: 'equipment-refs' } }"
+              link-label="Справочники техники"
+            />
+          </label>
           <select id="eq-type" v-model="form.equipment_type" class="equipment-input equipment-select">
             <option
               v-for="opt in equipmentTypeOptions"
@@ -775,7 +783,14 @@ async function exportToPdf() {
           </select>
         </div>
         <div class="equipment-form-field">
-          <label class="equipment-label" for="eq-condition">Состояние</label>
+          <label class="equipment-label equipment-label--with-help" for="eq-condition">
+            <span>Состояние</span>
+            <RefFieldHelp
+              text="Нет нужного состояния? Добавьте его в"
+              :to="{ path: '/lands', query: { tab: 'equipment-refs' } }"
+              link-label="Справочники техники"
+            />
+          </label>
           <select id="eq-condition" v-model="form.condition" class="equipment-input equipment-select">
             <option
               v-for="opt in conditionOptions"
@@ -1270,6 +1285,11 @@ async function exportToPdf() {
   font-weight: 500;
   color: var(--text-secondary);
   margin-bottom: 4px;
+}
+
+.equipment-label--with-help {
+  display: inline-flex;
+  align-items: center;
 }
 
 .equipment-input {

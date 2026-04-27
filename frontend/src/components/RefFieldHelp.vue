@@ -14,8 +14,7 @@ withDefaults(defineProps<{
   <span class="ref-help" tabindex="0" aria-label="Подсказка по справочнику">
     <span class="ref-help-icon">?</span>
     <span class="ref-help-tooltip">
-      <span class="ref-help-text">{{ text }}</span>
-      <RouterLink :to="to" class="ref-help-link">{{ linkLabel }}</RouterLink>
+      <span class="ref-help-text">{{ text }} <RouterLink :to="to" class="ref-help-link">{{ linkLabel }}</RouterLink></span>
     </span>
   </span>
 </template>
@@ -72,6 +71,10 @@ withDefaults(defineProps<{
   box-shadow: var(--shadow-card);
   display: none;
   color: var(--text-primary);
+  text-transform: none;
+  letter-spacing: normal;
+  font-family: inherit;
+  font-weight: 500;
 }
 
 .ref-help:hover .ref-help-tooltip,
@@ -81,16 +84,17 @@ withDefaults(defineProps<{
 }
 
 .ref-help-text {
-  display: block;
+  display: inline;
   font-size: 12px;
   line-height: 1.35;
 }
 
 .ref-help-link {
-  display: inline-block;
-  margin-top: 8px;
+  display: inline;
+  margin-top: 0;
   font-size: 12px;
-  font-weight: 600;
+  line-height: 1.35;
+  font-weight: 700;
   color: var(--accent-green);
   text-decoration: none;
 }

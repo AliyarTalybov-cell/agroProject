@@ -186,6 +186,7 @@ const LAND_RIGHT_HOLDER_TYPES_TABLE = 'land_right_holder_types'
 const LAND_RIGHT_HOLDERS_TABLE = 'land_right_holders'
 const LAND_MELIORATION_TYPES_TABLE = 'land_melioration_types'
 const LAND_MELIORATION_SUBTYPES_TABLE = 'land_melioration_subtypes'
+const LAND_MELIORATION_EVENT_TYPES_TABLE = 'land_melioration_event_types'
 
 function normalizeLandRow(row: Record<string, unknown>): LandRow {
   return {
@@ -661,6 +662,33 @@ export async function deleteLandMeliorationSubtype(id: string): Promise<void> {
 export async function updateLandMeliorationSubtype(id: string, name: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
   const { error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).update({ name: name.trim() }).eq('id', id)
+  if (error) throw error
+}
+
+export async function loadLandMeliorationEventTypes(): Promise<LandRightRefRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase.from(LAND_MELIORATION_EVENT_TYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as LandRightRefRow[]
+}
+
+export async function addLandMeliorationEventType(name: string): Promise<LandRightRefRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { data, error } = await supabase.from(LAND_MELIORATION_EVENT_TYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  if (error) throw error
+  return data as LandRightRefRow
+}
+
+export async function deleteLandMeliorationEventType(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
+  const { error } = await supabase.from(LAND_MELIORATION_EVENT_TYPES_TABLE).delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function updateLandMeliorationEventType(id: string, name: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from(LAND_MELIORATION_EVENT_TYPES_TABLE).update({ name: name.trim() }).eq('id', id)
   if (error) throw error
 }
 

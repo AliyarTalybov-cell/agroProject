@@ -48,6 +48,7 @@ begin
     'land_crop_rotations',
     'land_melioration_types',
     'land_melioration_subtypes',
+    'land_melioration_event_types',
     'land_melioration_entries',
     'land_real_estate_objects',
     'news_posts',

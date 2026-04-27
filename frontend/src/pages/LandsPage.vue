@@ -60,6 +60,7 @@ import {
   loadLandRightTypes,
   loadLandMeliorationTypes,
   loadLandMeliorationSubtypes,
+  loadLandMeliorationEventTypes,
   loadLandCropRotations,
   loadLandMeliorationEntries,
   loadAllLandMeliorationEntries,
@@ -82,6 +83,7 @@ import {
   updateLandRightOwnershipForm,
   updateLandMeliorationType,
   updateLandMeliorationSubtype,
+  updateLandMeliorationEventType,
   updateLandRight,
   updateLandRightType,
   updateLandCropRotation,
@@ -90,9 +92,11 @@ import {
   addLandMeliorationEntry,
   addLandMeliorationType,
   addLandMeliorationSubtype,
+  addLandMeliorationEventType,
   deleteLandMeliorationEntry,
   deleteLandMeliorationType,
   deleteLandMeliorationSubtype,
+  deleteLandMeliorationEventType,
   updateLandMeliorationEntry,
   uploadLandRightFile,
 } from '@/lib/landsSupabase'
@@ -156,6 +160,7 @@ const landRightHolderTypes = ref<LandRightRefRow[]>([])
 const landRightHolders = ref<LandRightHolderRow[]>([])
 const landMeliorationTypes = ref<LandRightRefRow[]>([])
 const landMeliorationSubtypes = ref<LandRightRefRow[]>([])
+const landMeliorationEventTypes = ref<LandRightRefRow[]>([])
 const landUsers = ref<LandUserRow[]>([])
 const landCropRotations = ref<LandCropRotationRow[]>([])
 const landRealEstateObjects = ref<LandRealEstateObjectRow[]>([])
@@ -178,7 +183,7 @@ const showDetailsMap = ref(false)
 const landsRootTab = ref<'registry' | 'melioration' | 'land-refs' | 'rights-refs' | 'crops-refs' | 'melioration-refs' | 'equipment-refs'>('registry')
 const landRefsTab = ref<'land-types' | 'land-categories' | 'land-usage'>('land-types')
 const rightsRefsTab = ref<'ownership-forms' | 'right-types' | 'document-types' | 'holder-types' | 'holders'>('ownership-forms')
-const meliorationRefsTab = ref<'types' | 'subtypes'>('types')
+const meliorationRefsTab = ref<'types' | 'subtypes' | 'event-types'>('types')
 const equipmentRefsTab = ref<'types' | 'conditions'>('types')
 const refsLoading = ref(false)
 const refsError = ref<string | null>(null)
@@ -192,6 +197,7 @@ const newRightDocumentTypeName = ref('')
 const newHolderTypeName = ref('')
 const newMeliorationTypeName = ref('')
 const newMeliorationSubtypeName = ref('')
+const newMeliorationEventTypeName = ref('')
 const newEquipmentTypeName = ref('')
 const newEquipmentConditionName = ref('')
 const newHolderName = ref('')
@@ -260,7 +266,7 @@ const deleteConfirmText = ref('')
 const deleteTarget = ref<{
   type: 'crop-rotation' | 'real-estate' | 'land-type' | 'land-category' | 'land-usage' | 'crop-ref' | 'melioration'
     | 'ownership-form' | 'right-type' | 'right-document-type' | 'holder-type' | 'right-holder'
-    | 'melioration-type' | 'melioration-subtype' | 'equipment-type' | 'equipment-condition'
+    | 'melioration-type' | 'melioration-subtype' | 'melioration-event-type' | 'equipment-type' | 'equipment-condition'
   id: string
 } | null>(null)
 const successModalOpen = ref(false)
@@ -1623,6 +1629,52 @@ async function removeMeliorationSubtypeRef(id: string) {
   }
 }
 
+async function addMeliorationEventTypeRef() {
+  const name = newMeliorationEventTypeName.value.trim()
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    const row = await addLandMeliorationEventType(name)
+    landMeliorationEventTypes.value = [...landMeliorationEventTypes.value, row]
+    newMeliorationEventTypeName.value = ''
+  } catch (e) {
+    refsError.value = e instanceof Error ? e.message : 'Не удалось добавить тип мероприятия'
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function editMeliorationEventTypeRef(row: LandRightRefRow) {
+  const next = prompt('Новое название типа мероприятия', row.name)?.trim()
+  if (!next || next === row.name || !isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await updateLandMeliorationEventType(row.id, next)
+    landMeliorationEventTypes.value = landMeliorationEventTypes.value.map((x) => (x.id === row.id ? { ...x, name: next } : x))
+  } catch (e) {
+    refsError.value = e instanceof Error ? e.message : 'Не удалось обновить тип мероприятия'
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function removeMeliorationEventTypeRef(id: string) {
+  if (!isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await deleteLandMeliorationEventType(id)
+    landMeliorationEventTypes.value = landMeliorationEventTypes.value.filter((x) => x.id !== id)
+  } catch (e) {
+    refsError.value = e instanceof Error ? e.message : 'Не удалось удалить тип мероприятия'
+  } finally {
+    refsLoading.value = false
+  }
+}
+
 function normalizeEquipmentTypeCode(value: string): string {
   const map: Record<string, string> = {
     а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
@@ -1821,6 +1873,7 @@ async function reloadAll() {
       holdersRows,
       meliorationTypesRows,
       meliorationSubtypesRows,
+      meliorationEventTypesRows,
     ] = await Promise.all([
       loadLands(!isDetailsMode.value && (landsRootTab.value === 'registry' || landsRootTab.value === 'melioration') ? landsSearch.value : ''),
       loadLandTypes(),
@@ -1835,6 +1888,7 @@ async function reloadAll() {
       loadLandRightHolders(),
       loadLandMeliorationTypes(),
       loadLandMeliorationSubtypes(),
+      loadLandMeliorationEventTypes(),
     ])
     lands.value = landsRows
     landTypes.value = landTypeRows
@@ -1849,6 +1903,7 @@ async function reloadAll() {
     landRightHolders.value = holdersRows
     landMeliorationTypes.value = meliorationTypesRows
     landMeliorationSubtypes.value = meliorationSubtypesRows
+    landMeliorationEventTypes.value = meliorationEventTypesRows
     await loadEquipmentRefsSafe()
     if (!isDetailsMode.value && landsRootTab.value === 'melioration') {
       landMeliorationEntries.value = await loadAllLandMeliorationEntries()
@@ -2481,6 +2536,13 @@ function requestDeleteMeliorationSubtype(id: string) {
   deleteConfirmOpen.value = true
 }
 
+function requestDeleteMeliorationEventType(id: string) {
+  deleteTarget.value = { type: 'melioration-event-type', id }
+  deleteConfirmTitle.value = 'Удаление типа мероприятия'
+  deleteConfirmText.value = 'Тип мероприятия будет удален из справочника.'
+  deleteConfirmOpen.value = true
+}
+
 function requestDeleteEquipmentType(id: string) {
   deleteTarget.value = { type: 'equipment-type', id }
   deleteConfirmTitle.value = 'Удаление типа техники'
@@ -2768,6 +2830,8 @@ async function confirmDeleteTarget() {
     await removeMeliorationTypeRef(deleteTarget.value.id)
   } else if (deleteTarget.value.type === 'melioration-subtype') {
     await removeMeliorationSubtypeRef(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'melioration-event-type') {
+    await removeMeliorationEventTypeRef(deleteTarget.value.id)
   } else if (deleteTarget.value.type === 'equipment-type') {
     await removeEquipmentTypeReference(deleteTarget.value.id)
   } else if (deleteTarget.value.type === 'equipment-condition') {
@@ -3223,6 +3287,9 @@ onMounted(() => void reloadAll())
             <button type="button" class="lands-tab-btn" :class="{ 'is-active': meliorationRefsTab === 'subtypes' }" @click="meliorationRefsTab = 'subtypes'">
               Виды мелиорации
             </button>
+            <button type="button" class="lands-tab-btn" :class="{ 'is-active': meliorationRefsTab === 'event-types' }" @click="meliorationRefsTab = 'event-types'">
+              Типы мероприятий
+            </button>
           </div>
           <div v-if="meliorationRefsTab === 'types'" class="lands-ref-block">
             <h2>Типы мелиорации</h2>
@@ -3245,7 +3312,7 @@ onMounted(() => void reloadAll())
               <p v-if="!landMeliorationTypes.length" class="lands-muted">Пока нет типов мелиорации.</p>
             </div>
           </div>
-          <div v-else class="lands-ref-block">
+          <div v-else-if="meliorationRefsTab === 'subtypes'" class="lands-ref-block">
             <h2>Виды мелиорации</h2>
             <div class="lands-ref-add-row">
               <input v-model="newMeliorationSubtypeName" class="lands-search" type="text" placeholder="Например: Осушительная" />
@@ -3264,6 +3331,27 @@ onMounted(() => void reloadAll())
                 </div>
               </div>
               <p v-if="!landMeliorationSubtypes.length" class="lands-muted">Пока нет видов мелиорации.</p>
+            </div>
+          </div>
+          <div v-else class="lands-ref-block">
+            <h2>Типы мероприятий</h2>
+            <div class="lands-ref-add-row">
+              <input v-model="newMeliorationEventTypeName" class="lands-search" type="text" placeholder="Например: Реконструкция" />
+              <button type="button" class="lands-btn lands-btn--save lands-btn--add" :disabled="refsLoading || !newMeliorationEventTypeName.trim()" @click="addMeliorationEventTypeRef">
+                Добавить
+              </button>
+            </div>
+            <div class="lands-list-plain">
+              <div v-for="row in landMeliorationEventTypes" :key="row.id" class="lands-list-plain-item">
+                <span>{{ row.name }}</span>
+                <div class="lands-item-actions">
+                  <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editMeliorationEventTypeRef(row)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                  </button>
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteMeliorationEventType(row.id)" />
+                </div>
+              </div>
+              <p v-if="!landMeliorationEventTypes.length" class="lands-muted">Пока нет типов мероприятий.</p>
             </div>
           </div>
         </template>
@@ -3641,9 +3729,9 @@ onMounted(() => void reloadAll())
               <span class="lands-label-with-help">
                 Использование участка
                 <RefFieldHelp
-                  text="Нет нужного варианта? Добавьте его в справочники земель → Использование участка."
+                  text="Нет нужного варианта? Добавьте его в"
                   :to="{ path: '/lands', query: { tab: 'land-usage' } }"
-                  link-label="Открыть раздел"
+                  link-label="Использование участка"
                 />
               </span>
                 <select v-model="form.actualUseStatus">
@@ -3965,7 +4053,7 @@ onMounted(() => void reloadAll())
                 <span class="lands-label-with-help">
                   Категория земель
                   <RefFieldHelp
-                    text="Нет нужной категории? Добавьте ее в справочники земель."
+                    text="Нет нужной категории? Добавьте ее в"
                     :to="{ path: '/lands', query: { tab: 'land-refs' } }"
                     link-label="Справочники земель"
                   />
@@ -3981,7 +4069,7 @@ onMounted(() => void reloadAll())
                 <span class="lands-label-with-help">
                   Тип земли
                   <RefFieldHelp
-                    text="Нет нужного типа? Добавьте его в справочники земель."
+                    text="Нет нужного типа? Добавьте его в"
                     :to="{ path: '/lands', query: { tab: 'land-refs' } }"
                     link-label="Справочники земель"
                   />
@@ -4254,7 +4342,7 @@ onMounted(() => void reloadAll())
                 <span class="lands-label-with-help">
                   Форма собственности *
                   <RefFieldHelp
-                    text="Нет нужной формы собственности? Добавьте ее в справочники прав."
+                    text="Нет нужной формы собственности? Добавьте ее в"
                     :to="{ path: '/lands', query: { tab: 'rights-refs' } }"
                     link-label="Справочники прав"
                   />
@@ -4270,7 +4358,7 @@ onMounted(() => void reloadAll())
                 <span class="lands-label-with-help">
                   Вид права *
                   <RefFieldHelp
-                    text="Нет нужного вида права? Добавьте его в справочники прав."
+                    text="Нет нужного вида права? Добавьте его в"
                     :to="{ path: '/lands', query: { tab: 'rights-refs' } }"
                     link-label="Справочники прав"
                   />
@@ -4284,7 +4372,7 @@ onMounted(() => void reloadAll())
                 <span class="lands-label-with-help">
                   Тип подтверждающего документа *
                   <RefFieldHelp
-                    text="Нет нужного типа документа? Добавьте его в справочники прав."
+                    text="Нет нужного типа документа? Добавьте его в"
                     :to="{ path: '/lands', query: { tab: 'rights-refs' } }"
                     link-label="Справочники прав"
                   />
@@ -4490,7 +4578,7 @@ onMounted(() => void reloadAll())
               <span class="lands-label-with-help">
                 Правообладатель *
                 <RefFieldHelp
-                  text="Нет нужного правообладателя? Добавьте его в справочники прав."
+                  text="Нет нужного правообладателя? Добавьте его в"
                   :to="{ path: '/lands', query: { tab: 'rights-refs' } }"
                   link-label="Справочники прав"
                 />
@@ -4540,7 +4628,7 @@ onMounted(() => void reloadAll())
                 <span class="lands-label-with-help">
                   Вид права *
                   <RefFieldHelp
-                    text="Нет нужного вида права? Добавьте его в справочники прав."
+                    text="Нет нужного вида права? Добавьте его в"
                     :to="{ path: '/lands', query: { tab: 'rights-refs' } }"
                     link-label="Справочники прав"
                   />
@@ -4554,7 +4642,7 @@ onMounted(() => void reloadAll())
                 <span class="lands-label-with-help">
                   Тип подтверждающего документа *
                   <RefFieldHelp
-                    text="Нет нужного типа документа? Добавьте его в справочники прав."
+                    text="Нет нужного типа документа? Добавьте его в"
                     :to="{ path: '/lands', query: { tab: 'rights-refs' } }"
                     link-label="Справочники прав"
                   />
@@ -4672,7 +4760,14 @@ onMounted(() => void reloadAll())
                 </select>
               </label>
               <label v-if="meliorationTab === 'systems'" class="lands-field">
-                <span>Тип мелиорации</span>
+                <span class="lands-label-with-help">
+                  Тип мелиорации
+                  <RefFieldHelp
+                    text="Нет нужного типа мелиорации? Добавьте его в"
+                    :to="{ path: '/lands', query: { tab: 'melioration-refs' } }"
+                    link-label="Справочники мелиорации"
+                  />
+                </span>
                 <select v-model="meliorationForm.meliorationType">
                   <option value="">—</option>
                   <option v-for="row in landMeliorationTypes" :key="row.id" :value="row.name">
@@ -4685,13 +4780,32 @@ onMounted(() => void reloadAll())
                 <input v-model.number="meliorationForm.forestYearCreated" type="number" min="1900" step="1" />
               </label>
               <label v-else class="lands-field">
-                <span>Тип мероприятия</span>
-                <input v-model.trim="meliorationForm.eventType" type="text" />
+                <span class="lands-label-with-help">
+                  Тип мероприятия
+                  <RefFieldHelp
+                    text="Нет нужного типа мероприятия? Добавьте его в"
+                    :to="{ path: '/lands', query: { tab: 'melioration-refs' } }"
+                    link-label="Типы мероприятий"
+                  />
+                </span>
+                <select v-model="meliorationForm.eventType">
+                  <option value="">—</option>
+                  <option v-for="row in landMeliorationEventTypes" :key="row.id" :value="row.name">
+                    {{ row.name }}
+                  </option>
+                </select>
               </label>
             </div>
             <div v-if="meliorationTab === 'systems'" class="lands-form-grid lands-form-grid--mel">
               <label class="lands-field">
-                <span>Вид мелиорации</span>
+                <span class="lands-label-with-help">
+                  Вид мелиорации
+                  <RefFieldHelp
+                    text="Нет нужного вида мелиорации? Добавьте его в"
+                    :to="{ path: '/lands', query: { tab: 'melioration-refs' } }"
+                    link-label="Справочники мелиорации"
+                  />
+                </span>
                 <select v-model="meliorationForm.meliorationSubtype">
                   <option value="">—</option>
                   <option v-for="row in landMeliorationSubtypes" :key="row.id" :value="row.name">
