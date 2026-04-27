@@ -67,6 +67,16 @@ export type LandUserRow = {
   id: string
   land_id: string
   user_id: string | null
+  holder_mode: 'manual' | 'reference' | null
+  right_holder_id: string | null
+  holder_name: string | null
+  holder_inn: string | null
+  holder_kpp: string | null
+  holder_ogrn: string | null
+  right_type: string | null
+  document_type: string | null
+  supporting_documents: string | null
+  usage_area_ha: number | null
   organization_name: string | null
   person_name: string | null
   inn: string | null
@@ -173,6 +183,8 @@ const LAND_RIGHT_TYPES_TABLE = 'land_right_types'
 const LAND_RIGHT_DOCUMENT_TYPES_TABLE = 'land_right_document_types'
 const LAND_RIGHT_HOLDER_TYPES_TABLE = 'land_right_holder_types'
 const LAND_RIGHT_HOLDERS_TABLE = 'land_right_holders'
+const LAND_MELIORATION_TYPES_TABLE = 'land_melioration_types'
+const LAND_MELIORATION_SUBTYPES_TABLE = 'land_melioration_subtypes'
 
 function normalizeLandRow(row: Record<string, unknown>): LandRow {
   return {
@@ -591,6 +603,58 @@ export async function loadLandRightHolders(): Promise<LandRightHolderRow[]> {
   return (data ?? []) as LandRightHolderRow[]
 }
 
+export async function loadLandMeliorationTypes(): Promise<LandRightRefRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase.from(LAND_MELIORATION_TYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as LandRightRefRow[]
+}
+
+export async function addLandMeliorationType(name: string): Promise<LandRightRefRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { data, error } = await supabase.from(LAND_MELIORATION_TYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  if (error) throw error
+  return data as LandRightRefRow
+}
+
+export async function deleteLandMeliorationType(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from(LAND_MELIORATION_TYPES_TABLE).delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function updateLandMeliorationType(id: string, name: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from(LAND_MELIORATION_TYPES_TABLE).update({ name: name.trim() }).eq('id', id)
+  if (error) throw error
+}
+
+export async function loadLandMeliorationSubtypes(): Promise<LandRightRefRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as LandRightRefRow[]
+}
+
+export async function addLandMeliorationSubtype(name: string): Promise<LandRightRefRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { data, error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  if (error) throw error
+  return data as LandRightRefRow
+}
+
+export async function deleteLandMeliorationSubtype(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function updateLandMeliorationSubtype(id: string, name: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).update({ name: name.trim() }).eq('id', id)
+  if (error) throw error
+}
+
 export async function addLandRightHolder(payload: {
   name: string
   holder_type_id?: string | null
@@ -655,6 +719,16 @@ export async function loadLandUsers(landId: string): Promise<LandUserRow[]> {
 export async function addLandUser(payload: {
   land_id: string
   user_id?: string | null
+  holder_mode?: 'manual' | 'reference' | null
+  right_holder_id?: string | null
+  holder_name?: string | null
+  holder_inn?: string | null
+  holder_kpp?: string | null
+  holder_ogrn?: string | null
+  right_type?: string | null
+  document_type?: string | null
+  supporting_documents?: string | null
+  usage_area_ha?: number | null
   organization_name?: string | null
   person_name?: string | null
   inn?: string | null
@@ -668,6 +742,16 @@ export async function addLandUser(payload: {
   const insertPayload = {
     land_id: payload.land_id,
     user_id: payload.user_id || null,
+    holder_mode: payload.holder_mode ?? 'manual',
+    right_holder_id: payload.right_holder_id || null,
+    holder_name: payload.holder_name?.trim() || null,
+    holder_inn: payload.holder_inn?.trim() || null,
+    holder_kpp: payload.holder_kpp?.trim() || null,
+    holder_ogrn: payload.holder_ogrn?.trim() || null,
+    right_type: payload.right_type?.trim() || null,
+    document_type: payload.document_type?.trim() || null,
+    supporting_documents: payload.supporting_documents?.trim() || null,
+    usage_area_ha: payload.usage_area_ha ?? null,
     organization_name: payload.organization_name?.trim() || null,
     person_name: payload.person_name?.trim() || null,
     inn: payload.inn?.trim() || null,
@@ -680,6 +764,51 @@ export async function addLandUser(payload: {
   const { data, error } = await supabase.from(LAND_USERS_TABLE).insert(insertPayload).select('*').single()
   if (error) throw error
   return data as LandUserRow
+}
+
+export async function updateLandUser(
+  id: string,
+  payload: Partial<{
+    holder_mode: 'manual' | 'reference' | null
+    right_holder_id: string | null
+    holder_name: string | null
+    holder_inn: string | null
+    holder_kpp: string | null
+    holder_ogrn: string | null
+    right_type: string | null
+    document_type: string | null
+    supporting_documents: string | null
+    usage_area_ha: number | null
+    starts_at: string | null
+    ends_at: string | null
+    organization_name: string | null
+    person_name: string | null
+    inn: string | null
+    basis: string | null
+    notes: string | null
+  }>,
+): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  if (payload.holder_mode !== undefined) updates.holder_mode = payload.holder_mode
+  if (payload.right_holder_id !== undefined) updates.right_holder_id = payload.right_holder_id || null
+  if (payload.holder_name !== undefined) updates.holder_name = payload.holder_name?.trim() || null
+  if (payload.holder_inn !== undefined) updates.holder_inn = payload.holder_inn?.trim() || null
+  if (payload.holder_kpp !== undefined) updates.holder_kpp = payload.holder_kpp?.trim() || null
+  if (payload.holder_ogrn !== undefined) updates.holder_ogrn = payload.holder_ogrn?.trim() || null
+  if (payload.right_type !== undefined) updates.right_type = payload.right_type?.trim() || null
+  if (payload.document_type !== undefined) updates.document_type = payload.document_type?.trim() || null
+  if (payload.supporting_documents !== undefined) updates.supporting_documents = payload.supporting_documents?.trim() || null
+  if (payload.usage_area_ha !== undefined) updates.usage_area_ha = payload.usage_area_ha ?? null
+  if (payload.starts_at !== undefined) updates.starts_at = payload.starts_at || null
+  if (payload.ends_at !== undefined) updates.ends_at = payload.ends_at || null
+  if (payload.organization_name !== undefined) updates.organization_name = payload.organization_name?.trim() || null
+  if (payload.person_name !== undefined) updates.person_name = payload.person_name?.trim() || null
+  if (payload.inn !== undefined) updates.inn = payload.inn?.trim() || null
+  if (payload.basis !== undefined) updates.basis = payload.basis?.trim() || null
+  if (payload.notes !== undefined) updates.notes = payload.notes?.trim() || null
+  const { error } = await supabase.from(LAND_USERS_TABLE).update(updates).eq('id', id)
+  if (error) throw error
 }
 
 export async function deleteLandUser(id: string): Promise<void> {

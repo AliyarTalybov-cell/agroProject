@@ -10,27 +10,30 @@ import {
   insertEquipmentImplement,
   updateEquipmentImplement,
   deleteEquipmentImplement,
+  loadEquipmentTypeRefs,
+  loadEquipmentConditionRefs,
   insertEquipment,
   updateEquipment,
   deleteEquipment,
   type EquipmentRow,
   type EquipmentCondition,
   type EquipmentImplementRow,
+  type EquipmentTypeRefRow,
+  type EquipmentConditionRefRow,
 } from '@/lib/equipmentSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiTrashIcon from '@/components/UiTrashIcon.vue'
 
-const EQUIPMENT_TYPES = [
-  { value: '', label: 'Выберите тип' },
-  { value: 'tractor', label: 'Трактор' },
-  { value: 'combine', label: 'Комбайн' },
-  { value: 'sprayer', label: 'Опрыскиватель' },
-  { value: 'other', label: 'Другое' },
+const DEFAULT_EQUIPMENT_TYPES = [
+  { code: 'tractor', name: 'Трактор' },
+  { code: 'combine', name: 'Комбайн' },
+  { code: 'sprayer', name: 'Опрыскиватель' },
+  { code: 'other', name: 'Другое' },
 ]
 
-const CONDITION_OPTIONS: { value: EquipmentCondition; label: string }[] = [
+const DEFAULT_CONDITION_OPTIONS: { value: EquipmentCondition; label: string }[] = [
   { value: 'operational', label: 'Исправна' },
   { value: 'repair', label: 'В ремонте' },
   { value: 'decommissioned', label: 'Выведена' },
@@ -54,6 +57,8 @@ const currentPage = ref(1)
 const editingId = ref<string | null>(null)
 const profiles = ref<ProfileRow[]>([])
 const implementOptions = ref<EquipmentImplementRow[]>([])
+const equipmentTypeRefs = ref<EquipmentTypeRefRow[]>([])
+const equipmentConditionRefs = ref<EquipmentConditionRefRow[]>([])
 const equipmentFormCardRef = ref<HTMLElement | null>(null)
 
 const implementsLoading = ref(false)
@@ -68,6 +73,12 @@ const editingImplementId = ref<string | null>(null)
 const form = ref({
   brand: '',
   license_plate: '',
+  factory_number: '',
+  epsm_psm: '',
+  svr_number: '',
+  registration_certificate: '',
+  registration_date: '',
+  deregistration_date: '',
   model: '',
   equipment_type: '',
   year: null as number | null,
@@ -112,6 +123,25 @@ async function fetchList() {
   }
 }
 
+async function fetchEquipmentRefs() {
+  if (!isSupabaseConfigured()) {
+    equipmentTypeRefs.value = []
+    equipmentConditionRefs.value = []
+    return
+  }
+  try {
+    const [types, conditions] = await Promise.all([
+      loadEquipmentTypeRefs(),
+      loadEquipmentConditionRefs(),
+    ])
+    equipmentTypeRefs.value = types
+    equipmentConditionRefs.value = conditions
+  } catch {
+    equipmentTypeRefs.value = []
+    equipmentConditionRefs.value = []
+  }
+}
+
 async function fetchImplementsPage() {
   if (!isSupabaseConfigured()) {
     implementsList.value = []
@@ -148,7 +178,7 @@ watch(implementsSearch, () => {
 })
 
 onMounted(async () => {
-  await Promise.all([fetchList(), fetchImplementsPage()])
+  await Promise.all([fetchList(), fetchImplementsPage(), fetchEquipmentRefs()])
 })
 
 const filteredList = computed(() => {
@@ -244,14 +274,26 @@ const implementsPageNumbers = computed(() => {
   return pages
 })
 
+const equipmentTypeOptions = computed(() => {
+  const refs = equipmentTypeRefs.value.length
+    ? equipmentTypeRefs.value.map((t) => ({ value: t.code, label: t.name }))
+    : DEFAULT_EQUIPMENT_TYPES.map((t) => ({ value: t.code, label: t.name }))
+  return [{ value: '', label: 'Выберите тип' }, ...refs]
+})
+
+const conditionOptions = computed<{ value: EquipmentCondition; label: string }[]>(() => {
+  if (!equipmentConditionRefs.value.length) return DEFAULT_CONDITION_OPTIONS
+  return equipmentConditionRefs.value.map((c) => ({ value: c.code, label: c.name }))
+})
+
 function equipmentTypeLabel(value: string | null): string {
   if (!value) return '—'
-  const opt = EQUIPMENT_TYPES.find((o) => o.value === value)
+  const opt = equipmentTypeOptions.value.find((o) => o.value === value)
   return opt?.label ?? value
 }
 
 function conditionLabel(c: EquipmentCondition): string {
-  return CONDITION_OPTIONS.find((o) => o.value === c)?.label ?? c
+  return conditionOptions.value.find((o) => o.value === c)?.label ?? c
 }
 
 function conditionClass(c: EquipmentCondition): string {
@@ -268,6 +310,12 @@ function clearForm() {
   form.value = {
     brand: '',
     license_plate: '',
+    factory_number: '',
+    epsm_psm: '',
+    svr_number: '',
+    registration_certificate: '',
+    registration_date: '',
+    deregistration_date: '',
     model: '',
     equipment_type: '',
     year: null,
@@ -285,6 +333,12 @@ function startEdit(row: EquipmentRow) {
   form.value = {
     brand: row.brand,
     license_plate: row.license_plate,
+    factory_number: row.factory_number ?? '',
+    epsm_psm: row.epsm_psm ?? '',
+    svr_number: row.svr_number ?? '',
+    registration_certificate: row.registration_certificate ?? '',
+    registration_date: row.registration_date ?? '',
+    deregistration_date: row.deregistration_date ?? '',
     model: row.model ?? '',
     equipment_type: row.equipment_type ?? '',
     year: row.year,
@@ -310,6 +364,12 @@ async function saveEquipment() {
       await updateEquipment(editingId.value, {
         brand,
         license_plate,
+        factory_number: form.value.factory_number.trim() || null,
+        epsm_psm: form.value.epsm_psm.trim() || null,
+        svr_number: form.value.svr_number.trim() || null,
+        registration_certificate: form.value.registration_certificate.trim() || null,
+        registration_date: form.value.registration_date || null,
+        deregistration_date: form.value.deregistration_date || null,
         model: form.value.model.trim() || null,
         equipment_type: form.value.equipment_type || null,
         year: form.value.year ?? null,
@@ -323,6 +383,12 @@ async function saveEquipment() {
       await insertEquipment({
         brand,
         license_plate,
+        factory_number: form.value.factory_number.trim() || null,
+        epsm_psm: form.value.epsm_psm.trim() || null,
+        svr_number: form.value.svr_number.trim() || null,
+        registration_certificate: form.value.registration_certificate.trim() || null,
+        registration_date: form.value.registration_date || null,
+        deregistration_date: form.value.deregistration_date || null,
         model: form.value.model.trim() || null,
         equipment_type: form.value.equipment_type || null,
         year: form.value.year ?? null,
@@ -413,6 +479,7 @@ async function removeImplement(row: EquipmentImplementRow) {
   }
 }
 
+
 function goToPage(page: number) {
   currentPage.value = Math.max(1, Math.min(page, totalPages.value))
 }
@@ -431,12 +498,18 @@ function escapeCsvCell(val: string): string {
 function exportToExcel() {
   const list = filteredList.value
   if (!list.length) return
-  const headers = ['№', 'Марка', 'Модель', 'Гос. номер', 'Тип техники', 'Год', 'Назначение/Культура', 'Состояние', 'Примечания']
+  const headers = ['№', 'Марка', 'Модель', 'Гос. номер', 'Заводской номер (VIN/PIN)', 'ЭПСМ/ПСМ', 'СВР', 'Свидетельство о регистрации', 'Дата регистрации', 'Дата снятия с учета', 'Тип техники', 'Год', 'Назначение/Культура', 'Состояние', 'Примечания']
   const rows = list.map((r, i) => [
     String(i + 1),
     r.brand,
     r.model ?? '',
     r.license_plate,
+    r.factory_number ?? '',
+    r.epsm_psm ?? '',
+    r.svr_number ?? '',
+    r.registration_certificate ?? '',
+    r.registration_date ?? '',
+    r.deregistration_date ?? '',
     equipmentTypeLabel(r.equipment_type),
     r.year ?? '',
     r.purpose_crop ?? '',
@@ -463,12 +536,18 @@ function escapeHtml(s: string): string {
 async function exportToPdf() {
   const list = filteredList.value
   if (!list.length) return
-  const headers = ['№', 'Марка', 'Модель', 'Гос. номер', 'Тип', 'Состояние']
+  const headers = ['№', 'Марка', 'Модель', 'Гос. номер', 'Заводской номер (VIN/PIN)', 'ЭПСМ/ПСМ', 'СВР', 'Свидетельство о регистрации', 'Дата регистрации', 'Дата снятия с учета', 'Тип', 'Состояние']
   const rows = list.map((r, i) => [
     String(i + 1),
     escapeHtml(r.brand),
     escapeHtml(r.model ?? ''),
     escapeHtml(r.license_plate),
+    escapeHtml(r.factory_number ?? ''),
+    escapeHtml(r.epsm_psm ?? ''),
+    escapeHtml(r.svr_number ?? ''),
+    escapeHtml(r.registration_certificate ?? ''),
+    escapeHtml(r.registration_date ?? ''),
+    escapeHtml(r.deregistration_date ?? ''),
     escapeHtml(equipmentTypeLabel(r.equipment_type)),
     escapeHtml(conditionLabel(r.condition)),
   ])
@@ -565,6 +644,26 @@ async function exportToPdf() {
           />
         </div>
         <div class="equipment-form-field">
+          <label class="equipment-label" for="eq-factory-number">Заводской номер (VIN/PIN)</label>
+          <input
+            id="eq-factory-number"
+            v-model="form.factory_number"
+            type="text"
+            class="equipment-input"
+            placeholder="Например: XTA12345678901234"
+          />
+        </div>
+        <div class="equipment-form-field">
+          <label class="equipment-label" for="eq-epsm-psm">ЭПСМ/ПСМ (Паспорт самоходной машины)</label>
+          <input
+            id="eq-epsm-psm"
+            v-model="form.epsm_psm"
+            type="text"
+            class="equipment-input"
+            placeholder="Например: ПСМ 12 345678"
+          />
+        </div>
+        <div class="equipment-form-field">
           <label class="equipment-label" for="eq-model">Модель</label>
           <input
             id="eq-model"
@@ -578,13 +677,33 @@ async function exportToPdf() {
           <label class="equipment-label" for="eq-type">Тип техники</label>
           <select id="eq-type" v-model="form.equipment_type" class="equipment-input equipment-select">
             <option
-              v-for="opt in EQUIPMENT_TYPES"
+              v-for="opt in equipmentTypeOptions"
               :key="opt.value"
               :value="opt.value"
             >
               {{ opt.label }}
             </option>
           </select>
+        </div>
+        <div class="equipment-form-field">
+          <label class="equipment-label" for="eq-svr-number">СВР (Номер свидетельства о регистрации)</label>
+          <input
+            id="eq-svr-number"
+            v-model="form.svr_number"
+            type="text"
+            class="equipment-input"
+            placeholder="Например: 1234567890"
+          />
+        </div>
+        <div class="equipment-form-field">
+          <label class="equipment-label" for="eq-reg-cert">Свидетельство о регистрации (номер)</label>
+          <input
+            id="eq-reg-cert"
+            v-model="form.registration_certificate"
+            type="text"
+            class="equipment-input"
+            placeholder="Например: АА 000000"
+          />
         </div>
         <div class="equipment-form-field">
           <label class="equipment-label" for="eq-year">Год выпуска</label>
@@ -596,6 +715,24 @@ async function exportToPdf() {
             placeholder="YYYY"
             min="1900"
             max="2100"
+          />
+        </div>
+        <div class="equipment-form-field">
+          <label class="equipment-label" for="eq-reg-date">Дата регистрации</label>
+          <input
+            id="eq-reg-date"
+            v-model="form.registration_date"
+            type="date"
+            class="equipment-input"
+          />
+        </div>
+        <div class="equipment-form-field">
+          <label class="equipment-label" for="eq-dereg-date">Дата снятия с учета</label>
+          <input
+            id="eq-dereg-date"
+            v-model="form.deregistration_date"
+            type="date"
+            class="equipment-input"
           />
         </div>
         <div class="equipment-form-field">
@@ -642,7 +779,7 @@ async function exportToPdf() {
           <label class="equipment-label" for="eq-condition">Состояние</label>
           <select id="eq-condition" v-model="form.condition" class="equipment-input equipment-select">
             <option
-              v-for="opt in CONDITION_OPTIONS"
+              v-for="opt in conditionOptions"
               :key="opt.value"
               :value="opt.value"
             >
@@ -718,6 +855,12 @@ async function exportToPdf() {
             <tr>
               <th>Марка / Модель</th>
               <th>Гос. номер</th>
+              <th>Заводской номер (VIN/PIN)</th>
+              <th>ЭПСМ/ПСМ</th>
+              <th>СВР</th>
+              <th>Свидетельство о регистрации</th>
+              <th>Дата регистрации</th>
+              <th>Дата снятия с учета</th>
               <th>Тип техники</th>
               <th>Орудие</th>
               <th>Ответственный</th>
@@ -741,6 +884,12 @@ async function exportToPdf() {
               <td>
                 <span class="equipment-plate-badge">{{ row.license_plate }}</span>
               </td>
+              <td>{{ row.factory_number || '—' }}</td>
+              <td>{{ row.epsm_psm || '—' }}</td>
+              <td>{{ row.svr_number || '—' }}</td>
+              <td>{{ row.registration_certificate || '—' }}</td>
+              <td>{{ row.registration_date || '—' }}</td>
+              <td>{{ row.deregistration_date || '—' }}</td>
               <td>{{ equipmentTypeLabel(row.equipment_type) }}</td>
               <td>{{ implementLabelById(row.implement_id) }}</td>
               <td>
@@ -765,7 +914,7 @@ async function exportToPdf() {
               </td>
             </tr>
             <tr v-if="!paginatedList.length">
-              <td colspan="7" class="equipment-empty">Нет записей</td>
+              <td colspan="13" class="equipment-empty">Нет записей</td>
             </tr>
           </tbody>
         </table>
@@ -843,7 +992,7 @@ async function exportToPdf() {
         <div class="equipment-form-field">
           <label class="equipment-label" for="impl-condition">Состояние</label>
           <select id="impl-condition" v-model="implementForm.condition" class="equipment-input equipment-select">
-            <option v-for="opt in CONDITION_OPTIONS" :key="opt.value" :value="opt.value">
+            <option v-for="opt in conditionOptions" :key="opt.value" :value="opt.value">
               {{ opt.label }}
             </option>
           </select>

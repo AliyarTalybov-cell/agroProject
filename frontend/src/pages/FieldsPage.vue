@@ -17,8 +17,6 @@ import {
 import {
   loadLandTypes,
   loadCrops,
-  addCropByLabel as addCropApi,
-  deleteCrop as deleteCropApi,
   type LandTypeRow,
   type CropRow,
 } from '@/lib/landTypesAndCrops'
@@ -35,6 +33,7 @@ import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiSuccessModal from '@/components/UiSuccessModal.vue'
+import RefFieldHelp from '@/components/RefFieldHelp.vue'
 import YandexMap from '@/components/YandexMap.vue'
 import { resolveYandexAddressLine, resolveYandexAddressCandidates } from '@/lib/yandexGeocode'
 
@@ -1162,7 +1161,6 @@ const REFS_PAGE_SIZE_OPTIONS = [5, 10, 20] as const
 const refsPageSize = ref(10)
 const refsPageReasons = ref(1)
 const refsPageOperations = ref(1)
-const refsPageCrops = ref(1)
 
 function refsPaginationPages(total: number, cur: number): (number | string)[] {
   const totalP = Math.max(1, total)
@@ -1193,17 +1191,10 @@ const paginatedOperations = computed(() => {
   return workOperations.value.slice(start, start + size)
 })
 const totalPagesOperations = computed(() => Math.max(1, Math.ceil(workOperations.value.length / refsPageSize.value)))
-const paginatedCrops = computed(() => {
-  const size = refsPageSize.value
-  const start = (refsPageCrops.value - 1) * size
-  return crops.value.slice(start, start + size)
-})
-const totalPagesCrops = computed(() => Math.max(1, Math.ceil(crops.value.length / refsPageSize.value)))
 
 function onRefsPageSizeChange() {
   refsPageReasons.value = Math.max(1, Math.min(refsPageReasons.value, totalPagesReasons.value))
   refsPageOperations.value = Math.max(1, Math.min(refsPageOperations.value, totalPagesOperations.value))
-  refsPageCrops.value = Math.max(1, Math.min(refsPageCrops.value, totalPagesCrops.value))
 }
 
 function setRefsPageReasons(p: number) {
@@ -1212,23 +1203,17 @@ function setRefsPageReasons(p: number) {
 function setRefsPageOperations(p: number) {
   refsPageOperations.value = Math.max(1, Math.min(p, totalPagesOperations.value))
 }
-function setRefsPageCrops(p: number) {
-  refsPageCrops.value = Math.max(1, Math.min(p, totalPagesCrops.value))
-}
 const newReasonLabel = ref('')
 const newReasonDesc = ref('')
 const newReasonCategory = ref<DowntimeCategory>('breakdown')
 const newOperationName = ref('')
-const newCropLabel = ref('')
 const refsError = ref<string | null>(null)
 
 const deleteConfirmReasonId = ref<string | null>(null)
 const deleteConfirmOperationId = ref<string | null>(null)
-const deleteConfirmCropId = ref<string | null>(null)
 
 const reasonToDelete = computed(() => deleteConfirmReasonId.value ? downtimeReasons.value.find((r) => r.id === deleteConfirmReasonId.value) : null)
 const operationToDelete = computed(() => deleteConfirmOperationId.value ? workOperations.value.find((op) => op.id === deleteConfirmOperationId.value) : null)
-const cropToDelete = computed(() => deleteConfirmCropId.value ? crops.value.find((c) => c.id === deleteConfirmCropId.value) : null)
 
 function refsErrorMessage(e: unknown): string {
   if (e instanceof Error) return e.message
@@ -1329,50 +1314,16 @@ async function confirmDeleteOperation() {
   }
 }
 
-async function addCrop() {
-  const label = newCropLabel.value.trim()
-  if (!label) return
-  refsError.value = null
-  try {
-    const row = await addCropApi(label)
-    crops.value = [...crops.value, row]
-    newCropLabel.value = ''
-  } catch (e) {
-    refsError.value = refsErrorMessage(e)
-  }
-}
-
-function openDeleteCropConfirm(c: CropRow) {
-  deleteConfirmCropId.value = c.id
-}
-function closeDeleteCropConfirm() {
-  deleteConfirmCropId.value = null
-}
-async function confirmDeleteCrop() {
-  const id = deleteConfirmCropId.value
-  if (!id) return
-  closeDeleteCropConfirm()
-  refsError.value = null
-  try {
-    await deleteCropApi(id)
-    crops.value = crops.value.filter((c) => c.id !== id)
-    refsPageCrops.value = Math.max(1, Math.min(refsPageCrops.value, totalPagesCrops.value))
-  } catch (e) {
-    refsError.value = refsErrorMessage(e)
-  }
-}
-
 function formatRefDate(iso: string) {
   return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-type PageTab = 'fields' | 'downtime-reasons' | 'work-operations' | 'crops'
+type PageTab = 'fields' | 'downtime-reasons' | 'work-operations'
 const activeTab = ref<PageTab>('fields')
 const TABS: { id: PageTab; label: string }[] = [
   { id: 'fields', label: 'Управление полями' },
   { id: 'downtime-reasons', label: 'Причины простоя' },
   { id: 'work-operations', label: 'Операции для работы' },
-  { id: 'crops', label: 'Культуры' },
 ]
 const ROUTE_TAB_MAP: Record<string, PageTab> = {
   fields: 'fields',
@@ -1806,67 +1757,6 @@ onMounted(async () => {
         <p v-else class="refs-no-supabase">Подключите Supabase для управления справочниками.</p>
       </div>
 
-      <div v-show="activeTab === 'crops'" class="fields-tab-panel">
-        <div v-if="isSupabaseConfigured()" class="refs-card card">
-          <h2 class="refs-title">Культуры</h2>
-          <p class="refs-desc refs-desc--small">Названия используются в форме поля и везде в приложении.</p>
-          <div v-if="refsError" class="refs-error">{{ refsError }}</div>
-          <div class="refs-block">
-            <div class="refs-add-row">
-              <input v-model="newCropLabel" type="text" placeholder="Название (например: Пшеница)" class="refs-input refs-input--wide" />
-              <button type="button" class="refs-btn" :disabled="refsLoading || !newCropLabel.trim()" @click="addCrop">Добавить</button>
-            </div>
-            <div class="refs-table-wrap">
-              <table class="refs-table">
-                <thead>
-                  <tr>
-                    <th>Название</th>
-                    <th class="refs-th-actions">Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="c in paginatedCrops" :key="c.id">
-                    <td>{{ c.label }}</td>
-                    <td class="refs-cell-actions">
-                      <UiDeleteButton size="sm" :disabled="refsLoading" @click="openDeleteCropConfirm(c)" />
-                    </td>
-                  </tr>
-                  <tr v-if="!crops.length && !refsLoading">
-                    <td colspan="2" class="refs-empty">Пока нет записей. Добавьте культуру выше или выполните миграцию в SQL Editor.</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div v-if="crops.length > 0" class="refs-pagination">
-              <div class="refs-pagination-left">
-                <p class="refs-pagination-info">
-                  Показано от <span class="refs-pagination-num">{{ (refsPageCrops - 1) * refsPageSize + 1 }}</span> до <span class="refs-pagination-num">{{ Math.min(refsPageCrops * refsPageSize, crops.length) }}</span> из <span class="refs-pagination-num">{{ crops.length }}</span>
-                </p>
-                <label class="refs-pagination-size">
-                  Строк на странице:
-                  <select v-model.number="refsPageSize" class="refs-pagination-select" @change="onRefsPageSizeChange">
-                    <option v-for="n in REFS_PAGE_SIZE_OPTIONS" :key="n" :value="n">{{ n }}</option>
-                  </select>
-                </label>
-              </div>
-              <nav class="refs-pagination-nav" aria-label="Пагинация">
-                <button type="button" class="refs-page-btn refs-page-btn--edge" :disabled="refsPageCrops <= 1" aria-label="Предыдущая страница" @click="setRefsPageCrops(refsPageCrops - 1)">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
-                </button>
-                <template v-for="(p, i) in refsPaginationPages(totalPagesCrops, refsPageCrops)" :key="p === '...' ? `crops-ellipsis-${i}` : p">
-                  <button v-if="p !== '...'" type="button" class="refs-page-btn" :class="{ 'refs-page-btn--active': p === refsPageCrops }" @click="setRefsPageCrops(p as number)">{{ p }}</button>
-                  <span v-else class="refs-page-ellipsis">…</span>
-                </template>
-                <button type="button" class="refs-page-btn refs-page-btn--edge" :disabled="refsPageCrops >= totalPagesCrops" aria-label="Следующая страница" @click="setRefsPageCrops(refsPageCrops + 1)">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
-                </button>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <p v-else class="refs-no-supabase">Подключите Supabase для управления справочниками.</p>
-      </div>
-
       <div
         v-if="isFieldModalOpen"
         class="modal-backdrop"
@@ -2002,13 +1892,27 @@ onMounted(async () => {
             </div>
             <div class="modal-form-section modal-form-section--grid modal-form-section--grid-4">
               <label class="modal-field">
-                <span class="modal-label">Тип земли</span>
+                <span class="modal-label modal-label--with-help">
+                  Тип земли
+                  <RefFieldHelp
+                    text="Не хватает типа земли? Добавьте его в справочнике земель."
+                    :to="{ path: '/lands', query: { tab: 'land-refs' } }"
+                    link-label="Справочники земель"
+                  />
+                </span>
                 <select v-model="newFieldLandType" class="modal-select">
                   <option v-for="t in landTypeOptions" :key="t.name" :value="t.name">{{ t.name }}</option>
                 </select>
               </label>
               <label class="modal-field">
-                <span class="modal-label">Культура</span>
+                <span class="modal-label modal-label--with-help">
+                  Культура
+                  <RefFieldHelp
+                    text="Нет нужной культуры? Добавьте ее в справочнике СХ культур."
+                    :to="{ path: '/lands', query: { tab: 'crops-refs' } }"
+                    link-label="Справочники СХ культур"
+                  />
+                </span>
                 <select v-model="newFieldCropKey" class="modal-select">
                   <option v-for="opt in cropOptions" :key="opt.key" :value="opt.key">{{ opt.label }}</option>
                 </select>
@@ -2174,27 +2078,6 @@ onMounted(async () => {
           <div class="fields-confirm-actions">
             <button type="button" class="modal-btn-ghost" @click="closeDeleteOperationConfirm">Отмена</button>
             <UiDeleteButton size="md" @click="confirmDeleteOperation" />
-          </div>
-        </div>
-      </div>
-
-      <div
-        v-if="deleteConfirmCropId"
-        class="fields-confirm-backdrop"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="refs-delete-crop-title"
-        @click.self="closeDeleteCropConfirm"
-      >
-        <div class="fields-confirm-modal">
-          <h2 id="refs-delete-crop-title" class="fields-confirm-title">Удаление культуры</h2>
-          <p class="fields-confirm-text">
-            <template v-if="cropToDelete">Вы уверены, что хотите удалить культуру «{{ cropToDelete.label }}»?</template>
-            <template v-else>Вы уверены, что хотите удалить эту культуру?</template>
-          </p>
-          <div class="fields-confirm-actions">
-            <button type="button" class="modal-btn-ghost" @click="closeDeleteCropConfirm">Отмена</button>
-            <UiDeleteButton size="md" @click="confirmDeleteCrop" />
           </div>
         </div>
       </div>
@@ -3608,6 +3491,10 @@ onMounted(async () => {
   letter-spacing: 0.04em;
   color: var(--text-secondary);
   line-height: 1.3;
+}
+.modal-label--with-help {
+  display: inline-flex;
+  align-items: center;
 }
 .modal-select,
 .modal-input {

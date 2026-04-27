@@ -6,6 +6,7 @@ const YANDEX_PROXY = '/api/weather'
 const YANDEX_TIMEOUT_MS = 4500
 const OPENWEATHER_TIMEOUT_MS = 5000
 const YANDEX_RATE_LIMIT_COOLDOWN_MS = 60_000
+const YANDEX_AUTH_COOLDOWN_MS = 10 * 60_000
 let yandexRateLimitedUntil = 0
 
 export type WeatherData = {
@@ -107,6 +108,20 @@ function markYandexRateLimited() {
   yandexRateLimitedUntil = Date.now() + YANDEX_RATE_LIMIT_COOLDOWN_MS
 }
 
+function markYandexUnauthorized() {
+  yandexRateLimitedUntil = Date.now() + YANDEX_AUTH_COOLDOWN_MS
+}
+
+function hasYandexAuthError(payload: unknown): boolean {
+  const errors = (payload as { errors?: Array<{ message?: string; extensions?: { code?: string } }> })?.errors
+  if (!Array.isArray(errors) || !errors.length) return false
+  return errors.some((err) => {
+    const code = String(err?.extensions?.code ?? '').toUpperCase()
+    const message = String(err?.message ?? '').toLowerCase()
+    return code.includes('UNAUTH') || code.includes('FORBID') || message.includes('unauthor') || message.includes('forbidden') || message.includes('token')
+  })
+}
+
 const GQL_NOW_QUERY = `
   query WeatherNow($lat: Float!, $lon: Float!) {
     weatherByPoint(request: { lat: $lat, lon: $lon }) {
@@ -156,7 +171,12 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
 
   // Ключ на фронтенде больше не нужен, он подставляется в Serverless Function на Vercel
   if (shouldSkipYandex()) {
-    return fetchWeatherFallback(lat, lon, label)
+    const fallback = await fetchWeatherFallback(lat, lon, label)
+    if (fallback) {
+      setCachedWeather(lat, lon, fallback)
+      return fallback
+    }
+    return getCachedWeather(lat, lon)
   }
   try {
     const response = await fetchWithTimeout(YANDEX_PROXY, {
@@ -174,12 +194,17 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
     if (!response.ok) {
       if (response.status === 429) {
         markYandexRateLimited()
+      } else if (response.status === 401 || response.status === 403) {
+        markYandexUnauthorized()
       }
       throw new Error(`Yandex HTTP Error: ${response.status}`);
     }
     const result = await response.json()
     
     if (result?.errors?.length) {
+      if (hasYandexAuthError(result)) {
+        markYandexUnauthorized()
+      }
       throw new Error(`Yandex GraphQL error: ${JSON.stringify(result.errors)}`)
     }
 
@@ -192,7 +217,7 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
     const loc = weatherData.location || {}
     const todayForecast = weatherData.forecast?.days?.[0] || {}
 
-    return {
+    const mapped: WeatherData = {
       cityName: label,
       condition: parseCondition(now.condition),
       coord: { lon, lat },
@@ -227,9 +252,16 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
       altitude: loc.altitude ?? null,
       pressureNorm: loc.pressureNorm ?? null,
     }
+    setCachedWeather(lat, lon, mapped)
+    return mapped
   } catch (e) {
     console.warn('Yandex Weather error, trying OpenWeather fallback:', e)
-    return fetchWeatherFallback(lat, lon, label)
+    const fallback = await fetchWeatherFallback(lat, lon, label)
+    if (fallback) {
+      setCachedWeather(lat, lon, fallback)
+      return fallback
+    }
+    return getCachedWeather(lat, lon)
   }
 }
 
@@ -273,12 +305,41 @@ type ForecastCacheEntry = {
   items: ForecastDayItem[]
 }
 
+type WeatherCacheEntry = {
+  savedAt: number
+  item: WeatherData
+}
+
+const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000
+const weatherCacheByCoords = new Map<string, WeatherCacheEntry>()
+
 const FORECAST_CACHE_TTL_MS = 30 * 60 * 1000
 const forecastCacheByCoords = new Map<string, ForecastCacheEntry>()
 
 function forecastCacheKey(lat: number, lon: number): string {
   // Округляем, чтобы близкие координаты не создавали лишние ключи
   return `${lat.toFixed(3)},${lon.toFixed(3)}`
+}
+
+function weatherCacheKey(lat: number, lon: number): string {
+  return `${lat.toFixed(3)},${lon.toFixed(3)}`
+}
+
+function getCachedWeather(lat: number, lon: number): WeatherData | null {
+  const key = weatherCacheKey(lat, lon)
+  const cached = weatherCacheByCoords.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.savedAt > WEATHER_CACHE_TTL_MS) {
+    weatherCacheByCoords.delete(key)
+    return null
+  }
+  return cached.item
+}
+
+function setCachedWeather(lat: number, lon: number, item: WeatherData | null) {
+  if (!item) return
+  const key = weatherCacheKey(lat, lon)
+  weatherCacheByCoords.set(key, { savedAt: Date.now(), item })
 }
 
 function getCachedForecast(lat: number, lon: number): ForecastDayItem[] | null {
@@ -345,11 +406,16 @@ export async function fetchForecast5(lat: number, lon: number): Promise<Forecast
     if (!response.ok) {
       if (response.status === 429) {
         markYandexRateLimited()
+      } else if (response.status === 401 || response.status === 403) {
+        markYandexUnauthorized()
       }
       throw new Error(`Yandex HTTP Error: ${response.status}`)
     }
     const result = await response.json()
     if (result?.errors?.length) {
+      if (hasYandexAuthError(result)) {
+        markYandexUnauthorized()
+      }
       throw new Error(`Forecast GraphQL response errors: ${JSON.stringify(result.errors)}`)
     }
     

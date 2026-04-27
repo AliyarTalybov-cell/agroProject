@@ -6,6 +6,8 @@ import { isSupabaseConfigured } from '@/lib/supabase'
 import {
   getEquipmentById,
   loadEquipmentImplementsOptions,
+  loadEquipmentTypeRefs,
+  loadEquipmentConditionRefs,
   loadEquipmentPhotos,
   addEquipmentPhoto,
   deleteEquipmentPhoto,
@@ -23,14 +25,14 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuth()
 
-const EQUIPMENT_TYPES: { value: string; label: string }[] = [
+const DEFAULT_EQUIPMENT_TYPES: { value: string; label: string }[] = [
   { value: 'tractor', label: 'Трактор' },
   { value: 'combine', label: 'Комбайн' },
   { value: 'sprayer', label: 'Опрыскиватель' },
   { value: 'other', label: 'Другое' },
 ]
 
-const CONDITION_OPTIONS: { value: string; label: string }[] = [
+const DEFAULT_CONDITION_OPTIONS: { value: string; label: string }[] = [
   { value: 'operational', label: 'Исправна' },
   { value: 'repair', label: 'В ремонте' },
   { value: 'decommissioned', label: 'Выведена' },
@@ -49,6 +51,8 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const profiles = ref<ProfileRow[]>([])
 const implementOptions = ref<EquipmentImplementRow[]>([])
+const equipmentTypeOptions = ref<{ value: string; label: string }[]>([])
+const equipmentConditionOptions = ref<{ value: string; label: string }[]>([])
 
 const historyLoading = ref(false)
 const history = ref<EquipmentOperationHistoryRow[]>([])
@@ -67,12 +71,14 @@ const profilesMap = computed(() => new Map(profiles.value.map((p) => [p.id, p]))
 
 function equipmentTypeLabel(value: string | null): string {
   if (!value) return '—'
-  const opt = EQUIPMENT_TYPES.find((o) => o.value === value)
+  const source = equipmentTypeOptions.value.length ? equipmentTypeOptions.value : DEFAULT_EQUIPMENT_TYPES
+  const opt = source.find((o) => o.value === value)
   return opt?.label ?? value
 }
 
 function conditionLabel(value: string): string {
-  const opt = CONDITION_OPTIONS.find((o) => o.value === value)
+  const source = equipmentConditionOptions.value.length ? equipmentConditionOptions.value : DEFAULT_CONDITION_OPTIONS
+  const opt = source.find((o) => o.value === value)
   return opt?.label ?? value
 }
 
@@ -284,16 +290,20 @@ async function refreshAll() {
       return
     }
 
-    const [eq, ph, profileList, implementList] = await Promise.all([
+    const [eq, ph, profileList, implementList, typeRefs, conditionRefs] = await Promise.all([
       getEquipmentById(id),
       loadEquipmentPhotos(id),
       loadProfiles(),
       loadEquipmentImplementsOptions(),
+      loadEquipmentTypeRefs(),
+      loadEquipmentConditionRefs(),
     ])
     equipment.value = eq
     photos.value = ph
     profiles.value = profileList
     implementOptions.value = implementList
+    equipmentTypeOptions.value = typeRefs.map((x) => ({ value: x.code, label: x.name }))
+    equipmentConditionOptions.value = conditionRefs.map((x) => ({ value: x.code, label: x.name }))
 
     if (!eq) error.value = 'Техника не найдена'
 

@@ -1,11 +1,17 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 
-export type EquipmentCondition = 'operational' | 'repair' | 'decommissioned'
+export type EquipmentCondition = string
 
 export type EquipmentRow = {
   id: string
   brand: string
   license_plate: string
+  factory_number: string | null
+  epsm_psm: string | null
+  svr_number: string | null
+  registration_certificate: string | null
+  registration_date: string | null
+  deregistration_date: string | null
   model: string | null
   equipment_type: string | null
   year: number | null
@@ -35,8 +41,25 @@ export type EquipmentImplementPage = {
   total: number
 }
 
+export type EquipmentTypeRefRow = {
+  id: string
+  code: string
+  name: string
+  sort_order: number
+  created_at: string
+}
+
+export type EquipmentConditionRefRow = {
+  code: string
+  name: string
+  sort_order: number
+  created_at: string
+}
+
 const EQUIPMENT_TABLE = 'equipment'
 const EQUIPMENT_IMPLEMENTS_TABLE = 'equipment_implements'
+const EQUIPMENT_TYPES_REF_TABLE = 'equipment_type_refs'
+const EQUIPMENT_CONDITIONS_REF_TABLE = 'equipment_condition_refs'
 const EQUIPMENT_PHOTOS_TABLE = 'equipment_photos'
 const EQUIPMENT_PHOTOS_BUCKET = 'equipment-photos'
 
@@ -54,7 +77,7 @@ export async function getEquipmentById(id: string): Promise<EquipmentRow | null>
   if (!supabase) return null
   const { data, error } = await supabase
     .from(EQUIPMENT_TABLE)
-    .select('id, brand, license_plate, model, equipment_type, year, purpose_crop, implement_id, condition, responsible_id, notes, created_at, updated_at')
+    .select('id, brand, license_plate, factory_number, epsm_psm, svr_number, registration_certificate, registration_date, deregistration_date, model, equipment_type, year, purpose_crop, implement_id, condition, responsible_id, notes, created_at, updated_at')
     .eq('id', id)
     .maybeSingle()
   if (error) throw error
@@ -65,7 +88,7 @@ export async function loadEquipment(): Promise<EquipmentRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from(EQUIPMENT_TABLE)
-    .select('id, brand, license_plate, model, equipment_type, year, purpose_crop, implement_id, condition, responsible_id, notes, created_at, updated_at')
+    .select('id, brand, license_plate, factory_number, epsm_psm, svr_number, registration_certificate, registration_date, deregistration_date, model, equipment_type, year, purpose_crop, implement_id, condition, responsible_id, notes, created_at, updated_at')
     .order('created_at', { ascending: false })
   if (error) throw error
   return (data ?? []) as EquipmentRow[]
@@ -74,6 +97,12 @@ export async function loadEquipment(): Promise<EquipmentRow[]> {
 export async function insertEquipment(payload: {
   brand: string
   license_plate: string
+  factory_number?: string | null
+  epsm_psm?: string | null
+  svr_number?: string | null
+  registration_certificate?: string | null
+  registration_date?: string | null
+  deregistration_date?: string | null
   model?: string | null
   equipment_type?: string | null
   year?: number | null
@@ -90,6 +119,12 @@ export async function insertEquipment(payload: {
     .insert({
       brand: payload.brand.trim(),
       license_plate: payload.license_plate.trim(),
+      factory_number: payload.factory_number?.trim() || null,
+      epsm_psm: payload.epsm_psm?.trim() || null,
+      svr_number: payload.svr_number?.trim() || null,
+      registration_certificate: payload.registration_certificate?.trim() || null,
+      registration_date: payload.registration_date || null,
+      deregistration_date: payload.deregistration_date || null,
       model: payload.model?.trim() || null,
       equipment_type: payload.equipment_type || null,
       year: payload.year ?? null,
@@ -111,6 +146,12 @@ export async function updateEquipment(
   updates: Partial<{
     brand: string
     license_plate: string
+    factory_number: string | null
+    epsm_psm: string | null
+    svr_number: string | null
+    registration_certificate: string | null
+    registration_date: string | null
+    deregistration_date: string | null
     model: string | null
     equipment_type: string | null
     year: number | null
@@ -219,6 +260,109 @@ export async function updateEquipmentImplement(
 export async function deleteEquipmentImplement(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
   const { error } = await supabase.from(EQUIPMENT_IMPLEMENTS_TABLE).delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function loadEquipmentTypeRefs(): Promise<EquipmentTypeRefRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from(EQUIPMENT_TYPES_REF_TABLE)
+    .select('id, code, name, sort_order, created_at')
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as EquipmentTypeRefRow[]
+}
+
+export async function addEquipmentTypeRef(payload: {
+  code: string
+  name: string
+  sort_order?: number
+}): Promise<EquipmentTypeRefRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { data, error } = await supabase
+    .from(EQUIPMENT_TYPES_REF_TABLE)
+    .insert({
+      code: payload.code.trim(),
+      name: payload.name.trim(),
+      sort_order: payload.sort_order ?? 0,
+    })
+    .select('id, code, name, sort_order, created_at')
+    .single()
+  if (error) throw error
+  return data as EquipmentTypeRefRow
+}
+
+export async function updateEquipmentTypeRef(
+  id: string,
+  updates: Partial<{ code: string; name: string; sort_order: number }>,
+): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase
+    .from(EQUIPMENT_TYPES_REF_TABLE)
+    .update({
+      ...updates,
+      code: updates.code?.trim(),
+      name: updates.name?.trim(),
+    })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function deleteEquipmentTypeRef(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from(EQUIPMENT_TYPES_REF_TABLE).delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function loadEquipmentConditionRefs(): Promise<EquipmentConditionRefRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from(EQUIPMENT_CONDITIONS_REF_TABLE)
+    .select('code, name, sort_order, created_at')
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as EquipmentConditionRefRow[]
+}
+
+export async function addEquipmentConditionRef(payload: {
+  code: string
+  name: string
+  sort_order?: number
+}): Promise<EquipmentConditionRefRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { data, error } = await supabase
+    .from(EQUIPMENT_CONDITIONS_REF_TABLE)
+    .insert({
+      code: payload.code,
+      name: payload.name.trim(),
+      sort_order: payload.sort_order ?? 0,
+    })
+    .select('code, name, sort_order, created_at')
+    .single()
+  if (error) throw error
+  return data as EquipmentConditionRefRow
+}
+
+export async function updateEquipmentConditionRef(
+  code: string,
+  updates: Partial<{ name: string; sort_order: number }>,
+): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase
+    .from(EQUIPMENT_CONDITIONS_REF_TABLE)
+    .update({
+      ...updates,
+      name: updates.name?.trim(),
+    })
+    .eq('code', code)
+  if (error) throw error
+}
+
+export async function deleteEquipmentConditionRef(code: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from(EQUIPMENT_CONDITIONS_REF_TABLE).delete().eq('code', code)
   if (error) throw error
 }
 

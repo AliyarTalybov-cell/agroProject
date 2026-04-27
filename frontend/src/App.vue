@@ -16,7 +16,7 @@ const pageTitle = computed(() => {
   if (route.path.startsWith('/lands')) {
     const landsTab = String(route.query.tab || '')
     if (landsTab === 'melioration') return 'Мелиорация'
-    if (landsTab === 'rights-refs' || landsTab === 'land-refs' || landsTab === 'crops-refs' || landsTab === 'land-types' || landsTab === 'land-categories') {
+    if (landsTab === 'rights-refs' || landsTab === 'land-refs' || landsTab === 'crops-refs' || landsTab === 'melioration-refs' || landsTab === 'equipment-refs' || landsTab === 'land-types' || landsTab === 'land-categories' || landsTab === 'land-usage') {
       return 'Справочники'
     }
   }
@@ -33,7 +33,7 @@ const isFieldsReferencesTab = computed(
 const isLandsReferencesTab = computed(() => {
   if (!route.path.startsWith('/lands')) return false
   const tab = String(route.query.tab || '')
-  return tab === 'rights-refs' || tab === 'land-refs' || tab === 'crops-refs' || tab === 'land-types' || tab === 'land-categories'
+  return tab === 'rights-refs' || tab === 'land-refs' || tab === 'crops-refs' || tab === 'melioration-refs' || tab === 'equipment-refs' || tab === 'land-types' || tab === 'land-categories' || tab === 'land-usage'
 })
 const isLandsMeliorationTab = computed(
   () => route.path.startsWith('/lands') && String(route.query.tab || '') === 'melioration',
