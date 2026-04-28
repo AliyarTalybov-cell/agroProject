@@ -61,6 +61,7 @@ import {
   loadLandMeliorationTypes,
   loadLandMeliorationSubtypes,
   loadLandMeliorationEventTypes,
+  loadLandCropRotationTypes,
   loadLandCropRotations,
   loadLandMeliorationEntries,
   loadAllLandMeliorationEntries,
@@ -93,12 +94,16 @@ import {
   addLandMeliorationType,
   addLandMeliorationSubtype,
   addLandMeliorationEventType,
+  addLandCropRotationType,
   deleteLandMeliorationEntry,
   deleteLandMeliorationType,
   deleteLandMeliorationSubtype,
   deleteLandMeliorationEventType,
+  deleteLandCropRotationType,
   updateLandMeliorationEntry,
+  updateLandCropRotationType,
   uploadLandRightFile,
+  type LandCropRotationTypeRefRow,
 } from '@/lib/landsSupabase'
 import {
   loadFields,
@@ -189,12 +194,13 @@ const landEditorOpen = ref(false)
 const landEditorMode = ref<'create' | 'edit'>('create')
 const landInlineEditOpen = ref(false)
 const showDetailsMap = ref(false)
-const landsRootTab = ref<'registry' | 'melioration' | 'land-refs' | 'rights-refs' | 'crops-refs' | 'melioration-refs' | 'equipment-refs' | 'field-refs'>('registry')
+const landsRootTab = ref<'registry' | 'melioration' | 'land-refs' | 'rights-refs' | 'crops-refs' | 'melioration-refs' | 'equipment-refs' | 'field-refs' | 'crop-rotation-refs'>('registry')
 const landRefsTab = ref<'land-types' | 'land-categories' | 'land-usage'>('land-types')
 const rightsRefsTab = ref<'ownership-forms' | 'right-types' | 'document-types' | 'holder-types' | 'holders'>('ownership-forms')
 const meliorationRefsTab = ref<'types' | 'subtypes' | 'event-types'>('types')
 const equipmentRefsTab = ref<'types' | 'conditions'>('types')
 const fieldRefsTab = ref<'municipalities'>('municipalities')
+const cropRotationRefsTab = ref<'types'>('types')
 const refsLoading = ref(false)
 const refsError = ref<string | null>(null)
 const newLandTypeName = ref('')
@@ -211,6 +217,7 @@ const newMeliorationEventTypeName = ref('')
 const newEquipmentTypeName = ref('')
 const newEquipmentConditionName = ref('')
 const newFieldMunicipalityName = ref('')
+const newCropRotationTypeName = ref('')
 const newHolderName = ref('')
 const newHolderInn = ref('')
 const newHolderKpp = ref('')
@@ -220,6 +227,7 @@ const editingHolderId = ref<string | null>(null)
 const equipmentTypeRefs = ref<EquipmentTypeRefRow[]>([])
 const equipmentConditionRefs = ref<EquipmentConditionRefRow[]>([])
 const fieldMunicipalityRefs = ref<FieldMunicipalityRefRow[]>([])
+const cropRotationTypeRefs = ref<LandCropRotationTypeRefRow[]>([])
 const DEFAULT_EQUIPMENT_CONDITION_REFS: EquipmentConditionRefRow[] = [
   { code: 'operational', name: 'Исправна', sort_order: 10, created_at: '' },
   { code: 'repair', name: 'В ремонте', sort_order: 20, created_at: '' },
@@ -278,7 +286,7 @@ const deleteConfirmText = ref('')
 const deleteTarget = ref<{
   type: 'crop-rotation' | 'real-estate' | 'land-type' | 'land-category' | 'land-usage' | 'crop-ref' | 'melioration'
     | 'ownership-form' | 'right-type' | 'right-document-type' | 'holder-type' | 'right-holder'
-    | 'melioration-type' | 'melioration-subtype' | 'melioration-event-type' | 'equipment-type' | 'equipment-condition' | 'field-municipality' | 'land'
+    | 'melioration-type' | 'melioration-subtype' | 'melioration-event-type' | 'equipment-type' | 'equipment-condition' | 'field-municipality' | 'crop-rotation-type' | 'land'
   id: string
 } | null>(null)
 const successModalOpen = ref(false)
@@ -306,11 +314,11 @@ let landsSearchRequestId = 0
 let addressCandidatesRequestId = 0
 const route = useRoute()
 const router = useRouter()
-const ROOT_TAB_QUERY_MAP = new Set(['registry', 'melioration', 'land-refs', 'land-types', 'land-categories', 'land-usage', 'rights-refs', 'crops-refs', 'melioration-refs', 'equipment-refs', 'field-refs'])
+const ROOT_TAB_QUERY_MAP = new Set(['registry', 'melioration', 'land-refs', 'land-types', 'land-categories', 'land-usage', 'rights-refs', 'crops-refs', 'melioration-refs', 'equipment-refs', 'field-refs', 'crop-rotation-refs'])
 const routeLandId = computed(() => String(route.params.id || ''))
 const isDetailsMode = computed(() => Boolean(routeLandId.value))
 const landsListTitle = computed(() => (
-  landsRootTab.value === 'rights-refs' || landsRootTab.value === 'land-refs' || landsRootTab.value === 'crops-refs' || landsRootTab.value === 'melioration-refs' || landsRootTab.value === 'equipment-refs' || landsRootTab.value === 'field-refs'
+  landsRootTab.value === 'rights-refs' || landsRootTab.value === 'land-refs' || landsRootTab.value === 'crops-refs' || landsRootTab.value === 'melioration-refs' || landsRootTab.value === 'equipment-refs' || landsRootTab.value === 'field-refs' || landsRootTab.value === 'crop-rotation-refs'
     ? 'Справочники'
     : landsRootTab.value === 'melioration'
       ? 'Мелиорация'
@@ -329,6 +337,8 @@ const landsListSubtitle = computed(() => (
         ? 'Справочники для заполнения данных по технике'
       : landsRootTab.value === 'field-refs'
         ? 'Справочники для заполнения данных по полям'
+      : landsRootTab.value === 'crop-rotation-refs'
+        ? 'Справочники для заполнения севооборота'
       : landsRootTab.value === 'melioration'
         ? 'Сведения по мелиорации'
         : 'Реестр, паспорты и справочники земельных участков'
@@ -478,7 +488,12 @@ const CROP_KEY_TO_NAME: Record<string, string> = {
   none: 'Нет культуры',
   meadow: 'Многолетние травы',
 }
-const CROP_ROTATION_TYPE_OPTIONS = ['Полевой', 'Кормовой', 'Специальный'] as const
+const DEFAULT_CROP_ROTATION_TYPE_OPTIONS = ['Полевой', 'Кормовой', 'Специальный'] as const
+const cropRotationTypeOptions = computed(() => (
+  cropRotationTypeRefs.value.length
+    ? cropRotationTypeRefs.value.map((x) => x.name)
+    : [...DEFAULT_CROP_ROTATION_TYPE_OPTIONS]
+))
 const MELIORATION_TABS = [
   { id: 'systems', label: 'Мелиоративные системы, расположенные на земельном участке' },
   { id: 'forest', label: 'Мелиоративные защитные лесные насаждения' },
@@ -1315,6 +1330,52 @@ async function removeCropRef(id: string) {
   }
 }
 
+async function addCropRotationTypeRef() {
+  const name = newCropRotationTypeName.value.trim()
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    const row = await addLandCropRotationType(name)
+    cropRotationTypeRefs.value = [...cropRotationTypeRefs.value, row]
+    newCropRotationTypeName.value = ''
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось добавить тип севооборота')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function editCropRotationTypeRef(row: LandCropRotationTypeRefRow) {
+  const next = prompt('Новое название типа севооборота', row.name)?.trim()
+  if (!next || next === row.name || !isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await updateLandCropRotationType(row.id, next)
+    cropRotationTypeRefs.value = cropRotationTypeRefs.value.map((x) => (x.id === row.id ? { ...x, name: next } : x))
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось обновить тип севооборота')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function removeCropRotationTypeRef(id: string) {
+  if (!isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await deleteLandCropRotationType(id)
+    cropRotationTypeRefs.value = cropRotationTypeRefs.value.filter((x) => x.id !== id)
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось удалить тип севооборота')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
 async function addOwnershipForm() {
   const name = newOwnershipFormName.value.trim()
   if (!name) return
@@ -1864,6 +1925,18 @@ async function loadFieldMunicipalityRefsSafe() {
   }
 }
 
+async function loadCropRotationTypeRefsSafe() {
+  if (!isSupabaseConfigured()) {
+    cropRotationTypeRefs.value = []
+    return
+  }
+  try {
+    cropRotationTypeRefs.value = await loadLandCropRotationTypes()
+  } catch {
+    cropRotationTypeRefs.value = []
+  }
+}
+
 async function addFieldMunicipalityReference() {
   const name = newFieldMunicipalityName.value.trim()
   if (!name) return
@@ -1965,6 +2038,7 @@ async function reloadAll() {
       meliorationTypesRows,
       meliorationSubtypesRows,
       meliorationEventTypesRows,
+      cropRotationTypeRows,
     ] = await Promise.all([
       loadLands(!isDetailsMode.value && (landsRootTab.value === 'registry' || landsRootTab.value === 'melioration') ? landsSearch.value : ''),
       loadLandTypes(),
@@ -1980,6 +2054,7 @@ async function reloadAll() {
       loadLandMeliorationTypes(),
       loadLandMeliorationSubtypes(),
       loadLandMeliorationEventTypes(),
+      loadLandCropRotationTypes(),
     ])
     lands.value = landsRows
     landTypes.value = landTypeRows
@@ -1995,6 +2070,7 @@ async function reloadAll() {
     landMeliorationTypes.value = meliorationTypesRows
     landMeliorationSubtypes.value = meliorationSubtypesRows
     landMeliorationEventTypes.value = meliorationEventTypesRows
+    cropRotationTypeRefs.value = cropRotationTypeRows
     await Promise.all([loadEquipmentRefsSafe(), loadFieldMunicipalityRefsSafe()])
     if (!isDetailsMode.value && landsRootTab.value === 'melioration') {
       landMeliorationEntries.value = await loadAllLandMeliorationEntries()
@@ -2572,6 +2648,13 @@ function requestDeleteCropRef(id: string) {
   deleteConfirmOpen.value = true
 }
 
+function requestDeleteCropRotationType(id: string) {
+  deleteTarget.value = { type: 'crop-rotation-type', id }
+  deleteConfirmTitle.value = 'Удаление типа севооборота'
+  deleteConfirmText.value = 'Тип севооборота будет удален из справочника.'
+  deleteConfirmOpen.value = true
+}
+
 function requestDeleteMelioration(id: string) {
   deleteTarget.value = { type: 'melioration', id }
   deleteConfirmTitle.value = 'Удаление записи мелиорации'
@@ -2945,6 +3028,8 @@ async function confirmDeleteTarget() {
     await removeEquipmentConditionReference(deleteTarget.value.id)
   } else if (deleteTarget.value.type === 'field-municipality') {
     await removeFieldMunicipalityReference(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'crop-rotation-type') {
+    await removeCropRotationTypeRef(deleteTarget.value.id)
   } else if (deleteTarget.value.type === 'land') {
     await removeLand(true)
   } else {
@@ -2990,6 +3075,7 @@ watch([landsSearch, landsRootTab, isDetailsMode], ([, rootTab, detailsMode]) => 
 watch(landsRootTab, (tab) => {
   if (tab === 'equipment-refs') void loadEquipmentRefsSafe()
   if (tab === 'field-refs') void loadFieldMunicipalityRefsSafe()
+  if (tab === 'crop-rotation-refs') void loadCropRotationTypeRefsSafe()
 })
 
 onBeforeUnmount(() => {
@@ -3093,7 +3179,7 @@ onMounted(() => void reloadAll())
     <div v-else class="lands-content">
       <section v-if="!isDetailsMode" class="lands-card page-enter-item">
         <div class="lands-tabs lands-tabs--top">
-          <template v-if="landsRootTab === 'rights-refs' || landsRootTab === 'land-refs' || landsRootTab === 'crops-refs' || landsRootTab === 'melioration-refs' || landsRootTab === 'equipment-refs' || landsRootTab === 'field-refs'">
+          <template v-if="landsRootTab === 'rights-refs' || landsRootTab === 'land-refs' || landsRootTab === 'crops-refs' || landsRootTab === 'melioration-refs' || landsRootTab === 'equipment-refs' || landsRootTab === 'field-refs' || landsRootTab === 'crop-rotation-refs'">
             <button type="button" class="lands-tab-btn" :class="{ 'is-active': landsRootTab === 'rights-refs' }" @click="landsRootTab = 'rights-refs'">
               Справочники прав
             </button>
@@ -3111,6 +3197,9 @@ onMounted(() => void reloadAll())
             </button>
             <button type="button" class="lands-tab-btn" :class="{ 'is-active': landsRootTab === 'field-refs' }" @click="landsRootTab = 'field-refs'">
               Справочники полей
+            </button>
+            <button type="button" class="lands-tab-btn" :class="{ 'is-active': landsRootTab === 'crop-rotation-refs' }" @click="landsRootTab = 'crop-rotation-refs'">
+              Справочники севооборота
             </button>
           </template>
           <template v-else-if="landsRootTab === 'melioration'">
@@ -3563,6 +3652,35 @@ onMounted(() => void reloadAll())
                 </div>
               </div>
               <p v-if="!fieldMunicipalityRefs.length" class="lands-muted">Пока нет муниципальных образований.</p>
+            </div>
+          </div>
+        </template>
+        <template v-else-if="landsRootTab === 'crop-rotation-refs'">
+          <p v-if="refsError" class="lands-error">{{ refsError }}</p>
+          <div class="lands-tabs lands-tabs--sub">
+            <button type="button" class="lands-tab-btn" :class="{ 'is-active': cropRotationRefsTab === 'types' }" @click="cropRotationRefsTab = 'types'">
+              Типы севооборота
+            </button>
+          </div>
+          <div class="lands-ref-block">
+            <h2>Типы севооборота</h2>
+            <div class="lands-ref-add-row">
+              <input v-model="newCropRotationTypeName" class="lands-search" type="text" placeholder="Например: Полевой" />
+              <button type="button" class="lands-btn lands-btn--save lands-btn--add" :disabled="refsLoading || !newCropRotationTypeName.trim()" @click="addCropRotationTypeRef">
+                Добавить
+              </button>
+            </div>
+            <div class="lands-list-plain">
+              <div v-for="row in cropRotationTypeRefs" :key="row.id" class="lands-list-plain-item">
+                <span>{{ row.name }}</span>
+                <div class="lands-item-actions">
+                  <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editCropRotationTypeRef(row)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                  </button>
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteCropRotationType(row.id)" />
+                </div>
+              </div>
+              <p v-if="!cropRotationTypeRefs.length" class="lands-muted">Пока нет типов севооборота.</p>
             </div>
           </div>
         </template>
@@ -4407,15 +4525,29 @@ onMounted(() => void reloadAll())
                 <input v-model.trim="cropRotationForm.season" type="text" placeholder="Например: 2026" />
               </label>
               <label class="lands-field">
-                <span>Тип севооборота *</span>
+                <span class="lands-label-with-help">
+                  Тип севооборота *
+                  <RefFieldHelp
+                    text="Нет нужного типа севооборота? Добавьте его в"
+                    :to="{ path: '/lands', query: { tab: 'crop-rotation-refs' } }"
+                    link-label="Справочники севооборота"
+                  />
+                </span>
                 <select v-model="cropRotationForm.rotationType">
                   <option value="">— Выберите тип —</option>
-                  <option v-for="type in CROP_ROTATION_TYPE_OPTIONS" :key="type" :value="type">{{ type }}</option>
+                  <option v-for="type in cropRotationTypeOptions" :key="type" :value="type">{{ type }}</option>
                 </select>
               </label>
             </div>
             <label class="lands-field">
-              <span>Сельскохозяйственная культура *</span>
+              <span class="lands-label-with-help">
+                Сельскохозяйственная культура *
+                <RefFieldHelp
+                  text="Нет нужной культуры? Добавьте ее в"
+                  :to="{ path: '/lands', query: { tab: 'crops-refs' } }"
+                  link-label="Справочники СХ культур"
+                />
+              </span>
               <select v-model="cropRotationForm.cropKey">
                 <option value="">— Выберите культуру —</option>
                 <option v-for="crop in crops" :key="crop.id" :value="crop.key">{{ crop.label }}</option>
