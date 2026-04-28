@@ -4373,7 +4373,7 @@ onMounted(() => void reloadAll())
               v-if="landEditorMode === 'edit' && selectedLand"
               size="md"
               :disabled="saving"
-              @click="removeLand"
+              @click="() => removeLand()"
             />
           </div>
         </div>
