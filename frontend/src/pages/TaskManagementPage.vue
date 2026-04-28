@@ -3312,13 +3312,15 @@ function statusClass(s: Status) {
   font-size: 0.76rem;
   font-weight: 700;
   cursor: pointer;
-  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .task-file-add-btn:hover:not(:disabled) {
   border-color: var(--agro);
   color: var(--agro);
   background: var(--bg-panel-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(45, 90, 61, 0.16);
 }
 
 .task-file-add-btn:disabled {
@@ -3341,12 +3343,29 @@ function statusClass(s: Status) {
   font-weight: 700;
   cursor: pointer;
   text-align: center;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .task-file-dropzone:hover:not(:disabled) {
   background: rgba(61, 92, 64, 0.05);
   border-color: var(--agro);
   color: var(--agro);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(45, 90, 61, 0.14);
+}
+
+.task-file-dropzone svg {
+  transition: transform 0.22s ease;
+}
+
+.task-file-dropzone:hover:not(:disabled) svg {
+  animation: task-file-dropzone-hover 0.65s ease;
+}
+
+@keyframes task-file-dropzone-hover {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-2px); }
+  100% { transform: translateY(0); }
 }
 
 .task-files-grid {

@@ -5701,12 +5701,29 @@ async function confirmDeleteTask() {
   font-weight: 700;
   cursor: pointer;
   min-height: 64px;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .modal-attach-placeholder--design:hover:not(:disabled) {
   background: rgba(61, 92, 64, 0.05);
   border-color: var(--agro);
   color: var(--agro);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(45, 90, 61, 0.14);
+}
+
+.modal-attach-placeholder--design svg {
+  transition: transform 0.22s ease;
+}
+
+.modal-attach-placeholder--design:hover:not(:disabled) svg {
+  animation: task-modal-attach-hover 0.65s ease;
+}
+
+@keyframes task-modal-attach-hover {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-2px); }
+  100% { transform: translateY(0); }
 }
 
 

@@ -1372,11 +1372,24 @@ onMounted(refreshAll)
   font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
+  transition: background 0.2s, border-color 0.2s, transform 0.2s ease, box-shadow 0.2s ease;
 }
 .field-details-upload-btn:hover:not(:disabled) {
   background: var(--bg-panel);
   border-color: var(--text-secondary);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(45, 90, 61, 0.14);
+}
+.field-details-upload-btn svg {
+  transition: transform 0.22s ease;
+}
+.field-details-upload-btn:hover:not(:disabled) svg {
+  animation: equipment-upload-hover 0.65s ease;
+}
+@keyframes equipment-upload-hover {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-2px); }
+  100% { transform: translateY(0); }
 }
 .field-details-upload-btn:disabled {
   opacity: 0.7;

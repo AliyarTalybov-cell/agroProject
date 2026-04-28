@@ -9,8 +9,10 @@ import {
   deleteFieldPhoto,
   updateField,
   uploadFieldScheme,
+  loadFieldMunicipalitiesRefs,
   type FieldRow,
   type FieldPhotoRow,
+  type FieldMunicipalityRefRow,
 } from '@/lib/fieldsSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { loadCrops, loadLandTypes, type CropRow, type LandTypeRow } from '@/lib/landTypesAndCrops'
@@ -19,6 +21,7 @@ import { loadOperationsByFieldFromSupabase, type FieldOperationHistoryRow } from
 import { isSupabaseConfigured } from '@/lib/supabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import RefFieldHelp from '@/components/RefFieldHelp.vue'
 import YandexMap from '@/components/YandexMap.vue'
 import { resolveYandexAddressLine, resolveYandexAddressCandidates, parseLatLonFromGeolocationString } from '@/lib/yandexGeocode'
 
@@ -34,6 +37,7 @@ const profiles = ref<ProfileRow[]>([])
 const crops = ref<CropRow[]>([])
 const landTypes = ref<LandTypeRow[]>([])
 const lands = ref<LandRow[]>([])
+const fieldMunicipalityRefs = ref<FieldMunicipalityRefRow[]>([])
 const photoUploading = ref(false)
 const photoFileInput = ref<HTMLInputElement | null>(null)
 const schemeFileInput = ref<HTMLInputElement | null>(null)
@@ -45,10 +49,13 @@ const editForm = ref({
   name: '',
   area: 0,
   cadastral_number: '',
+  efis_zsn_number: '',
   address: '',
   location_description: '',
   extra_info: '',
   geolocation: '',
+  municipality: '',
+  region: '',
   geometry_mode: 'point' as 'point' | 'polygon',
   contour_geojson: null as Record<string, unknown> | null,
   land_type: '',
@@ -138,6 +145,7 @@ function applyEditAddressCandidates(candidates: string[]) {
   if (!list.length) return
   if (!current || !editAddressManualTouched.value) {
     editForm.value.address = list[0]!
+    tryFillEditRegionFromAddress(list[0]!)
     editAddressLastAuto.value = list[0]!
     editAddressManualTouched.value = false
   }
@@ -152,8 +160,19 @@ function onEditAddressInput() {
 function onEditAddressCandidateChange() {
   if (!selectedEditAddressCandidate.value) return
   editForm.value.address = selectedEditAddressCandidate.value
+  tryFillEditRegionFromAddress(selectedEditAddressCandidate.value)
   editAddressLastAuto.value = selectedEditAddressCandidate.value
   editAddressManualTouched.value = false
+}
+
+function extractRegionFromAddress(address: string): string {
+  const match = address.match(/([А-Яа-яЁёA-Za-z\- ]+\s(?:область|край|республика|АО|автономный округ))/)
+  return match?.[1]?.trim() || ''
+}
+
+function tryFillEditRegionFromAddress(address: string) {
+  const region = extractRegionFromAddress(address)
+  if (region) editForm.value.region = region
 }
 
 let editContourAddressRequestId = 0
@@ -364,19 +383,21 @@ async function loadData() {
   loading.value = true
   error.value = null
   try {
-    const [fieldData, profileList, cropList, landTypesList, photosList, landsList] = await Promise.all([
+    const [fieldData, profileList, cropList, landTypesList, photosList, landsList, municipalityRefsList] = await Promise.all([
       getFieldById(props.id),
       loadProfiles(),
       loadCrops(),
       loadLandTypes(),
       loadFieldPhotos(props.id),
       loadLands(),
+      loadFieldMunicipalitiesRefs(),
     ])
     field.value = fieldData
     profiles.value = profileList
     crops.value = cropList
     landTypes.value = landTypesList
     lands.value = landsList
+    fieldMunicipalityRefs.value = municipalityRefsList
     photos.value = photosList
     if (!fieldData) error.value = 'Поле не найдено'
     await refreshHistory()
@@ -416,10 +437,13 @@ function startEditing() {
     name: field.value.name,
     area: Number(field.value.area),
     cadastral_number: field.value.cadastral_number ?? '',
+    efis_zsn_number: (field.value as { efis_zsn_number?: string | null }).efis_zsn_number ?? '',
     address: (field.value as { address?: string | null }).address ?? '',
     location_description: field.value.location_description ?? '',
     extra_info: (field.value as { extra_info?: string | null }).extra_info ?? '',
     geolocation: (field.value as { geolocation?: string | null }).geolocation ?? '',
+    municipality: (field.value as { municipality?: string | null }).municipality ?? '',
+    region: (field.value as { region?: string | null }).region ?? '',
     geometry_mode: (field.value as { geometry_mode?: 'point' | 'polygon' | null }).geometry_mode ?? 'point',
     contour_geojson: (field.value as { contour_geojson?: Record<string, unknown> | null }).contour_geojson ?? null,
     land_type: field.value.land_type,
@@ -537,10 +561,13 @@ async function saveEditing() {
       name,
       area,
       cadastral_number: editForm.value.cadastral_number.trim() || null,
+      efis_zsn_number: editForm.value.efis_zsn_number.trim() || null,
       address: editForm.value.address.trim() || null,
       location_description: editForm.value.location_description.trim() || null,
       extra_info: editForm.value.extra_info.trim() || null,
       geolocation: editForm.value.geolocation.trim() || null,
+      municipality: editForm.value.municipality.trim() || null,
+      region: editForm.value.region.trim() || null,
       geometry_mode: editForm.value.geometry_mode,
       contour_geojson: editForm.value.geometry_mode === 'polygon' ? toPolygonGeoJson(editContourDraftPoints.value) : null,
       land_type: editForm.value.land_type,
@@ -707,10 +734,31 @@ watch(
               </li>
               <li class="field-details-item">
                 <span class="field-details-item-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3h6"/><path d="M10 21h4"/><path d="M12 17v4"/><path d="m5 8 7-5 7 5"/><path d="M5 8h14v9H5z"/></svg>
+                </span>
+                <span class="field-details-item-label">№ ПОЛЯ ЕФИС ЗСН</span>
+                <span class="field-details-item-value">{{ (field as any).efis_zsn_number || '—' }}</span>
+              </li>
+              <li class="field-details-item">
+                <span class="field-details-item-icon" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Z"/><path d="M12 6v6l3 3"/></svg>
                 </span>
                 <span class="field-details-item-label">Геолокация</span>
                 <span class="field-details-item-value">{{ (field as any).geolocation || '—' }}</span>
+              </li>
+              <li class="field-details-item">
+                <span class="field-details-item-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 10h.01"/><path d="M15 10h.01"/></svg>
+                </span>
+                <span class="field-details-item-label">Муниципальное образование</span>
+                <span class="field-details-item-value">{{ (field as any).municipality || '—' }}</span>
+              </li>
+              <li class="field-details-item">
+                <span class="field-details-item-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 7l9 5 9-5-9-5Z"/><path d="M3 17l9 5 9-5"/></svg>
+                </span>
+                <span class="field-details-item-label">Регион</span>
+                <span class="field-details-item-value">{{ (field as any).region || '—' }}</span>
               </li>
               <li class="field-details-item">
                 <span class="field-details-item-icon" aria-hidden="true">
@@ -889,14 +937,50 @@ watch(
                 <input v-model="editForm.geolocation" type="text" class="field-details-edit-input" placeholder="Например: 55.7558, 37.6173" />
               </label>
               <label class="field-details-edit-field">
-                <span class="field-details-edit-label">Тип земли</span>
+                <span class="field-details-edit-label field-details-edit-label--with-help">
+                  Муниципальное образование
+                  <RefFieldHelp
+                    text="Нет нужного муниципального образования? Добавьте его в"
+                    :to="{ path: '/lands', query: { tab: 'field-refs' } }"
+                    link-label="Справочники полей"
+                  />
+                </span>
+                <select v-model="editForm.municipality" class="field-details-edit-select">
+                  <option value="">—</option>
+                  <option v-for="row in fieldMunicipalityRefs" :key="row.id" :value="row.name">{{ row.name }}</option>
+                </select>
+              </label>
+              <label class="field-details-edit-field">
+                <span class="field-details-edit-label">Регион</span>
+                <input v-model="editForm.region" type="text" class="field-details-edit-input" placeholder="Например: Ростовская область" />
+              </label>
+              <label class="field-details-edit-field">
+                <span class="field-details-edit-label">№ ПОЛЯ ЕФИС ЗСН</span>
+                <input v-model="editForm.efis_zsn_number" type="text" class="field-details-edit-input" placeholder="Например: EFIS-000123" />
+              </label>
+              <label class="field-details-edit-field">
+                <span class="field-details-edit-label field-details-edit-label--with-help">
+                  Тип земли
+                  <RefFieldHelp
+                    text="Нет нужного типа земли? Добавьте его в"
+                    :to="{ path: '/lands', query: { tab: 'land-refs' } }"
+                    link-label="Справочники земель"
+                  />
+                </span>
                 <select v-model="editForm.land_type" class="field-details-edit-select">
                   <option v-if="editForm.land_type && !landTypes.some((t) => t.name === editForm.land_type)" :value="editForm.land_type">{{ editForm.land_type }}</option>
                   <option v-for="t in landTypes" :key="t.name" :value="t.name">{{ t.name }}</option>
                 </select>
               </label>
               <label class="field-details-edit-field">
-                <span class="field-details-edit-label">Культура</span>
+                <span class="field-details-edit-label field-details-edit-label--with-help">
+                  Культура
+                  <RefFieldHelp
+                    text="Нет нужной культуры? Добавьте ее в"
+                    :to="{ path: '/lands', query: { tab: 'crops-refs' } }"
+                    link-label="Справочники СХ культур"
+                  />
+                </span>
                 <select v-model="editForm.crop_key" class="field-details-edit-select">
                   <option v-for="c in crops" :key="c.key" :value="c.key">{{ c.label }}</option>
                 </select>
@@ -1400,6 +1484,10 @@ watch(
   font-weight: 500;
   color: var(--text-secondary);
 }
+.field-details-edit-label--with-help {
+  display: inline-flex;
+  align-items: center;
+}
 .field-details-edit-required {
   color: var(--danger);
 }
@@ -1645,11 +1733,24 @@ watch(
   font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
+  transition: background 0.2s, border-color 0.2s, transform 0.2s ease, box-shadow 0.2s ease;
 }
 .field-details-upload-btn:hover:not(:disabled) {
   background: var(--bg-panel);
   border-color: var(--text-secondary);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(45, 90, 61, 0.14);
+}
+.field-details-upload-btn svg {
+  transition: transform 0.22s ease;
+}
+.field-details-upload-btn:hover:not(:disabled) svg {
+  animation: field-details-upload-hover 0.65s ease;
+}
+@keyframes field-details-upload-hover {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-2px); }
+  100% { transform: translateY(0); }
 }
 .field-details-upload-btn:disabled {
   opacity: 0.7;

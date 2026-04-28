@@ -1,8 +1,8 @@
 /* ——— Светлая тема по умолчанию (design-4bb98c85: Агро-контроль) ——— */
 :root {
   color-scheme: light;
-  /* Глобальный масштаб интерфейса (как browser zoom 80%) */
-  --ui-scale: 0.8;
+  /* Глобальный масштаб интерфейса (100%) */
+  --ui-scale: 1;
   --agri-bg: #f0f4f1;
   --agri-primary: #2d5a3d;
   --agri-primary-hover: #1f402a;
@@ -130,11 +130,15 @@
 
 .modal-backdrop,
 .task-modal-backdrop,
+.lands-modal-backdrop,
+.chat-page__modal-backdrop,
 .emp-modal-backdrop,
 .eem-backdrop,
 .fields-confirm-backdrop,
 .profile-confirm-backdrop {
   animation: appModalBackdropIn 0.2s ease-out;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 
 .modal,
@@ -153,6 +157,8 @@
 @media (prefers-reduced-motion: reduce) {
   .modal-backdrop,
   .task-modal-backdrop,
+  .lands-modal-backdrop,
+  .chat-page__modal-backdrop,
   .emp-modal-backdrop,
   .eem-backdrop,
   .fields-confirm-backdrop,

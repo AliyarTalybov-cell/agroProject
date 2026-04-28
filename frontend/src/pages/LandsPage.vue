@@ -100,7 +100,16 @@ import {
   updateLandMeliorationEntry,
   uploadLandRightFile,
 } from '@/lib/landsSupabase'
-import { loadFields, updateField, type FieldRow } from '@/lib/fieldsSupabase'
+import {
+  loadFields,
+  updateField,
+  loadFieldMunicipalitiesRefs,
+  addFieldMunicipalityRef,
+  updateFieldMunicipalityRef,
+  deleteFieldMunicipalityRef,
+  type FieldRow,
+  type FieldMunicipalityRefRow,
+} from '@/lib/fieldsSupabase'
 import {
   loadEquipmentTypeRefs,
   addEquipmentTypeRef,
@@ -180,11 +189,12 @@ const landEditorOpen = ref(false)
 const landEditorMode = ref<'create' | 'edit'>('create')
 const landInlineEditOpen = ref(false)
 const showDetailsMap = ref(false)
-const landsRootTab = ref<'registry' | 'melioration' | 'land-refs' | 'rights-refs' | 'crops-refs' | 'melioration-refs' | 'equipment-refs'>('registry')
+const landsRootTab = ref<'registry' | 'melioration' | 'land-refs' | 'rights-refs' | 'crops-refs' | 'melioration-refs' | 'equipment-refs' | 'field-refs'>('registry')
 const landRefsTab = ref<'land-types' | 'land-categories' | 'land-usage'>('land-types')
 const rightsRefsTab = ref<'ownership-forms' | 'right-types' | 'document-types' | 'holder-types' | 'holders'>('ownership-forms')
 const meliorationRefsTab = ref<'types' | 'subtypes' | 'event-types'>('types')
 const equipmentRefsTab = ref<'types' | 'conditions'>('types')
+const fieldRefsTab = ref<'municipalities'>('municipalities')
 const refsLoading = ref(false)
 const refsError = ref<string | null>(null)
 const newLandTypeName = ref('')
@@ -200,6 +210,7 @@ const newMeliorationSubtypeName = ref('')
 const newMeliorationEventTypeName = ref('')
 const newEquipmentTypeName = ref('')
 const newEquipmentConditionName = ref('')
+const newFieldMunicipalityName = ref('')
 const newHolderName = ref('')
 const newHolderInn = ref('')
 const newHolderKpp = ref('')
@@ -208,6 +219,7 @@ const newHolderTypeId = ref('')
 const editingHolderId = ref<string | null>(null)
 const equipmentTypeRefs = ref<EquipmentTypeRefRow[]>([])
 const equipmentConditionRefs = ref<EquipmentConditionRefRow[]>([])
+const fieldMunicipalityRefs = ref<FieldMunicipalityRefRow[]>([])
 const DEFAULT_EQUIPMENT_CONDITION_REFS: EquipmentConditionRefRow[] = [
   { code: 'operational', name: 'Исправна', sort_order: 10, created_at: '' },
   { code: 'repair', name: 'В ремонте', sort_order: 20, created_at: '' },
@@ -266,7 +278,7 @@ const deleteConfirmText = ref('')
 const deleteTarget = ref<{
   type: 'crop-rotation' | 'real-estate' | 'land-type' | 'land-category' | 'land-usage' | 'crop-ref' | 'melioration'
     | 'ownership-form' | 'right-type' | 'right-document-type' | 'holder-type' | 'right-holder'
-    | 'melioration-type' | 'melioration-subtype' | 'melioration-event-type' | 'equipment-type' | 'equipment-condition'
+    | 'melioration-type' | 'melioration-subtype' | 'melioration-event-type' | 'equipment-type' | 'equipment-condition' | 'field-municipality' | 'land'
   id: string
 } | null>(null)
 const successModalOpen = ref(false)
@@ -294,11 +306,11 @@ let landsSearchRequestId = 0
 let addressCandidatesRequestId = 0
 const route = useRoute()
 const router = useRouter()
-const ROOT_TAB_QUERY_MAP = new Set(['registry', 'melioration', 'land-refs', 'land-types', 'land-categories', 'land-usage', 'rights-refs', 'crops-refs', 'melioration-refs', 'equipment-refs'])
+const ROOT_TAB_QUERY_MAP = new Set(['registry', 'melioration', 'land-refs', 'land-types', 'land-categories', 'land-usage', 'rights-refs', 'crops-refs', 'melioration-refs', 'equipment-refs', 'field-refs'])
 const routeLandId = computed(() => String(route.params.id || ''))
 const isDetailsMode = computed(() => Boolean(routeLandId.value))
 const landsListTitle = computed(() => (
-  landsRootTab.value === 'rights-refs' || landsRootTab.value === 'land-refs' || landsRootTab.value === 'crops-refs' || landsRootTab.value === 'melioration-refs' || landsRootTab.value === 'equipment-refs'
+  landsRootTab.value === 'rights-refs' || landsRootTab.value === 'land-refs' || landsRootTab.value === 'crops-refs' || landsRootTab.value === 'melioration-refs' || landsRootTab.value === 'equipment-refs' || landsRootTab.value === 'field-refs'
     ? 'Справочники'
     : landsRootTab.value === 'melioration'
       ? 'Мелиорация'
@@ -315,11 +327,12 @@ const landsListSubtitle = computed(() => (
         ? 'Справочники для заполнения данных по мелиорации'
       : landsRootTab.value === 'equipment-refs'
         ? 'Справочники для заполнения данных по технике'
+      : landsRootTab.value === 'field-refs'
+        ? 'Справочники для заполнения данных по полям'
       : landsRootTab.value === 'melioration'
         ? 'Сведения по мелиорации'
         : 'Реестр, паспорты и справочники земельных участков'
 ))
-
 const form = ref<LandForm>({
   number: 1,
   name: '',
@@ -396,6 +409,21 @@ const landTypeLabelMap = computed(() => new Map(landTypes.value.map((t) => [t.id
 const selectedLandPolygonPoints = computed<LatLon[]>(() => fromPolygonGeoJson(selectedLand.value?.contour_geojson ?? null))
 const detailsMapLat = computed(() => selectedLand.value?.center_lat ?? mapLat.value)
 const detailsMapLon = computed(() => selectedLand.value?.center_lon ?? mapLon.value)
+const landEfisNumbersMap = computed(() => {
+  const map = new Map<string, string>()
+  const byLand = new Map<string, Set<string>>()
+  for (const f of fields.value) {
+    const landId = f.land_id
+    const efis = String((f as { efis_zsn_number?: string | null }).efis_zsn_number ?? '').trim()
+    if (!landId || !efis) continue
+    if (!byLand.has(landId)) byLand.set(landId, new Set<string>())
+    byLand.get(landId)!.add(efis)
+  }
+  for (const [landId, values] of byLand.entries()) {
+    map.set(landId, Array.from(values).join(', '))
+  }
+  return map
+})
 const assignedFields = computed(() => fields.value.filter((f) => f.land_id === selectedLandId.value))
 const unassignedFields = computed(() => fields.value.filter((f) => !f.land_id || f.land_id !== selectedLandId.value))
 const assignedFieldMapMarkers = computed<MapFieldMarker[]>(() => assignedFields.value
@@ -480,11 +508,17 @@ function formatLandArea(area: number | null): string {
   return String(n)
 }
 
+function landEfisNumberDisplay(land: LandRow): string {
+  const linked = landEfisNumbersMap.value.get(land.id)
+  if (linked) return linked
+  return land.efgis_zsn_field_number || 'Нет данных'
+}
+
 function exportLandsToExcel() {
   if (!lands.value.length) return
   const headers = [
     'Кадастровый номер',
-    'Номер поля ЕФГИС ЗСН',
+    '№ ПОЛЯ ЕФИС ЗСН',
     'Адрес земельного участка',
     'Категория земель',
     'Площадь земельного участка, га',
@@ -492,7 +526,7 @@ function exportLandsToExcel() {
   ]
   const rows = lands.value.map((land) => ([
     land.cadastral_number || 'Нет данных',
-    land.efgis_zsn_field_number || 'Нет данных',
+    landEfisNumberDisplay(land),
     land.address || 'Нет данных',
     land.land_category || 'Нет данных',
     formatLandArea(land.area),
@@ -513,7 +547,7 @@ async function exportLandsToPdf() {
   if (!lands.value.length) return
   const headers = [
     'Кадастровый номер',
-    'Номер поля ЕФГИС ЗСН',
+    '№ ПОЛЯ ЕФИС ЗСН',
     'Адрес земельного участка',
     'Категория земель',
     'Площадь земельного участка, га',
@@ -521,7 +555,7 @@ async function exportLandsToPdf() {
   ]
   const rows = lands.value.map((land) => ([
     escapeHtml(land.cadastral_number || 'Нет данных'),
-    escapeHtml(land.efgis_zsn_field_number || 'Нет данных'),
+    escapeHtml(landEfisNumberDisplay(land)),
     escapeHtml(land.address || 'Нет данных'),
     escapeHtml(land.land_category || 'Нет данных'),
     escapeHtml(formatLandArea(land.area)),
@@ -567,9 +601,8 @@ async function exportLandsToPdf() {
 }
 function getLandDisplayName(): string {
   const cadastral = form.value.cadastralNumber.trim()
-  const efgis = form.value.efgisZsnFieldNumber.trim()
   const address = form.value.address.trim()
-  return cadastral || efgis || address || `Участок ${Math.max(1, Math.trunc(form.value.number || 1))}`
+  return cadastral || address || `Участок ${Math.max(1, Math.trunc(form.value.number || 1))}`
 }
 
 function isDateRangeValid(start: string, end: string): boolean {
@@ -924,7 +957,7 @@ function meliorationFieldLabel(fieldId: string | null): string {
 function meliorationExportData() {
   if (meliorationTab.value === 'systems') {
     const headers = [
-      'Номер поля ЕФИС ЗСН',
+      '№ ПОЛЯ ЕФИС ЗСН',
       'Тип мелиорации',
       'Вид мелиорации',
       'Описание системы и местоположения',
@@ -945,7 +978,7 @@ function meliorationExportData() {
   }
   if (meliorationTab.value === 'forest') {
     const headers = [
-      'Номер поля ЕФИС ЗСН',
+      '№ ПОЛЯ ЕФИС ЗСН',
       'Площадь МЗЛН, га',
       'Количественные, качественные характеристики',
       'Год создания',
@@ -963,7 +996,7 @@ function meliorationExportData() {
     return { headers, rows }
   }
   const headers = [
-    'Номер поля ЕФИС ЗСН',
+    '№ ПОЛЯ ЕФИС ЗСН',
     'Тип мероприятия',
     'Дата проведения',
     'Площадь земельного участка, га',
@@ -1819,6 +1852,64 @@ async function loadEquipmentRefsSafe() {
   }
 }
 
+async function loadFieldMunicipalityRefsSafe() {
+  if (!isSupabaseConfigured()) {
+    fieldMunicipalityRefs.value = []
+    return
+  }
+  try {
+    fieldMunicipalityRefs.value = await loadFieldMunicipalitiesRefs()
+  } catch {
+    fieldMunicipalityRefs.value = []
+  }
+}
+
+async function addFieldMunicipalityReference() {
+  const name = newFieldMunicipalityName.value.trim()
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    const row = await addFieldMunicipalityRef({ name })
+    fieldMunicipalityRefs.value = [...fieldMunicipalityRefs.value, row]
+    newFieldMunicipalityName.value = ''
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось добавить муниципальное образование')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function editFieldMunicipalityReference(row: FieldMunicipalityRefRow) {
+  const next = prompt('Новое название муниципального образования', row.name)?.trim()
+  if (!next || next === row.name || !isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await updateFieldMunicipalityRef(row.id, { name: next })
+    fieldMunicipalityRefs.value = fieldMunicipalityRefs.value.map((x) => (x.id === row.id ? { ...x, name: next } : x))
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось обновить муниципальное образование')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function removeFieldMunicipalityReference(id: string) {
+  if (!isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await deleteFieldMunicipalityRef(id)
+    fieldMunicipalityRefs.value = fieldMunicipalityRefs.value.filter((x) => x.id !== id)
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось удалить муниципальное образование')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
 function contourSamplePoints(points: LatLon[], center: { lat: number; lon: number } | null): Array<{ lat: number; lon: number }> {
   const sample: Array<{ lat: number; lon: number }> = []
   if (center) sample.push({ lat: center.lat, lon: center.lon })
@@ -1904,7 +1995,7 @@ async function reloadAll() {
     landMeliorationTypes.value = meliorationTypesRows
     landMeliorationSubtypes.value = meliorationSubtypesRows
     landMeliorationEventTypes.value = meliorationEventTypesRows
-    await loadEquipmentRefsSafe()
+    await Promise.all([loadEquipmentRefsSafe(), loadFieldMunicipalityRefsSafe()])
     if (!isDetailsMode.value && landsRootTab.value === 'melioration') {
       landMeliorationEntries.value = await loadAllLandMeliorationEntries()
     }
@@ -1961,7 +2052,6 @@ async function saveLand() {
         area: Number(form.value.area || 0),
         cadastral_number: form.value.cadastralNumber || null,
         permitted_use_docs: form.value.permittedUseDocs || null,
-        efgis_zsn_field_number: form.value.efgisZsnFieldNumber || null,
         center_lat: centerLat,
         center_lon: centerLon,
         address: form.value.address || null,
@@ -1991,7 +2081,6 @@ async function saveLand() {
         area: Number(form.value.area || 0),
         cadastral_number: form.value.cadastralNumber || null,
         permitted_use_docs: form.value.permittedUseDocs || null,
-        efgis_zsn_field_number: form.value.efgisZsnFieldNumber || null,
         center_lat: centerLat,
         center_lon: centerLon,
         address: form.value.address || null,
@@ -2024,9 +2113,9 @@ async function saveLand() {
   }
 }
 
-async function removeLand() {
+async function removeLand(skipConfirm = false) {
   if (!selectedLandId.value || !isSupabaseConfigured()) return
-  if (!confirm('Удалить землю? Поля останутся, но будут отвязаны.')) return
+  if (!skipConfirm && !confirm('Удалить землю? Поля останутся, но будут отвязаны.')) return
   saving.value = true
   error.value = null
   try {
@@ -2034,6 +2123,9 @@ async function removeLand() {
     selectedLandId.value = ''
     landEditorOpen.value = false
     landInlineEditOpen.value = false
+    if (isDetailsMode.value) {
+      goToRegistry()
+    }
     await reloadAll()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Не удалось удалить землю'
@@ -2557,6 +2649,21 @@ function requestDeleteEquipmentCondition(code: string) {
   deleteConfirmOpen.value = true
 }
 
+function requestDeleteFieldMunicipality(id: string) {
+  deleteTarget.value = { type: 'field-municipality', id }
+  deleteConfirmTitle.value = 'Удаление муниципального образования'
+  deleteConfirmText.value = 'Муниципальное образование будет удалено из справочника.'
+  deleteConfirmOpen.value = true
+}
+
+function requestDeleteCurrentLand() {
+  if (!selectedLandId.value) return
+  deleteTarget.value = { type: 'land', id: selectedLandId.value }
+  deleteConfirmTitle.value = 'Удаление участка'
+  deleteConfirmText.value = 'Удалить участок? Все привязанные поля останутся в системе, но будут отвязаны от этого участка.'
+  deleteConfirmOpen.value = true
+}
+
 function closeDeleteConfirm() {
   if (saving.value || refsLoading.value) return
   deleteConfirmOpen.value = false
@@ -2836,6 +2943,10 @@ async function confirmDeleteTarget() {
     await removeEquipmentTypeReference(deleteTarget.value.id)
   } else if (deleteTarget.value.type === 'equipment-condition') {
     await removeEquipmentConditionReference(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'field-municipality') {
+    await removeFieldMunicipalityReference(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'land') {
+    await removeLand(true)
   } else {
     await removeCropRef(deleteTarget.value.id)
   }
@@ -2878,6 +2989,7 @@ watch([landsSearch, landsRootTab, isDetailsMode], ([, rootTab, detailsMode]) => 
 })
 watch(landsRootTab, (tab) => {
   if (tab === 'equipment-refs') void loadEquipmentRefsSafe()
+  if (tab === 'field-refs') void loadFieldMunicipalityRefsSafe()
 })
 
 onBeforeUnmount(() => {
@@ -2944,20 +3056,34 @@ onMounted(() => void reloadAll())
   <section class="lands-page">
     <header class="lands-top page-enter-item">
       <div class="lands-top-text">
-        <h1 class="page-title">{{ isDetailsMode ? 'Земельный участок' : landsListTitle }}</h1>
+        <h1 v-if="!isDetailsMode" class="page-title">{{ landsListTitle }}</h1>
+        <button v-if="isDetailsMode" type="button" class="lands-back-btn" @click="goToRegistry" aria-label="Назад к списку земель">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m15 18-6-6 6-6" />
+          </svg>
+          Назад к списку земель
+        </button>
         <p v-if="!isDetailsMode" class="lands-subtitle">{{ landsListSubtitle }}</p>
       </div>
       <div class="lands-top-actions">
         <button
-          v-if="isDetailsMode && selectedLand"
+          v-if="isDetailsMode && selectedLand && !landInlineEditOpen"
           type="button"
           class="lands-edit-btn"
-          @click="landInlineEditOpen ? closeLandEditor() : startInlineEdit()"
+          @click="startInlineEdit()"
         >
-          {{ landInlineEditOpen ? 'Завершить редактирование' : 'Редактировать участок' }}
+          Редактировать участок
         </button>
-        <button v-if="isDetailsMode" type="button" class="lands-create-btn" @click="goToRegistry">К реестру земель</button>
-        <button v-else-if="landsRootTab === 'registry'" type="button" class="lands-create-btn lands-btn--add" @click="openCreateLand">Новая земля</button>
+        <button
+          v-if="isDetailsMode && selectedLand && landInlineEditOpen"
+          type="button"
+          class="lands-edit-btn"
+          :disabled="saving"
+          @click="closeLandEditor"
+        >
+          Отменить редактирование
+        </button>
+        <button v-if="!isDetailsMode && landsRootTab === 'registry'" type="button" class="lands-create-btn lands-btn--add" @click="openCreateLand">Новая земля</button>
       </div>
     </header>
 
@@ -2967,7 +3093,7 @@ onMounted(() => void reloadAll())
     <div v-else class="lands-content">
       <section v-if="!isDetailsMode" class="lands-card page-enter-item">
         <div class="lands-tabs lands-tabs--top">
-          <template v-if="landsRootTab === 'rights-refs' || landsRootTab === 'land-refs' || landsRootTab === 'crops-refs' || landsRootTab === 'melioration-refs' || landsRootTab === 'equipment-refs'">
+          <template v-if="landsRootTab === 'rights-refs' || landsRootTab === 'land-refs' || landsRootTab === 'crops-refs' || landsRootTab === 'melioration-refs' || landsRootTab === 'equipment-refs' || landsRootTab === 'field-refs'">
             <button type="button" class="lands-tab-btn" :class="{ 'is-active': landsRootTab === 'rights-refs' }" @click="landsRootTab = 'rights-refs'">
               Справочники прав
             </button>
@@ -2982,6 +3108,9 @@ onMounted(() => void reloadAll())
             </button>
             <button type="button" class="lands-tab-btn" :class="{ 'is-active': landsRootTab === 'equipment-refs' }" @click="landsRootTab = 'equipment-refs'">
               Справочники техники
+            </button>
+            <button type="button" class="lands-tab-btn" :class="{ 'is-active': landsRootTab === 'field-refs' }" @click="landsRootTab = 'field-refs'">
+              Справочники полей
             </button>
           </template>
           <template v-else-if="landsRootTab === 'melioration'">
@@ -3040,7 +3169,7 @@ onMounted(() => void reloadAll())
               <thead>
                 <tr>
                   <th>Кадастровый номер</th>
-                  <th>Номер ЕФГИС ЗСН</th>
+                  <th>№ ПОЛЯ ЕФИС ЗСН</th>
                   <th>Адрес</th>
                   <th>Категория земли</th>
                   <th>Площадь, га</th>
@@ -3055,7 +3184,7 @@ onMounted(() => void reloadAll())
                   @click="openLandPage(land.id)"
                 >
                   <td>{{ land.cadastral_number || '—' }}</td>
-                  <td>{{ land.efgis_zsn_field_number || '—' }}</td>
+                  <td>{{ landEfisNumberDisplay(land) }}</td>
                   <td>{{ land.address || '—' }}</td>
                   <td>{{ land.land_category || '—' }}</td>
                   <td>{{ Number(land.area || 0).toFixed(2) }}</td>
@@ -3110,7 +3239,7 @@ onMounted(() => void reloadAll())
             <table class="lands-table">
               <thead>
                 <tr v-if="meliorationTab === 'systems'">
-                  <th>Номер поля ЕФИС ЗСН</th>
+                  <th>№ ПОЛЯ ЕФИС ЗСН</th>
                   <th>Тип мелиорации</th>
                   <th>Вид мелиорации</th>
                   <th>Описание системы и местоположения</th>
@@ -3120,7 +3249,7 @@ onMounted(() => void reloadAll())
                   <th>Действия</th>
                 </tr>
                 <tr v-else-if="meliorationTab === 'forest'">
-                  <th>Номер поля ЕФИС ЗСН</th>
+                  <th>№ ПОЛЯ ЕФИС ЗСН</th>
                   <th>Площадь МЗЛН, га</th>
                   <th>Количественные, качественные характеристики</th>
                   <th>Год создания</th>
@@ -3129,7 +3258,7 @@ onMounted(() => void reloadAll())
                   <th>Действия</th>
                 </tr>
                 <tr v-else>
-                  <th>Номер поля ЕФИС ЗСН</th>
+                  <th>№ ПОЛЯ ЕФИС ЗСН</th>
                   <th>Тип мероприятия</th>
                   <th>Дата проведения</th>
                   <th>Площадь земельного участка, га</th>
@@ -3408,6 +3537,35 @@ onMounted(() => void reloadAll())
             </div>
           </div>
         </template>
+        <template v-else-if="landsRootTab === 'field-refs'">
+          <p v-if="refsError" class="lands-error">{{ refsError }}</p>
+          <div class="lands-tabs lands-tabs--sub">
+            <button type="button" class="lands-tab-btn" :class="{ 'is-active': fieldRefsTab === 'municipalities' }" @click="fieldRefsTab = 'municipalities'">
+              Муниципальные образования
+            </button>
+          </div>
+          <div class="lands-ref-block">
+            <h2>Муниципальные образования</h2>
+            <div class="lands-ref-add-row">
+              <input v-model="newFieldMunicipalityName" class="lands-search" type="text" placeholder="Например: Новотроицкий сельсовет" />
+              <button type="button" class="lands-btn lands-btn--save lands-btn--add" :disabled="refsLoading || !newFieldMunicipalityName.trim()" @click="addFieldMunicipalityReference">
+                Добавить
+              </button>
+            </div>
+            <div class="lands-list-plain">
+              <div v-for="row in fieldMunicipalityRefs" :key="row.id" class="lands-list-plain-item">
+                <span>{{ row.name }}</span>
+                <div class="lands-item-actions">
+                  <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editFieldMunicipalityReference(row)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                  </button>
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteFieldMunicipality(row.id)" />
+                </div>
+              </div>
+              <p v-if="!fieldMunicipalityRefs.length" class="lands-muted">Пока нет муниципальных образований.</p>
+            </div>
+          </div>
+        </template>
         <template v-else>
           <p v-if="refsError" class="lands-error">{{ refsError }}</p>
           <div class="lands-tabs lands-tabs--sub">
@@ -3553,7 +3711,14 @@ onMounted(() => void reloadAll())
           <h2>Паспорт участка</h2>
           <div class="lands-overview-grid">
             <div class="lands-overview-item">
-              <span>Категория земель</span>
+              <span class="lands-label-with-help">
+                Категория земель
+                <RefFieldHelp
+                  text="Нет нужной категории? Добавьте ее в"
+                  :to="{ path: '/lands', query: { tab: 'land-categories' } }"
+                  link-label="Справочники земель"
+                />
+              </span>
               <select v-if="landInlineEditOpen" v-model="form.landCategory" class="lands-passport-input">
                 <option value="">—</option>
                 <option v-for="category in landCategories" :key="category.id" :value="category.name">{{ category.name }}</option>
@@ -3561,7 +3726,14 @@ onMounted(() => void reloadAll())
               <strong v-else>{{ selectedLand.land_category || '—' }}</strong>
             </div>
             <div class="lands-overview-item">
-              <span>Использование участка</span>
+              <span class="lands-label-with-help">
+                Использование участка
+                <RefFieldHelp
+                  text="Нет нужного варианта? Добавьте его в"
+                  :to="{ path: '/lands', query: { tab: 'land-usage' } }"
+                  link-label="Использование участка"
+                />
+              </span>
               <select v-if="landInlineEditOpen" v-model="form.actualUseStatus" class="lands-passport-input">
                 <option value="">—</option>
                 <option v-for="option in actualUseOptions" :key="option.id" :value="option.name">{{ option.name }}</option>
@@ -3584,7 +3756,14 @@ onMounted(() => void reloadAll())
               <strong v-else>{{ Number(selectedLand.area || 0).toFixed(2) }}</strong>
             </div>
             <div class="lands-overview-item">
-              <span>ВРИ по документам</span>
+              <span class="lands-label-with-help">
+                ВРИ по документам
+                <RefFieldHelp
+                  text="Нет нужного ВРИ? Добавьте его в"
+                  :to="{ path: '/lands', query: { tab: 'rights-refs' } }"
+                  link-label="Типы прав"
+                />
+              </span>
               <select v-if="landInlineEditOpen" v-model="form.permittedUseDocs" class="lands-passport-input">
                 <option value="">—</option>
                 <option v-for="row in landRightTypes" :key="row.id" :value="row.name">{{ row.name }}</option>
@@ -3597,9 +3776,8 @@ onMounted(() => void reloadAll())
               <strong v-else>{{ selectedLand.cadastral_number || '—' }}</strong>
             </div>
             <div class="lands-overview-item">
-              <span>Номер поля ЕФГИС ЗСН</span>
-              <input v-if="landInlineEditOpen" v-model.trim="form.efgisZsnFieldNumber" class="lands-passport-input" type="text" />
-              <strong v-else>{{ selectedLand.efgis_zsn_field_number || '—' }}</strong>
+              <span>№ ПОЛЯ ЕФИС ЗСН</span>
+              <strong>{{ landEfisNumberDisplay(selectedLand) }}</strong>
             </div>
             <div class="lands-overview-item">
               <span>Геолокация</span>
@@ -3647,7 +3825,7 @@ onMounted(() => void reloadAll())
               </span>
             </div>
           </div>
-          <div v-if="landInlineEditOpen && (addressCandidatesLoading || addressCandidates.length)" class="lands-address-candidates">
+          <div v-if="landInlineEditOpen && (addressCandidatesLoading || addressCandidates.length)" class="lands-address-candidates lands-address-candidates--details">
             <span class="lands-address-candidates-label">Варианты адреса по геометрии</span>
             <select v-model="selectedAddressCandidate" class="lands-address-candidates-select" @change="onAddressCandidateChange">
               <option value="" disabled>Выберите вариант адреса</option>
@@ -3706,7 +3884,14 @@ onMounted(() => void reloadAll())
           </div>
           <div v-if="landInlineEditOpen" class="lands-form-grid">
               <label class="lands-field">
-                <span>Отнесение к сельхозугодьям (тип земли)</span>
+              <span class="lands-label-with-help">
+                Отнесение к сельхозугодьям (тип земли)
+                <RefFieldHelp
+                  text="Нет нужного типа земли? Добавьте его в"
+                  :to="{ path: '/lands', query: { tab: 'land-types' } }"
+                  link-label="Справочники земель"
+                />
+              </span>
               <select v-model="form.isAgriLand">
                 <option value="">—</option>
                   <option v-for="type in landTypes" :key="type.id" :value="type.id">{{ type.name }}</option>
@@ -3763,12 +3948,12 @@ onMounted(() => void reloadAll())
               <input v-model.trim="form.otherUseInfo" type="text" />
             </label>
           </div>
-          <div v-if="landInlineEditOpen" class="lands-actions">
+          <div v-if="landInlineEditOpen" class="lands-actions lands-actions--end">
             <button type="button" class="lands-btn lands-btn--save" :disabled="saving" @click="saveLand">
               Сохранить сведения
             </button>
-            <button type="button" class="lands-btn" :disabled="saving" @click="closeLandEditor">
-              Отменить редактирование
+            <button type="button" class="lands-btn lands-btn--danger" :disabled="saving" @click="requestDeleteCurrentLand">
+              Удалить участок
             </button>
           </div>
         </template>
@@ -3780,9 +3965,12 @@ onMounted(() => void reloadAll())
               <thead>
                 <tr>
                   <th>Название</th>
+                  <th>№ ПОЛЯ ЕФИС ЗСН</th>
                   <th>Площадь, га</th>
                   <th>Культура</th>
                   <th>Тип земли</th>
+                  <th>Муниципальное образование</th>
+                  <th>Регион</th>
                   <th>Описание</th>
                   <th>Действия</th>
                 </tr>
@@ -3793,6 +3981,7 @@ onMounted(() => void reloadAll())
                     <div class="lands-field-cell-title">Поле №{{ field.number }} {{ field.name }}</div>
                     <div class="lands-field-cell-subtitle">{{ field.cadastral_number ? `Кад. №: ${field.cadastral_number}` : 'Нет кад. номера' }}</div>
                   </td>
+                  <td>{{ (field as any).efis_zsn_number || '—' }}</td>
                   <td>{{ Number(field.area || 0).toFixed(2) }}</td>
                   <td>
                     <span :class="fieldCropPillClass(field.crop_key)">
@@ -3800,6 +3989,8 @@ onMounted(() => void reloadAll())
                     </span>
                   </td>
                   <td>{{ field.land_type || '—' }}</td>
+                  <td>{{ field.municipality || '—' }}</td>
+                  <td>{{ field.region || '—' }}</td>
                   <td class="lands-field-description">{{ field.location_description || '—' }}</td>
                   <td @click.stop>
                     <div class="lands-item-actions">
@@ -3950,7 +4141,7 @@ onMounted(() => void reloadAll())
               <div class="lands-crop-rotation-card-main">
                 <div class="lands-crop-rotation-metric-row">
                   <div class="lands-crop-rotation-metric">
-                    <span class="lands-crop-rotation-metric-label">Номер поля ЕФГИС ЗСН</span>
+                    <span class="lands-crop-rotation-metric-label">№ ПОЛЯ ЕФИС ЗСН</span>
                     <span class="lands-crop-rotation-metric-value lands-crop-rotation-metric-value--nowrap">{{ realEstateFieldLabel(rotation.field_id) }}</span>
                   </div>
                   <div class="lands-crop-rotation-metric">
@@ -4001,7 +4192,7 @@ onMounted(() => void reloadAll())
               <div class="lands-re-card-main">
                 <div class="lands-re-metric-row">
                   <div class="lands-re-metric">
-                    <span class="lands-re-metric-label">Номер поля ЕФГИС ЗСН</span>
+                    <span class="lands-re-metric-label">№ ПОЛЯ ЕФИС ЗСН</span>
                     <span class="lands-re-metric-value lands-re-metric-value--nowrap">{{ realEstateFieldLabel(obj.field_id) }}</span>
                   </div>
                   <div class="lands-re-metric">
@@ -4103,8 +4294,8 @@ onMounted(() => void reloadAll())
                 </select>
               </label>
               <label class="lands-field">
-                <span>Номер поля ЕФГИС ЗСН</span>
-                <input v-model.trim="form.efgisZsnFieldNumber" type="text" />
+                <span>№ ПОЛЯ ЕФИС ЗСН</span>
+                <span class="lands-muted-line">Заполняется автоматически из привязанных полей (раздел «Поля»).</span>
               </label>
             </div>
             <div class="lands-form-grid">
@@ -4197,7 +4388,7 @@ onMounted(() => void reloadAll())
           <div class="lands-modal-body">
             <div class="lands-form-grid">
               <label class="lands-field">
-                <span>Номер поля ЕФГИС ЗСН</span>
+                <span>№ ПОЛЯ ЕФИС ЗСН</span>
                 <select v-model="cropRotationForm.fieldId">
                   <option value="">— Выберите поле —</option>
                   <option v-for="field in assignedFields" :key="field.id" :value="field.id">
@@ -4474,7 +4665,7 @@ onMounted(() => void reloadAll())
           <div class="lands-modal-body">
             <div class="lands-form-grid">
               <label class="lands-field">
-                <span>Номер поля ЕФГИС ЗСН</span>
+                <span>№ ПОЛЯ ЕФИС ЗСН</span>
                 <select v-model="realEstateForm.fieldId">
                   <option value="">—</option>
                   <option v-for="field in assignedFields" :key="field.id" :value="field.id">
@@ -4751,7 +4942,7 @@ onMounted(() => void reloadAll())
           <div class="lands-modal-body">
             <div class="lands-form-grid">
               <label class="lands-field">
-                <span>Номер поля ЕФИС ЗСН</span>
+                <span>№ ПОЛЯ ЕФИС ЗСН</span>
                 <select v-model="meliorationForm.fieldId">
                   <option value="">—</option>
                   <option v-for="field in meliorationFieldOptions" :key="field.id" :value="field.id">
@@ -4954,6 +5145,22 @@ onMounted(() => void reloadAll())
 .lands-page { display:flex; flex-direction:column; gap:1rem; min-width:0; }
 .lands-top { display:flex; justify-content:space-between; align-items:flex-start; gap:.75rem; flex-wrap:wrap; }
 .lands-top-text { display:flex; flex-direction:column; gap:4px; }
+.lands-back-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  font-size: 1.05rem;
+  font-weight: 500;
+  cursor: pointer;
+  width: fit-content;
+}
+.lands-back-btn:hover {
+  color: var(--text-primary);
+}
 .lands-subtitle { margin:0; color:var(--text-secondary); font-size:.9rem; }
 .lands-top-actions { display:flex; gap:8px; flex-wrap:wrap; }
 .lands-create-btn {
@@ -5054,6 +5261,7 @@ onMounted(() => void reloadAll())
 .lands-search:focus { outline:none; border-color:var(--accent-green); box-shadow:0 0 0 1px var(--accent-green); }
 .lands-map-wrap { border:1px solid var(--border-color); border-radius:12px; overflow:hidden; margin-bottom:10px; }
 .lands-address-candidates { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+.lands-address-candidates--details { max-width: min(680px, 100%); }
 .lands-address-candidates-label { font-size:.82rem; font-weight:600; color:var(--text-secondary); }
 .lands-address-candidates-select { width:100%; border:1px solid var(--border-color); border-radius:9px; padding:8px 10px; background:#fff; color:var(--text-primary); }
 .lands-map-head { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px; border-bottom:1px solid var(--border-color); background:#fff; flex-wrap:wrap; }
@@ -5165,6 +5373,7 @@ onMounted(() => void reloadAll())
   color: var(--accent-green);
 }
 .lands-actions { display:flex; gap:8px; flex-wrap:wrap; border-top:1px solid var(--border-color); padding-top:10px; }
+.lands-actions--end { justify-content: flex-end; }
 .lands-actions--map { border-top:none; padding-top:0; margin-bottom:8px; justify-content:flex-end; }
 .lands-actions--crop { border-top:none; padding-top:0; margin-bottom:12px; justify-content:flex-end; }
 .lands-melioration-head { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-bottom:10px; }
@@ -5658,12 +5867,14 @@ onMounted(() => void reloadAll())
   align-items: center;
   gap: 10px;
   background: var(--bg-panel);
-  transition: border-color .2s ease, background .2s ease;
+  transition: border-color .2s ease, background .2s ease, transform .2s ease, box-shadow .2s ease;
   cursor: pointer;
 }
 .lands-file-upload:hover {
   border-color: var(--accent-green);
   background: var(--bg-panel-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(45, 90, 61, 0.14);
 }
 .lands-file-upload-btn {
   height: 30px;
@@ -5677,6 +5888,12 @@ onMounted(() => void reloadAll())
   color: var(--text-primary);
   font-size: .85rem;
   font-weight: 600;
+  transition: border-color .2s ease, color .2s ease, background .2s ease;
+}
+.lands-file-upload:hover .lands-file-upload-btn {
+  border-color: color-mix(in srgb, var(--accent-green) 60%, var(--border-color));
+  color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 6%, var(--bg-panel));
 }
 .lands-file-upload-hint {
   font-size: .78rem;
@@ -5864,6 +6081,7 @@ onMounted(() => void reloadAll())
 [data-theme='dark'] .lands-modal .lands-field textarea::placeholder {
   color: var(--text-secondary);
 }
+
 [data-theme='dark'] .lands-tabs--melioration .lands-tab-btn {
   color: var(--text-secondary);
 }

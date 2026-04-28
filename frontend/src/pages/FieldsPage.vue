@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, nextTick, watch } from 'vue'
+import { jsPDF } from 'jspdf'
+import html2canvas from 'html2canvas'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '@/stores/auth'
 import {
@@ -26,8 +28,10 @@ import {
   addField as addFieldApi,
   updateField as updateFieldApi,
   deleteField as deleteFieldApi,
+  loadFieldMunicipalitiesRefs,
   uploadFieldScheme,
   type FieldRow,
+  type FieldMunicipalityRefRow,
 } from '@/lib/fieldsSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
@@ -63,10 +67,13 @@ type Field = {
   name: string
   area: number
   cadastralNumber: string
+  efisZsnNumber?: string
   address: string
   locationDescription: string
   extraInfo: string
   geolocation: string
+  municipality?: string
+  region?: string
   geometryMode: 'point' | 'polygon'
   contourGeojson: Record<string, unknown> | null
   landId?: string | null
@@ -115,9 +122,12 @@ function fieldRowToField(row: FieldRow, profileMap: Map<string, ProfileRow>, cro
     name: row.name,
     area: Number(row.area),
     cadastralNumber: row.cadastral_number ?? '',
+    efisZsnNumber: (row as { efis_zsn_number?: string | null }).efis_zsn_number ?? '',
     address: (row as { address?: string | null }).address ?? '',
     extraInfo: (row as { extra_info?: string | null }).extra_info ?? '',
     geolocation: (row as { geolocation?: string | null }).geolocation ?? '',
+    municipality: (row as { municipality?: string | null }).municipality ?? '',
+    region: (row as { region?: string | null }).region ?? '',
     locationDescription: row.location_description ?? '',
     landId: row.land_id ?? null,
     landType: row.land_type,
@@ -330,7 +340,7 @@ watch(searchText, () => {
   }, 300)
 })
 
-type FieldsSortKey = 'name' | 'area' | 'crop' | 'land' | 'location' | 'responsible'
+type FieldsSortKey = 'name' | 'cadastralNumber' | 'area' | 'crop' | 'land' | 'location' | 'responsible'
 
 const fieldsSortKey = ref<FieldsSortKey>('name')
 const fieldsSortDir = ref<'asc' | 'desc'>('asc')
@@ -362,7 +372,10 @@ const sortedFilteredFields = computed(() => {
     let c = 0
     switch (key) {
       case 'name':
-        c = a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' })
+        c = (a.name || '').localeCompare(b.name || '', 'ru', { sensitivity: 'base' })
+        break
+      case 'cadastralNumber':
+        c = (a.cadastralNumber || '').localeCompare(b.cadastralNumber || '', 'ru', { sensitivity: 'base' })
         break
       case 'area':
         c = a.area - b.area
@@ -449,11 +462,136 @@ function openJournal() {
   router.push('/tasks')
 }
 
+const CSV_SEP = '\t'
+
+function escapeCsvCell(val: string): string {
+  const s = String(val ?? '').replace(/\r?\n/g, ' ').replace(/"/g, '""')
+  return s.includes(CSV_SEP) || s.includes('"') || s.includes('\r') ? `"${s}"` : s
+}
+
+function exportFieldsToExcel() {
+  const list = sortedFilteredFields.value
+  if (!list.length) return
+  const headers = [
+    '№',
+    'Название',
+    'Кадастровый №',
+    '№ ПОЛЯ ЕФИС ЗСН',
+    'Площадь (га)',
+    'Культура',
+    'Тип земли',
+    'Описание',
+    'Муниципальное образование',
+    'Регион',
+    'Ответственный',
+  ]
+  const rows = list.map((f, i) => [
+    String(i + 1),
+    f.name || '',
+    f.cadastralNumber || '',
+    f.efisZsnNumber || '',
+    String(f.area ?? ''),
+    f.cropName || '',
+    f.landType || '',
+    f.locationDescription || '',
+    f.municipality || '',
+    f.region || '',
+    f.responsiblePerson || 'Не назначен',
+  ])
+  const line = (arr: (string | number)[]) => arr.map((v) => escapeCsvCell(String(v))).join(CSV_SEP)
+  const csv = '\uFEFF' + [line(headers), ...rows.map((r) => line(r))].join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `список_полей_${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function escapeHtml(s: string): string {
+  const div = document.createElement('div')
+  div.textContent = s
+  return div.innerHTML
+}
+
+async function exportFieldsToPdf() {
+  const list = sortedFilteredFields.value
+  if (!list.length) return
+  const headers = [
+    '№',
+    'Название',
+    'Кадастровый №',
+    '№ ПОЛЯ ЕФИС ЗСН',
+    'Площадь (га)',
+    'Культура',
+    'Тип земли',
+    'Описание',
+    'Муниципальное образование',
+    'Регион',
+    'Ответственный',
+  ]
+  const rows = list.map((f, i) => [
+    String(i + 1),
+    escapeHtml(f.name || ''),
+    escapeHtml(f.cadastralNumber || ''),
+    escapeHtml(f.efisZsnNumber || ''),
+    escapeHtml(String(f.area ?? '')),
+    escapeHtml(f.cropName || ''),
+    escapeHtml(f.landType || ''),
+    escapeHtml(f.locationDescription || ''),
+    escapeHtml(f.municipality || ''),
+    escapeHtml(f.region || ''),
+    escapeHtml(f.responsiblePerson || 'Не назначен'),
+  ])
+  const tableRows = rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')
+  const headerCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')
+  const html = `
+    <div class="pdf-export-table-wrap" style="position:fixed;left:-9999px;top:0;width:1300px;font-family:Arial,sans-serif;font-size:12px;background:#fff;">
+      <h2 style="margin:0 0 12px 0;font-size:16px;">Список полей</h2>
+      <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;">
+        <thead><tr style="background:#2d5a3d;color:#fff;">${headerCells}</tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  `
+  const wrap = document.createElement('div')
+  wrap.innerHTML = html.trim()
+  const el = wrap.firstElementChild as HTMLElement
+  document.body.appendChild(el)
+  try {
+    const canvas = await html2canvas(el, { scale: 2, useCORS: true, logging: false })
+    document.body.removeChild(el)
+    const imgData = canvas.toDataURL('image/png')
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+    const pageW = doc.internal.pageSize.getWidth()
+    const pageH = doc.internal.pageSize.getHeight()
+    const margin = 10
+    const maxW = pageW - margin * 2
+    const maxH = pageH - margin * 2
+    let w = maxW
+    let h = (canvas.height / canvas.width) * w
+    if (h > maxH) {
+      h = maxH
+      w = (canvas.width / canvas.height) * h
+    }
+    doc.addImage(imgData, 'PNG', margin, margin, w, h)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener,noreferrer')
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  } catch {
+    document.body.removeChild(el)
+  }
+}
+
 const isAddFieldOpen = ref(false)
+const isFieldModalWide = ref(false)
 const editingFieldId = ref<string | null>(null)
 const deleteConfirmFieldId = ref<string | null>(null)
 const newFieldName = ref('')
 const newFieldCadastral = ref('')
+const newFieldEfisZsn = ref('')
 const newFieldAddress = ref('')
 const newFieldAddressCandidates = ref<string[]>([])
 const selectedAddressCandidate = ref('')
@@ -555,7 +693,10 @@ const CROP_OPTIONS_FALLBACK: { key: string; label: string }[] = [
 const landTypes = ref<LandTypeRow[]>([])
 const crops = ref<CropRow[]>([])
 const lands = ref<LandRow[]>([])
+const fieldMunicipalityRefs = ref<FieldMunicipalityRefRow[]>([])
 const newFieldLandId = ref('')
+const newFieldMunicipality = ref('')
+const newFieldRegion = ref('')
 
 const landTypeOptions = computed(() =>
   landTypes.value.length > 0 ? landTypes.value.map((t) => ({ name: t.name })) : LAND_TYPES_FALLBACK.map((name) => ({ name })),
@@ -588,10 +729,16 @@ const selectedLandContourMarkers = computed(() => {
 async function openAddField() {
   if (isSupabaseConfigured()) {
     try {
-      const [landTypesList, cropsList, landsList] = await Promise.all([loadLandTypes(), loadCrops(), loadLandsApi()])
+      const [landTypesList, cropsList, landsList, municipalRefsList] = await Promise.all([
+        loadLandTypes(),
+        loadCrops(),
+        loadLandsApi(),
+        loadFieldMunicipalitiesRefs(),
+      ])
       landTypes.value = landTypesList
       crops.value = cropsList
       lands.value = landsList
+      fieldMunicipalityRefs.value = municipalRefsList
     } catch (e) {
       fieldFormError.value = refsErrorMessage(e)
     }
@@ -599,6 +746,7 @@ async function openAddField() {
   editingFieldId.value = null
   newFieldName.value = ''
   newFieldCadastral.value = ''
+  newFieldEfisZsn.value = ''
   newFieldAddress.value = ''
   newFieldAddressCandidates.value = []
   selectedAddressCandidate.value = ''
@@ -615,6 +763,8 @@ async function openAddField() {
   newFieldAreaManualTouched.value = false
   newFieldLandType.value = landTypeOptions.value[0]?.name ?? 'Пашня'
   newFieldLandId.value = ''
+  newFieldMunicipality.value = ''
+  newFieldRegion.value = ''
   newFieldCropKey.value = cropOptions.value[0]?.key ?? 'wheat'
   newFieldSowingYear.value = new Date().getFullYear()
   newFieldLocationDesc.value = ''
@@ -629,16 +779,23 @@ async function openAddField() {
   }
   schemeUploadError.value = ''
   fieldFormError.value = ''
+  isFieldModalWide.value = false
   isAddFieldOpen.value = true
 }
 
 async function openEditField(f: Field) {
   if (isSupabaseConfigured()) {
     try {
-      const [landTypesList, cropsList, landsList] = await Promise.all([loadLandTypes(), loadCrops(), loadLandsApi()])
+      const [landTypesList, cropsList, landsList, municipalRefsList] = await Promise.all([
+        loadLandTypes(),
+        loadCrops(),
+        loadLandsApi(),
+        loadFieldMunicipalitiesRefs(),
+      ])
       landTypes.value = landTypesList
       crops.value = cropsList
       lands.value = landsList
+      fieldMunicipalityRefs.value = municipalRefsList
     } catch (e) {
       fieldFormError.value = refsErrorMessage(e)
     }
@@ -646,6 +803,7 @@ async function openEditField(f: Field) {
   editingFieldId.value = f.id
   newFieldName.value = f.name
   newFieldCadastral.value = f.cadastralNumber
+  newFieldEfisZsn.value = f.efisZsnNumber ?? ''
   newFieldAddress.value = f.address
   newFieldAddressCandidates.value = f.address ? [f.address] : []
   selectedAddressCandidate.value = f.address || ''
@@ -662,6 +820,8 @@ async function openEditField(f: Field) {
   newFieldAreaManualTouched.value = false
   newFieldLandType.value = f.landType
   newFieldLandId.value = f.landId ?? ''
+  newFieldMunicipality.value = f.municipality ?? ''
+  newFieldRegion.value = f.region ?? ''
   newFieldCropKey.value = f.cropKey
   newFieldSowingYear.value = f.sowingYear
   newFieldLocationDesc.value = f.locationDescription
@@ -672,6 +832,7 @@ async function openEditField(f: Field) {
   fieldMapAddressError.value = ''
   schemeUploadError.value = ''
   fieldFormError.value = ''
+  isFieldModalWide.value = false
   isAddFieldOpen.value = true
 }
 
@@ -763,6 +924,7 @@ async function processSchemeFile(file: File) {
 
 function closeFieldModal() {
   isAddFieldOpen.value = false
+  isFieldModalWide.value = false
   editingFieldId.value = null
   newFieldAreaManualTouched.value = false
   fieldMapAddressCandidatesLoading.value = false
@@ -771,6 +933,17 @@ function closeFieldModal() {
   fieldMapAddressLoading.value = false
   fieldMapAddressError.value = ''
 }
+
+function toggleFieldModalWidth() {
+  isFieldModalWide.value = !isFieldModalWide.value
+}
+
+watch(isFieldModalWide, async () => {
+  if (!isAddFieldOpen.value) return
+  await nextTick()
+  window.dispatchEvent(new Event('resize'))
+  setTimeout(() => window.dispatchEvent(new Event('resize')), 180)
+})
 
 async function onPickFieldMap(coords: { lat: number; lon: number }) {
   newFieldGeometryMode.value = 'point'
@@ -811,6 +984,8 @@ function applyAddressCandidates(candidates: string[]) {
     newFieldAddress.value = list[0]!
     newFieldAddressLastAuto.value = list[0]!
     newFieldAddressManualTouched.value = false
+    tryFillFieldRegionFromAddress(list[0]!)
+    tryFillMunicipalityFromAddress(list[0]!)
   }
 }
 
@@ -860,6 +1035,25 @@ function onAddressCandidateChange() {
   newFieldAddress.value = selectedAddressCandidate.value
   newFieldAddressLastAuto.value = selectedAddressCandidate.value
   newFieldAddressManualTouched.value = false
+  tryFillFieldRegionFromAddress(selectedAddressCandidate.value)
+  tryFillMunicipalityFromAddress(selectedAddressCandidate.value)
+}
+
+function extractRegionFromAddress(address: string): string {
+  const match = address.match(/([А-Яа-яЁёA-Za-z\- ]+\s(?:область|край|республика|АО|автономный округ))/)
+  return match?.[1]?.trim() || ''
+}
+
+function tryFillFieldRegionFromAddress(address: string) {
+  const region = extractRegionFromAddress(address)
+  if (region) newFieldRegion.value = region
+}
+
+function tryFillMunicipalityFromAddress(address: string) {
+  if (newFieldMunicipality.value.trim()) return
+  const normalizedAddress = address.toLowerCase()
+  const match = fieldMunicipalityRefs.value.find((row) => normalizedAddress.includes(row.name.toLowerCase()))
+  if (match) newFieldMunicipality.value = match.name
 }
 
 function onFieldAreaManualInput() {
@@ -967,10 +1161,13 @@ async function addField() {
           name,
           area: Number.isNaN(area) ? 0 : area,
           cadastral_number: newFieldCadastral.value.trim() || null,
+          efis_zsn_number: newFieldEfisZsn.value.trim() || null,
           address: newFieldAddress.value.trim() || null,
           location_description: newFieldLocationDesc.value.trim() || null,
           extra_info: newFieldExtra.value.trim() || null,
           geolocation,
+          municipality: newFieldMunicipality.value.trim() || null,
+          region: newFieldRegion.value.trim() || null,
           geometry_mode: geometryMode,
           contour_geojson: contourGeojson,
           land_id: newFieldLandId.value || null,
@@ -991,10 +1188,13 @@ async function addField() {
         f.name = name
         f.area = Number.isNaN(area) ? 0 : area
         f.cadastralNumber = newFieldCadastral.value.trim()
+        f.efisZsnNumber = newFieldEfisZsn.value.trim()
         f.address = newFieldAddress.value.trim()
         f.locationDescription = newFieldLocationDesc.value.trim()
         f.extraInfo = newFieldExtra.value.trim()
         f.geolocation = geolocation || ''
+        f.municipality = newFieldMunicipality.value.trim()
+        f.region = newFieldRegion.value.trim()
         f.geometryMode = geometryMode
         f.contourGeojson = contourGeojson
         f.landId = newFieldLandId.value || null
@@ -1019,10 +1219,13 @@ async function addField() {
         name,
         area: Number.isNaN(area) ? 0 : area,
         cadastral_number: newFieldCadastral.value.trim() || null,
+        efis_zsn_number: newFieldEfisZsn.value.trim() || null,
         address: newFieldAddress.value.trim() || null,
         location_description: newFieldLocationDesc.value.trim() || null,
         extra_info: newFieldExtra.value.trim() || null,
         geolocation,
+        municipality: newFieldMunicipality.value.trim() || null,
+        region: newFieldRegion.value.trim() || null,
         geometry_mode: geometryMode,
         contour_geojson: contourGeojson,
         land_id: newFieldLandId.value || null,
@@ -1049,10 +1252,13 @@ async function addField() {
         name,
         area: Number.isNaN(area) ? 0 : area,
         cadastralNumber: newFieldCadastral.value.trim(),
+        efisZsnNumber: newFieldEfisZsn.value.trim(),
         address: newFieldAddress.value.trim(),
         locationDescription: newFieldLocationDesc.value.trim(),
         extraInfo: newFieldExtra.value.trim(),
         geolocation: geolocation || '',
+        municipality: newFieldMunicipality.value.trim(),
+        region: newFieldRegion.value.trim(),
         geometryMode,
         contourGeojson,
         landId: newFieldLandId.value || null,
@@ -1406,10 +1612,16 @@ onMounted(async () => {
               autocomplete="off"
             />
           </div>
-          <button type="button" class="fields-filters-btn" aria-label="Фильтры">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-            Фильтры
-          </button>
+          <div class="fields-toolbar-actions">
+            <button type="button" class="fields-export-btn task-btn-export action_has has_saved" :disabled="!sortedFilteredFields.length" title="Экспорт в Excel" @click="exportFieldsToExcel">
+              <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              Excel
+            </button>
+            <button type="button" class="fields-export-btn task-btn-export action_has has_saved" :disabled="!sortedFilteredFields.length" title="Экспорт в PDF" @click="exportFieldsToPdf">
+              <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/></svg>
+              PDF
+            </button>
+          </div>
         </div>
 
         <p v-if="fieldsError" class="fields-load-error">{{ fieldsError }}</p>
@@ -1424,13 +1636,25 @@ onMounted(async () => {
                   <button
                     type="button"
                     class="fields-th-sort-btn"
-                    aria-label="Сортировать по названию"
+                    aria-label="Сортировать по внутреннему названию"
                     @click.stop="toggleFieldsSort('name')"
                   >
-                    Название
+                    Внутреннее название
                     <span v-if="fieldsSortMark('name')" class="fields-th-sort-mark">{{ fieldsSortMark('name') }}</span>
                   </button>
                 </th>
+                <th scope="col" class="fields-th-cadastral" :aria-sort="fieldsAriaSort('cadastralNumber')">
+                  <button
+                    type="button"
+                    class="fields-th-sort-btn"
+                    aria-label="Сортировать по кадастровому номеру"
+                    @click.stop="toggleFieldsSort('cadastralNumber')"
+                  >
+                    Кадастровый №
+                    <span v-if="fieldsSortMark('cadastralNumber')" class="fields-th-sort-mark">{{ fieldsSortMark('cadastralNumber') }}</span>
+                  </button>
+                </th>
+                <th scope="col" class="fields-th-efis">№ ПОЛЯ ЕФИС ЗСН</th>
                 <th scope="col" class="fields-th-area" :aria-sort="fieldsAriaSort('area')">
                   <button
                     type="button"
@@ -1475,6 +1699,8 @@ onMounted(async () => {
                     <span v-if="fieldsSortMark('location')" class="fields-th-sort-mark">{{ fieldsSortMark('location') }}</span>
                   </button>
                 </th>
+                <th scope="col">Муниципальное образование</th>
+                <th scope="col">Регион</th>
                 <th scope="col" class="fields-th-responsible" :aria-sort="fieldsAriaSort('responsible')">
                   <button
                     type="button"
@@ -1496,10 +1722,9 @@ onMounted(async () => {
                 class="fields-tr"
                 @click="goToFieldDetails(f.id)"
               >
-                <td class="fields-td-name">
-                  <div class="fields-name-main">{{ f.name }}</div>
-                  <div :class="['fields-name-cad', { 'fields-name-cad--empty': !f.cadastralNumber }]">{{ f.cadastralNumber ? `Кад. №: ${f.cadastralNumber}` : 'Нет кад. номера' }}</div>
-                </td>
+                <td class="fields-td-name">{{ f.name || '—' }}</td>
+                <td class="fields-td-cadastral">{{ f.cadastralNumber || '—' }}</td>
+                <td class="fields-td-efis">{{ f.efisZsnNumber || '—' }}</td>
                 <td class="fields-td-area">{{ f.area }}</td>
                 <td class="fields-td-crop">
                   <span :class="cropPillClass(f)">{{ f.cropName }}</span>
@@ -1508,6 +1733,8 @@ onMounted(async () => {
                 <td class="fields-td-location">
                   <div class="fields-location-text" :title="f.locationDescription">{{ f.locationDescription || '—' }}</div>
                 </td>
+                <td>{{ f.municipality || '—' }}</td>
+                <td>{{ f.region || '—' }}</td>
                 <td class="fields-td-responsible" @click.stop>
                   <select
                     :value="f.responsibleId || ''"
@@ -1543,7 +1770,7 @@ onMounted(async () => {
                 </td>
               </tr>
               <tr v-if="!paginatedFields.length">
-                <td colspan="7" class="fields-empty">Нет полей. Добавьте поле с помощью кнопки выше.</td>
+                <td colspan="9" class="fields-empty">Нет полей. Добавьте поле с помощью кнопки выше.</td>
               </tr>
             </tbody>
           </table>
@@ -1762,14 +1989,31 @@ onMounted(async () => {
         class="modal-backdrop"
         @click="closeFieldModal"
       >
-        <div class="modal modal-fields modal-fields--add" @click.stop>
+        <div class="modal modal-fields modal-fields--add" :class="{ 'modal-fields--wide': isFieldModalWide }" @click.stop>
           <header class="modal-header modal-header--fields">
             <h2 class="modal-title modal-title--fields">
               {{ fieldModalTitle }}
             </h2>
-            <button type="button" class="modal-close" aria-label="Закрыть" @click="closeFieldModal">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
+            <div class="modal-header-actions">
+              <button
+                type="button"
+                class="modal-expand-btn"
+                :class="{ 'modal-expand-btn--active': isFieldModalWide }"
+                :aria-label="isFieldModalWide ? 'Свернуть окно' : 'Расширить окно'"
+                :title="isFieldModalWide ? 'Свернуть окно' : 'Расширить окно'"
+                @click="toggleFieldModalWidth"
+              >
+                <svg class="modal-expand-btn-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M9 3H3v6" />
+                  <path d="M15 3h6v6" />
+                  <path d="M3 15v6h6" />
+                  <path d="M21 15v6h-6" />
+                </svg>
+              </button>
+              <button type="button" class="modal-close" aria-label="Закрыть" @click="closeFieldModal">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
           </header>
           <div v-if="fieldFormError" class="modal-error">{{ fieldFormError }}</div>
           <div class="modal-form modal-form--add">
@@ -1789,6 +2033,12 @@ onMounted(async () => {
                 <span class="modal-label">Кадастровый номер <span class="modal-label-opt">(опц.)</span></span>
                 <input v-model="newFieldCadastral" type="text" class="modal-input" placeholder="XX:XX:XXXXXXX:XX" />
               </label>
+              <label class="modal-field">
+                <span class="modal-label">№ ПОЛЯ ЕФИС ЗСН <span class="modal-label-opt">(опц.)</span></span>
+                <input v-model="newFieldEfisZsn" type="text" class="modal-input" placeholder="Например: EFIS-000123" />
+              </label>
+            </div>
+            <div class="modal-form-section modal-form-section--grid">
               <label class="modal-field">
                 <span class="modal-label">Площадь, га <span class="modal-label-required">*</span></span>
                 <div class="modal-input-wrap modal-input-wrap--suffix">
@@ -1862,7 +2112,7 @@ onMounted(async () => {
                 </div>
                 <div class="field-map-picker-wrap">
                   <YandexMap
-                    :key="editingFieldId ?? 'new-field'"
+                    :key="`${editingFieldId ?? 'new-field'}-${isFieldModalWide ? 'wide' : 'normal'}`"
                     :lat="fieldMapCenter.lat"
                     :lon="fieldMapCenter.lon"
                     :zoom="12"
@@ -1927,6 +2177,24 @@ onMounted(async () => {
                   <option value="">Не назначен</option>
                   <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.display_name || p.email }}</option>
                 </select>
+              </label>
+              <label class="modal-field">
+                <span class="modal-label modal-label--with-help">
+                  Муниципальное образование
+                  <RefFieldHelp
+                    text="Нет нужного муниципального образования? Добавьте его в"
+                    :to="{ path: '/lands', query: { tab: 'field-refs' } }"
+                    link-label="Справочники полей"
+                  />
+                </span>
+                <select v-model="newFieldMunicipality" class="modal-select">
+                  <option value="">—</option>
+                  <option v-for="row in fieldMunicipalityRefs" :key="row.id" :value="row.name">{{ row.name }}</option>
+                </select>
+              </label>
+              <label class="modal-field">
+                <span class="modal-label">Регион</span>
+                <input v-model="newFieldRegion" type="text" class="modal-input" placeholder="Например: Ростовская область" />
               </label>
             </div>
             <div class="modal-form-section">
@@ -2016,9 +2284,8 @@ onMounted(async () => {
             <button class="modal-btn-ghost" type="button" @click="closeFieldModal">Отмена</button>
             <button class="modal-btn" type="button" @click="addField">{{ editingFieldId ? 'Сохранить' : 'Сохранить поле' }}</button>
           </div>
+          </div>
         </div>
-      </div>
-
       <div
         v-if="deleteConfirmFieldId"
         class="fields-confirm-backdrop"
@@ -2304,26 +2571,70 @@ onMounted(async () => {
   border-color: var(--accent-green);
   box-shadow: 0 0 0 1px var(--accent-green);
 }
-.fields-filters-btn {
+.fields-toolbar-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
+}
+.fields-export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--bg-panel);
+  background: #fafafa;
   color: var(--text-primary);
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
-  transition: border-color 0.2s ease, background 0.2s ease;
+  transition: background 0.2s, border-color 0.2s;
 }
-.fields-filters-btn:hover {
+.fields-export-btn:hover:not(:disabled) {
   background: var(--bg-panel-hover);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
 }
-.fields-filters-btn svg {
+.fields-export-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+[data-theme='dark'] .fields-export-btn {
+  background: rgba(255, 255, 255, 0.06);
+}
+.task-header-icon {
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
-  color: var(--text-secondary);
+}
+.task-btn-export.action_has {
+  --color: 220 9% 46%;
+  --color-has: 146 33% 30%;
+}
+[data-theme='dark'] .task-btn-export.action_has {
+  --color: 215 14% 55%;
+  --color-has: 97 55% 52%;
+}
+.task-btn-export.has_saved:hover:not(:disabled) {
+  border-color: hsl(var(--color-has));
+}
+.task-btn-export.has_saved:hover:not(:disabled) svg {
+  color: hsl(var(--color-has));
+}
+.task-btn-export.has_saved svg {
+  overflow: visible;
+  transform-origin: center;
+  color: hsl(var(--color));
+  transition: transform 0.22s ease;
+}
+.task-btn-export.has_saved:hover:not(:disabled) svg {
+  animation: equipment-export-file-hover 0.65s ease;
+}
+@keyframes equipment-export-file-hover {
+  0% { transform: translateY(0) scale(1) rotate(0deg); }
+  35% { transform: translateY(-2px) scale(1.11) rotate(-8deg); }
+  70% { transform: translateY(-1px) scale(1.06) rotate(6deg); }
+  100% { transform: translateY(0) scale(1) rotate(0deg); }
 }
 .fields-table-wrap {
   overflow-x: auto;
@@ -2399,7 +2710,14 @@ onMounted(async () => {
   line-height: 1;
 }
 .fields-th-name,
-.fields-td-name { min-width: 180px; }
+.fields-td-name { min-width: 220px; }
+.fields-td-name { font-weight: 600; color: var(--text-primary); }
+.fields-th-cadastral,
+.fields-td-cadastral { min-width: 190px; }
+.fields-td-cadastral { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.fields-th-efis,
+.fields-td-efis { min-width: 170px; }
+.fields-td-efis { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .fields-th-area,
 .fields-td-area { width: 100px; min-width: 100px; text-align: right; }
 .fields-td-area { font-variant-numeric: tabular-nums; font-weight: 500; color: var(--text-primary); }
@@ -2454,20 +2772,6 @@ onMounted(async () => {
 }
 .fields-tr {
   cursor: pointer;
-}
-.fields-name-main {
-  font-weight: 500;
-  color: var(--text-primary);
-}
-.fields-name-cad {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  margin-top: 2px;
-}
-.fields-name-cad--empty {
-  font-style: italic;
-  color: var(--text-secondary);
-  opacity: 0.9;
 }
 .fields-actions-row {
   display: inline-flex;
@@ -3380,30 +3684,83 @@ onMounted(async () => {
   margin-bottom: 0;
 }
 .modal.modal-fields--add {
-  width: min(calc(100vw - 48px), 672px);
-  max-width: 672px;
-  max-height: 90vh;
+  width: min(1100px, 96vw);
+  max-height: 92vh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   padding: 0;
-  border-radius: 12px;
+  border-radius: 16px;
   border: 1px solid var(--border-color);
   background: var(--bg-panel);
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
 }
+.modal.modal-fields--add.modal-fields--wide {
+  width: min(1100px, 96vw);
+}
 .modal-header--fields {
-  padding: var(--space-md) var(--space-lg);
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+}
+.modal-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.modal-header--fields .modal-expand-btn {
+  display: none;
+}
+.modal-expand-btn {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    border-color 0.24s ease,
+    background 0.24s ease,
+    color 0.24s ease,
+    transform 0.24s ease;
+}
+.modal-expand-btn:hover {
+  border-color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+.modal-expand-btn:active {
+  transform: scale(0.96);
+}
+.modal-expand-btn-icon {
+  transition: transform 0.32s ease;
+}
+.modal-expand-btn:hover .modal-expand-btn-icon {
+  transform: scale(1.12) rotate(8deg);
+}
+.modal-expand-btn--active {
+  color: var(--accent-green);
+  border-color: color-mix(in srgb, var(--accent-green) 56%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-green) 16%, transparent);
+  animation: modal-expand-btn-pop 0.28s ease;
+}
+@keyframes modal-expand-btn-pop {
+  0% { transform: scale(0.92); }
+  70% { transform: scale(1.08); }
+  100% { transform: scale(1); }
 }
 .modal-title--fields {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: 1.125rem;
-  font-weight: 700;
+  font-size: 1.05rem;
+  font-weight: 600;
   color: var(--text-primary);
 }
 .modal-title-icon {
@@ -3416,16 +3773,16 @@ onMounted(async () => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-lg);
+  padding: 12px;
 }
 .modal-actions--fields {
   flex-shrink: 0;
-  flex-direction: row-reverse;
-  gap: 12px;
-  padding: var(--space-md) var(--space-lg);
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
   border-top: 1px solid var(--border-color);
-  background: var(--bg-panel-hover);
-  border-radius: 0 0 12px 12px;
+  background: var(--bg-panel);
+  border-radius: 0;
 }
 .modal-label-required {
   color: var(--danger-red);
@@ -3453,12 +3810,12 @@ onMounted(async () => {
 .modal-form--add {
   display: flex;
   flex-direction: column;
-  gap: var(--space-lg);
+  gap: 10px;
 }
 .modal-form-section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: 8px;
 }
 .modal-form-section--grid {
   display: grid;
@@ -3469,9 +3826,21 @@ onMounted(async () => {
 .modal-form-section--grid-4 {
   grid-template-columns: repeat(2, 1fr);
 }
-@media (min-width: 520px) {
+@media (min-width: 760px) {
   .modal-form-section--grid-4 {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+.modal-form--add .modal-form-section--grid,
+.modal-form--add .modal-form-section--grid-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--space-md);
+  row-gap: var(--space-md);
+}
+@media (max-width: 760px) {
+  .modal-form--add .modal-form-section--grid,
+  .modal-form--add .modal-form-section--grid-4 {
+    grid-template-columns: 1fr;
   }
 }
 .modal-form .modal-field--full {
@@ -3480,33 +3849,36 @@ onMounted(async () => {
 .modal-form .modal-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   align-items: stretch;
 }
 .modal-label {
-  font-size: 0.7rem;
+  font-size: .85rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  text-transform: none;
+  letter-spacing: 0;
   color: var(--text-secondary);
   line-height: 1.3;
+  min-height: 0;
 }
 .modal-label--with-help {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
+  gap: 0;
 }
 .modal-select,
 .modal-input {
   box-sizing: border-box;
   width: 100%;
-  min-height: 44px;
-  padding: 10px 12px;
-  font-size: 0.9375rem;
+  min-height: 38px;
+  padding: 9px 11px;
+  font-size: .93rem;
   line-height: 1.4;
   color: var(--text-primary);
   font-family: inherit;
-  border-radius: 8px;
+  border-radius: 10px;
   border: 1px solid var(--border-color);
   background: var(--bg-panel);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
@@ -3535,11 +3907,11 @@ onMounted(async () => {
 .modal-textarea {
   box-sizing: border-box;
   width: 100%;
-  min-height: 100px;
-  padding: 10px 12px;
-  font-size: 0.9375rem;
+  min-height: 84px;
+  padding: 9px 11px;
+  font-size: .93rem;
   line-height: 1.4;
-  border-radius: 8px;
+  border-radius: 10px;
   border: 1px solid var(--border-color);
   background: var(--bg-panel);
   color: var(--text-primary);
@@ -3572,7 +3944,7 @@ onMounted(async () => {
   font-size: 0.9375rem;
   line-height: 1.4;
   cursor: pointer;
-  transition: border-color 0.2s, color 0.2s, background 0.2s;
+  transition: border-color 0.2s, color 0.2s, background 0.2s, transform 0.2s ease, box-shadow 0.2s ease;
 }
 .modal-dropzone-label {
   margin: 0;
@@ -3583,6 +3955,8 @@ onMounted(async () => {
   border-color: var(--accent-green);
   color: var(--accent-green);
   background: var(--nav-active-bg);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(45, 90, 61, 0.14);
 }
 .modal-dropzone-icon {
   width: 20px;
@@ -3590,6 +3964,16 @@ onMounted(async () => {
   color: var(--accent-green);
   opacity: 0.9;
   flex-shrink: 0;
+  transition: transform 0.22s ease;
+}
+.modal-dropzone:hover .modal-dropzone-icon,
+.modal-dropzone-label:hover .modal-dropzone-icon {
+  animation: fields-file-dropzone-hover 0.65s ease;
+}
+@keyframes fields-file-dropzone-hover {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-2px); }
+  100% { transform: translateY(0); }
 }
 .modal-dropzone-text {
   font-weight: 500;
@@ -3655,7 +4039,8 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 40;
+  z-index: 2200;
+  padding: 14px;
 }
 .modal.modal-fields:not(.modal-fields--add) {
   width: min(100vw - 48px, 360px);
@@ -3708,22 +4093,23 @@ onMounted(async () => {
 }
 .modal-btn,
 .modal-btn-ghost {
-  padding: 10px 20px;
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
-  font-size: 0.9375rem;
-  font-weight: 500;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 0 12px;
+  font-size: .875rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  transition: border-color .2s ease, background .2s ease, transform .2s ease, box-shadow .2s ease;
 }
 .modal-btn {
   background: var(--accent-green);
-  border-color: var(--accent-green);
+  border-color: transparent;
   color: #fff;
 }
 .modal-btn:hover:not(:disabled) {
   background: var(--accent-green-hover);
-  border-color: var(--accent-green-hover);
+  border-color: transparent;
   color: #fff;
 }
 .modal-btn:disabled {
@@ -3731,12 +4117,15 @@ onMounted(async () => {
   cursor: not-allowed;
 }
 .modal-btn-ghost {
-  background: transparent;
-  color: var(--text-secondary);
+  border-color: var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-primary);
 }
 .modal-btn-ghost:hover {
-  background: var(--sidebar-hover-bg);
-  color: var(--text-primary);
+  border-color: var(--accent-green);
+  background: var(--bg-panel-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--accent-green) 12%, transparent);
 }
 /* Модальное окно подтверждения удаления (как в ProfilePage) */
 .fields-confirm-backdrop {
@@ -3881,6 +4270,21 @@ onMounted(async () => {
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-dropzone-filename {
   color: rgba(255, 255, 255, 0.95);
+}
+[data-theme='dark'] .modal.modal-fields--add .modal-expand-btn {
+  border-color: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(0, 0, 0, 0.18);
+}
+[data-theme='dark'] .modal.modal-fields--add .modal-expand-btn:hover {
+  border-color: color-mix(in srgb, var(--accent-green) 58%, rgba(255, 255, 255, 0.18));
+  background: color-mix(in srgb, var(--accent-green) 18%, transparent);
+  color: #fff;
+}
+[data-theme='dark'] .modal.modal-fields--add .modal-expand-btn--active {
+  border-color: color-mix(in srgb, var(--accent-green) 72%, rgba(255, 255, 255, 0.18));
+  background: color-mix(in srgb, var(--accent-green) 24%, transparent);
+  color: var(--accent-green);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-close:hover {
   background: rgba(255, 255, 255, 0.1);

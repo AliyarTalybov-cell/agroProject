@@ -41,13 +41,12 @@ withDefaults(defineProps<{
 }
 
 .ref-help-icon {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 1px solid var(--border-color);
+  width: auto;
+  height: auto;
+  border: none;
   color: var(--text-secondary);
-  background: var(--bg-panel);
-  font-size: 12px;
+  background: transparent;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1;
   display: inline-flex;

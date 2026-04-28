@@ -7,10 +7,13 @@ export type FieldRow = {
   name: string
   area: number
   cadastral_number: string | null
+  efis_zsn_number: string | null
   address: string | null
   location_description: string | null
   extra_info: string | null
   geolocation: string | null
+  municipality: string | null
+  region: string | null
   geometry_mode: 'point' | 'polygon'
   contour_geojson: Record<string, unknown> | null
   land_id: string | null
@@ -35,19 +38,27 @@ export type FieldPhotoRow = {
 
 const FIELDS_TABLE = 'fields'
 const FIELD_PHOTOS_TABLE = 'field_photos'
+const FIELD_MUNICIPALITIES_REF_TABLE = 'field_municipalities_refs'
 const STORAGE_BUCKET = 'field-schemes'
 const FIELDS_SELECT_BASE =
-  'id, number, name, area, cadastral_number, address, location_description, extra_info, geolocation, land_id, land_type, sowing_year, responsible_id, crop_key, scheme_file_url, created_at, updated_at'
-const FIELDS_SELECT_WITH_GEOMETRY = `${FIELDS_SELECT_BASE}, geometry_mode, contour_geojson`
+  'id, number, name, area, cadastral_number, efis_zsn_number, address, location_description, extra_info, geolocation, land_id, land_type, sowing_year, responsible_id, crop_key, scheme_file_url, created_at, updated_at'
+const FIELDS_SELECT_WITH_OPTIONAL = `${FIELDS_SELECT_BASE}, municipality, region, geometry_mode, contour_geojson`
 
 function isMissingGeometryColumnError(error: unknown): boolean {
   const message = String((error as { message?: unknown })?.message ?? '')
-  return message.includes('geometry_mode') || message.includes('contour_geojson')
+  return message.includes('geometry_mode')
+    || message.includes('contour_geojson')
+    || message.includes('municipality')
+    || message.includes('region')
+    || message.includes('efis_zsn_number')
 }
 
 function normalizeFieldRow<T extends Record<string, unknown>>(row: T): FieldRow {
   return {
     ...(row as unknown as FieldRow),
+    efis_zsn_number: (row.efis_zsn_number as string | null | undefined) ?? null,
+    municipality: (row.municipality as string | null | undefined) ?? null,
+    region: (row.region as string | null | undefined) ?? null,
     geometry_mode: (row.geometry_mode as 'point' | 'polygon' | null) ?? 'point',
     contour_geojson: (row.contour_geojson as Record<string, unknown> | null) ?? null,
   }
@@ -58,7 +69,7 @@ export async function loadFields(nameQuery?: string): Promise<FieldRow[]> {
   const query = (nameQuery ?? '').trim()
   let req = supabase
     .from(FIELDS_TABLE)
-    .select(FIELDS_SELECT_WITH_GEOMETRY)
+    .select(FIELDS_SELECT_WITH_OPTIONAL)
     .order('number', { ascending: true })
   if (query) req = req.ilike('name', `%${query}%`)
   const { data, error } = await req
@@ -75,7 +86,7 @@ export async function getFieldById(id: string): Promise<FieldRow | null> {
   if (!supabase) return null
   const { data, error } = await supabase
     .from(FIELDS_TABLE)
-    .select(FIELDS_SELECT_WITH_GEOMETRY)
+    .select(FIELDS_SELECT_WITH_OPTIONAL)
     .eq('id', id)
     .maybeSingle()
   if (!error) return data ? normalizeFieldRow(data as Record<string, unknown>) : null
@@ -94,10 +105,13 @@ export async function addField(payload: {
   name: string
   area: number
   cadastral_number?: string | null
+  efis_zsn_number?: string | null
   address?: string | null
   location_description?: string | null
   extra_info?: string | null
   geolocation?: string | null
+  municipality?: string | null
+  region?: string | null
   geometry_mode?: 'point' | 'polygon'
   contour_geojson?: Record<string, unknown> | null
   land_id?: string | null
@@ -114,10 +128,13 @@ export async function addField(payload: {
     name: payload.name.trim(),
     area: Number(payload.area),
     cadastral_number: payload.cadastral_number?.trim() || null,
+    efis_zsn_number: payload.efis_zsn_number?.trim() || null,
     address: payload.address?.trim() || null,
     location_description: payload.location_description?.trim() || null,
     extra_info: payload.extra_info?.trim() || null,
     geolocation: payload.geolocation?.trim() || null,
+    municipality: payload.municipality?.trim() || null,
+    region: payload.region?.trim() || null,
     geometry_mode: payload.geometry_mode ?? 'point',
     contour_geojson: payload.contour_geojson ?? null,
     land_id: payload.land_id || null,
@@ -136,6 +153,9 @@ export async function addField(payload: {
   if (!error) return normalizeFieldRow(data as Record<string, unknown>)
   if (!isMissingGeometryColumnError(error)) throw error
   const fallbackInsert = { ...insertPayload } as Record<string, unknown>
+  delete fallbackInsert.efis_zsn_number
+  delete fallbackInsert.municipality
+  delete fallbackInsert.region
   delete fallbackInsert.geometry_mode
   delete fallbackInsert.contour_geojson
   const fallback = await supabase.from(FIELDS_TABLE).insert(fallbackInsert).select().single()
@@ -149,10 +169,13 @@ export async function updateField(
     name: string
     area: number
     cadastral_number: string | null
+    efis_zsn_number: string | null
     address: string | null
     location_description: string | null
     extra_info: string | null
     geolocation: string | null
+    municipality: string | null
+    region: string | null
     geometry_mode: 'point' | 'polygon'
     contour_geojson: Record<string, unknown> | null
     land_id: string | null
@@ -168,10 +191,13 @@ export async function updateField(
   if (payload.name !== undefined) updates.name = payload.name.trim()
   if (payload.area !== undefined) updates.area = Number(payload.area)
   if (payload.cadastral_number !== undefined) updates.cadastral_number = payload.cadastral_number?.trim() || null
+  if (payload.efis_zsn_number !== undefined) updates.efis_zsn_number = payload.efis_zsn_number?.trim() || null
   if (payload.address !== undefined) updates.address = payload.address?.trim() || null
   if (payload.location_description !== undefined) updates.location_description = payload.location_description?.trim() || null
   if (payload.extra_info !== undefined) updates.extra_info = payload.extra_info?.trim() || null
   if (payload.geolocation !== undefined) updates.geolocation = payload.geolocation?.trim() || null
+  if (payload.municipality !== undefined) updates.municipality = payload.municipality?.trim() || null
+  if (payload.region !== undefined) updates.region = payload.region?.trim() || null
   if (payload.geometry_mode !== undefined) updates.geometry_mode = payload.geometry_mode
   if (payload.contour_geojson !== undefined) updates.contour_geojson = payload.contour_geojson ?? null
   if (payload.land_id !== undefined) updates.land_id = payload.land_id || null
@@ -181,6 +207,9 @@ export async function updateField(
   const { error } = await supabase.from(FIELDS_TABLE).update(updates).eq('id', id)
   if (!error) return
   if (!isMissingGeometryColumnError(error)) throw error
+  delete updates.efis_zsn_number
+  delete updates.municipality
+  delete updates.region
   delete updates.geometry_mode
   delete updates.contour_geojson
   const fallback = await supabase.from(FIELDS_TABLE).update(updates).eq('id', id)
@@ -265,6 +294,63 @@ export async function deleteFieldPhoto(photoId: string): Promise<void> {
   if (storagePath) {
     await supabase.storage.from(STORAGE_BUCKET).remove([storagePath])
   }
+}
+
+export type FieldMunicipalityRefRow = {
+  id: string
+  name: string
+  sort_order: number
+  created_at: string
+}
+
+export async function loadFieldMunicipalitiesRefs(): Promise<FieldMunicipalityRefRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from(FIELD_MUNICIPALITIES_REF_TABLE)
+    .select('id, name, sort_order, created_at')
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as FieldMunicipalityRefRow[]
+}
+
+export async function addFieldMunicipalityRef(payload: {
+  name: string
+  sort_order?: number
+}): Promise<FieldMunicipalityRefRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { data, error } = await supabase
+    .from(FIELD_MUNICIPALITIES_REF_TABLE)
+    .insert({
+      name: payload.name.trim(),
+      sort_order: payload.sort_order ?? 0,
+    })
+    .select('id, name, sort_order, created_at')
+    .single()
+  if (error) throw error
+  return data as FieldMunicipalityRefRow
+}
+
+export async function updateFieldMunicipalityRef(
+  id: string,
+  updates: Partial<{ name: string; sort_order: number }>,
+): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase
+    .from(FIELD_MUNICIPALITIES_REF_TABLE)
+    .update({
+      ...updates,
+      name: updates.name?.trim(),
+    })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function deleteFieldMunicipalityRef(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  assertCanDelete()
+  const { error } = await supabase.from(FIELD_MUNICIPALITIES_REF_TABLE).delete().eq('id', id)
+  if (error) throw error
 }
 
 export { isSupabaseConfigured }
