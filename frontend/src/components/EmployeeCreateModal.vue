@@ -194,12 +194,12 @@ watch(
   overflow: hidden;
   border-radius: 20px;
   border: 1px solid var(--border-color);
-  background: #fff;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
 }
 
 [data-theme='dark'] .emp-modal {
-  background: var(--bg-panel);
+  background: var(--bg-elevated);
   border-color: var(--border-color);
 }
 
@@ -209,7 +209,7 @@ watch(
   right: 16px;
   z-index: 2;
   border: none;
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--interactive-hover);
   color: var(--text-secondary);
   width: 40px;
   height: 40px;
@@ -220,11 +220,8 @@ watch(
   cursor: pointer;
 }
 .emp-modal-close:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--interactive-active);
   color: var(--text-primary);
-}
-[data-theme='dark'] .emp-modal-close {
-  background: rgba(255, 255, 255, 0.08);
 }
 
 .emp-modal-body {
@@ -245,20 +242,20 @@ watch(
   color: #166534;
 }
 .emp-modal-message--error {
-  background: rgba(185, 28, 28, 0.1);
-  border-color: rgba(185, 28, 28, 0.22);
+  background: color-mix(in srgb, var(--danger-red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger-red) 24%, transparent);
   color: var(--danger-red);
 }
 
 [data-theme='dark'] .emp-modal-message--success {
   background: color-mix(in srgb, var(--accent-green) 18%, transparent);
   border-color: color-mix(in srgb, var(--accent-green) 34%, var(--border-color));
-  color: #86efac;
+  color: color-mix(in srgb, white 82%, var(--accent-green));
 }
 [data-theme='dark'] .emp-modal-message--error {
-  background: rgba(211, 60, 60, 0.2);
-  border-color: rgba(211, 60, 60, 0.35);
-  color: #fca5a5;
+  background: color-mix(in srgb, var(--danger-red) 22%, transparent);
+  border-color: color-mix(in srgb, var(--danger-red) 36%, transparent);
+  color: color-mix(in srgb, white 80%, var(--danger-red));
 }
 
 .emp-form-grid {
@@ -280,29 +277,29 @@ watch(
 
 .emp-input {
   width: 100%;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 12px 14px;
   font-size: 0.9375rem;
-  background: #fff;
+  background: var(--bg-elevated);
   color: var(--text-primary);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .emp-input:focus {
   outline: none;
   border-color: var(--accent-green);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 16%, transparent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .emp-input::placeholder {
-  color: #94a3b8;
+  color: var(--text-muted);
 }
 [data-theme='dark'] .emp-input {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--bg-elevated) 86%, black);
   border-color: var(--border-color);
 }
 [data-theme='dark'] .emp-input:focus {
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 22%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .emp-textarea {
@@ -330,16 +327,16 @@ watch(
   gap: 12px;
 }
 .emp-role-card {
-  border: 2px solid #e2e8f0;
+  border: 2px solid var(--border-color);
   border-radius: 12px;
   padding: 14px 16px;
-  background: #fff;
+  background: var(--bg-elevated);
   cursor: pointer;
   position: relative;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 [data-theme='dark'] .emp-role-card {
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, black);
   border-color: var(--border-color);
 }
 .emp-role-card--active {
@@ -368,13 +365,13 @@ watch(
 .emp-modal-footer {
   padding: 16px 24px;
   border-top: 1px solid var(--border-color);
-  background: #f8faf9;
+  background: var(--bg-overlay);
   display: flex;
   justify-content: flex-end;
   gap: 12px;
 }
 [data-theme='dark'] .emp-modal-footer {
-  background: var(--bg-panel);
+  background: var(--bg-overlay);
   border-top-color: var(--border-color);
 }
 
@@ -391,16 +388,16 @@ watch(
   cursor: not-allowed;
 }
 .emp-btn--ghost {
-  background: #fff;
-  border-color: #e2e8f0;
+  background: var(--bg-elevated);
+  border-color: var(--border-color);
   color: var(--text-primary);
 }
 .emp-btn--ghost:hover:not(:disabled) {
-  background: #f8faf9;
-  border-color: #cbd5e1;
+  background: var(--bg-panel-hover);
+  border-color: color-mix(in srgb, var(--accent-green) 30%, var(--border-color));
 }
 [data-theme='dark'] .emp-btn--ghost {
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-elevated) 90%, black);
   border-color: var(--border-color);
 }
 .emp-btn--primary {

@@ -4234,7 +4234,7 @@ function addField() {
 }
 
 [data-theme='dark'] .modal-backdrop {
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--modal-backdrop);
 }
 
 .modal {
@@ -4243,14 +4243,14 @@ function addField() {
   border-radius: 16px;
   border: 1px solid var(--border-color);
   padding: var(--space-lg);
-  box-shadow: var(--shadow-card), 0 20px 40px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-card);
   animation: mechanicModalIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   max-height: min(88vh, 760px);
   overflow-y: auto;
 }
 
 [data-theme='dark'] .modal {
-  background: var(--bg-panel);
+  background: var(--bg-elevated);
   border-color: var(--border-color);
 }
 

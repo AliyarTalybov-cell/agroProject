@@ -9,6 +9,9 @@
   --agri-light: #e8eee9;
   --bg-base: #f0f4f1;
   --bg-panel: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-overlay: rgba(255, 255, 255, 0.72);
+  --topbar-bg: #ffffff;
   --bg-panel-hover: #f9faf9;
   --sidebar-bg: #ffffff;
   --sidebar-border: #e5e7eb;
@@ -22,6 +25,7 @@
   --border-color: #e5e7eb;
   --text-primary: #1f2937;
   --text-secondary: #6b7280;
+  --text-muted: #6b7280;
   --accent-green: #2d5a3d;
   --accent-green-hover: #1f402a;
   --danger-red: #b91c1c;
@@ -37,6 +41,9 @@
   --shadow-card: 0 2px 8px -2px rgba(24, 39, 75, 0.08), 0 4px 12px -4px rgba(24, 39, 75, 0.04);
   --bg-body-image: linear-gradient(to bottom, #e8f0ec 0%, #f0f4f1 100%);
   --modal-backdrop: rgba(0, 0, 0, 0.25);
+  --focus-ring: color-mix(in srgb, var(--accent-green) 22%, transparent);
+  --interactive-hover: rgba(0, 0, 0, 0.04);
+  --interactive-active: rgba(0, 0, 0, 0.08);
   --chip-bg: rgba(0, 0, 0, 0.06);
   --weather-sky-bg: linear-gradient(180deg, #87ceeb 0%, #b8d4e3 50%, #e0f0fa 100%);
   --row-hover-bg: rgba(0, 0, 0, 0.04);
@@ -56,7 +63,10 @@
 [data-theme='dark'] {
   color-scheme: dark;
   --bg-base: #061b15;
-  --bg-panel: #061b15;
+  --bg-panel: #0b241c;
+  --bg-elevated: #133126;
+  --bg-overlay: rgba(6, 27, 21, 0.72);
+  --topbar-bg: #061b15;
   --bg-panel-hover: #0b241c;
   --agri-bg: #061b15;
   --agri-primary: #3d5c40;
@@ -73,6 +83,7 @@
   --border-color: color-mix(in srgb, #3d5c40 14%, #061b15);
   --text-primary: #ffffff;
   --text-secondary: color-mix(in srgb, white 58%, #3d5c40);
+  --text-muted: color-mix(in srgb, white 52%, #3d5c40);
   --accent-green: #3d5c40;
   --accent-green-hover: #37de90;
   --danger-red: #d33c3c;
@@ -83,6 +94,9 @@
   --shadow-card: 0 2px 8px -2px rgba(0, 0, 0, 0.15);
   --bg-body-image: linear-gradient(to bottom, #061b15 0%, #051510 100%);
   --modal-backdrop: rgba(0, 0, 0, 0.34);
+  --focus-ring: color-mix(in srgb, var(--accent-green) 30%, transparent);
+  --interactive-hover: color-mix(in srgb, #3d5c40 10%, transparent);
+  --interactive-active: color-mix(in srgb, #3d5c40 18%, transparent);
   --chip-bg: color-mix(in srgb, #3d5c40 10%, #0a241b);
   --weather-sky-bg: linear-gradient(180deg, #2a3a4a 0%, #1a2530 100%);
   --row-hover-bg: color-mix(in srgb, #3d5c40 8%, transparent);
@@ -105,6 +119,140 @@
 [data-theme='dark'] .app-modal {
   background: var(--bg-panel);
   border-color: var(--border-color);
+}
+
+/* Единая читаемая тёмная тема для всех модалок */
+[data-theme='dark'] :where(
+  .modal-backdrop,
+  .task-modal-backdrop,
+  .lands-modal-backdrop,
+  .chat-page__modal-backdrop,
+  .emp-modal-backdrop,
+  .eem-backdrop,
+  .fields-confirm-backdrop,
+  .profile-confirm-backdrop,
+  .app-modal-backdrop
+) {
+  background: var(--modal-backdrop) !important;
+}
+
+[data-theme='dark'] :where(
+  .modal,
+  .modal-calendar,
+  .task-modal,
+  .lands-modal,
+  .chat-page__modal,
+  .app-modal,
+  .emp-modal,
+  .eem-modal,
+  .eem-confirm-modal,
+  .fields-confirm-modal,
+  .profile-confirm-modal,
+  .modal-confirm
+) {
+  background: var(--bg-elevated) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-theme='dark'] :where(
+  .modal-header,
+  .modal-body,
+  .modal-head,
+  .modal-title-row,
+  .task-modal-header,
+  .lands-modal-head,
+  .app-modal-header
+) {
+  border-color: var(--border-color) !important;
+  background: var(--bg-overlay) !important;
+}
+
+[data-theme='dark'] :where(
+  .modal-actions,
+  .task-modal-footer,
+  .lands-modal-actions,
+  .app-modal-footer,
+  .profile-confirm-actions
+) {
+  border-color: var(--border-color) !important;
+  background: var(--bg-overlay) !important;
+}
+
+[data-theme='dark'] :where(
+  .modal-label,
+  .modal-text,
+  .modal-desc,
+  .modal-subtitle,
+  .modal-text-muted,
+  .task-form-label,
+  .profile-confirm-text
+) {
+  color: var(--text-secondary) !important;
+}
+
+[data-theme='dark'] :where(
+  .modal,
+  .modal-calendar,
+  .task-modal,
+  .lands-modal,
+  .chat-page__modal,
+  .app-modal,
+  .emp-modal,
+  .eem-modal,
+  .eem-confirm-modal,
+  .fields-confirm-modal,
+  .profile-confirm-modal,
+  .modal-confirm
+) :is(input, select, textarea, .input) {
+  background: color-mix(in srgb, var(--bg-elevated) 84%, black) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-theme='dark'] :where(
+  .modal,
+  .modal-calendar,
+  .task-modal,
+  .lands-modal,
+  .chat-page__modal,
+  .app-modal,
+  .emp-modal,
+  .eem-modal,
+  .eem-confirm-modal,
+  .fields-confirm-modal,
+  .profile-confirm-modal,
+  .modal-confirm
+) :is(input, textarea, .input)::placeholder {
+  color: var(--text-muted) !important;
+}
+
+[data-theme='dark'] :where(
+  .modal,
+  .modal-calendar,
+  .task-modal,
+  .lands-modal,
+  .chat-page__modal,
+  .app-modal,
+  .emp-modal,
+  .eem-modal,
+  .eem-confirm-modal,
+  .fields-confirm-modal,
+  .profile-confirm-modal,
+  .modal-confirm
+) :is(input, select, textarea, .input):focus {
+  border-color: var(--accent-green) !important;
+  box-shadow: 0 0 0 3px var(--focus-ring) !important;
+}
+
+[data-theme='dark'] :where(
+  .modal-close,
+  .modal-close-btn,
+  .task-modal-close,
+  .lands-modal-close,
+  .app-modal-close
+):hover {
+  background: var(--interactive-hover) !important;
 }
 
 /* Единая плавная анимация открытия модалок и подложек */
@@ -196,14 +344,7 @@
 [data-theme='dark'] textarea:focus,
 [data-theme='dark'] .input:focus {
   border-color: var(--accent-green);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 22%, transparent);
-}
-
-/* В тёмной теме текст на кнопках всегда белый для читаемости */
-[data-theme='dark'] button,
-[data-theme='dark'] .btn,
-[data-theme='dark'] [role='button'] {
-  color: #ffffff !important;
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 /* Скроллбары в тёмной теме без белых полос */
@@ -311,7 +452,7 @@ a {
   padding: 0 24px;
   min-height: 80px;
   border-bottom: 1px solid var(--topbar-border);
-  background: var(--bg-panel);
+  background: var(--topbar-bg);
   transition: background 0.2s ease, border-color 0.2s ease;
 }
 

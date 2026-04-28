@@ -860,9 +860,9 @@ async function confirmDeleteAccount() {
 }
 
 .profile-save-message--error {
-  background: rgba(185, 28, 28, 0.1);
+  background: color-mix(in srgb, var(--danger-red) 12%, transparent);
   color: var(--danger-red);
-  border: 1px solid rgba(185, 28, 28, 0.3);
+  border: 1px solid color-mix(in srgb, var(--danger-red) 30%, transparent);
 }
 
 .profile-save-message-icon {
@@ -873,14 +873,14 @@ async function confirmDeleteAccount() {
 
 [data-theme='dark'] .profile-save-message--success {
   background: color-mix(in srgb, var(--accent-green) 18%, transparent);
-  color: #86efac;
+  color: color-mix(in srgb, white 82%, var(--accent-green));
   border-color: color-mix(in srgb, var(--accent-green) 34%, var(--border-color));
 }
 
 [data-theme='dark'] .profile-save-message--error {
-  background: rgba(211, 60, 60, 0.2);
-  color: #fca5a5;
-  border-color: rgba(211, 60, 60, 0.4);
+  background: color-mix(in srgb, var(--danger-red) 22%, transparent);
+  color: color-mix(in srgb, white 80%, var(--danger-red));
+  border-color: color-mix(in srgb, var(--danger-red) 42%, transparent);
 }
 
 .profile-form-grid {
@@ -919,14 +919,15 @@ async function confirmDeleteAccount() {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   font-size: 0.9375rem;
-  background: #fafafa;
+  background: var(--bg-panel-hover);
   color: var(--text-primary);
 }
 
 .profile-input:focus {
   outline: none;
   border-color: var(--accent-green);
-  background: #fff;
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .profile-input[readonly] {
@@ -935,23 +936,23 @@ async function confirmDeleteAccount() {
 }
 
 [data-theme='dark'] .profile-input {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--bg-elevated) 86%, black);
   border-color: var(--border-color);
   color: var(--text-primary);
 }
 
 [data-theme='dark'] .profile-input:focus {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
   border-color: var(--accent-green);
 }
 
 [data-theme='dark'] .profile-input[readonly] {
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, black);
+  color: var(--text-muted);
 }
 
 [data-theme='dark'] .profile-input::placeholder {
-  color: var(--text-secondary);
+  color: var(--text-muted);
   opacity: 0.8;
 }
 
@@ -997,13 +998,13 @@ async function confirmDeleteAccount() {
 }
 
 [data-theme='dark'] .profile-textarea {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--bg-elevated) 86%, black);
   border-color: var(--border-color);
   color: var(--text-primary);
 }
 
 [data-theme='dark'] .profile-textarea:focus {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
 }
 
 .profile-field-hint {
@@ -1037,7 +1038,7 @@ async function confirmDeleteAccount() {
 }
 
 .profile-btn--secondary {
-  background: var(--bg-input, #f5f5f5);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   border-color: var(--border-color);
 }
@@ -1127,7 +1128,7 @@ async function confirmDeleteAccount() {
 }
 
 .profile-confirm-modal {
-  background: #fff;
+  background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: var(--space-xl);
@@ -1138,10 +1139,6 @@ async function confirmDeleteAccount() {
 
 .profile-confirm-modal--danger {
   border-color: color-mix(in srgb, var(--danger-red) 40%, var(--border-color));
-}
-
-[data-theme='dark'] .profile-confirm-modal {
-  background: var(--bg-panel);
 }
 
 .profile-confirm-title {

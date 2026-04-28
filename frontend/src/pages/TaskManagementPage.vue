@@ -4125,15 +4125,15 @@ function statusClass(s: Status) {
 
 /* ——— Тёмная тема (Context7: опора на CSS-переменные и контраст) ——— */
 [data-theme='dark'] .task-management-page {
-  --task-input-bg: rgba(0, 0, 0, 0.35);
+  --task-input-bg: color-mix(in srgb, var(--bg-elevated) 76%, black);
   --task-input-border: var(--border-color);
-  --task-placeholder: var(--text-secondary);
+  --task-placeholder: var(--text-muted);
 }
 
 [data-theme='dark'] .task-modal {
-  background: var(--bg-panel);
+  background: var(--bg-elevated);
   border-color: var(--border-color);
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-card);
 }
 
 [data-theme='dark'] .task-form-input,
@@ -4151,11 +4151,11 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-form-input--date {
-  color: #7aad7e;
+  color: color-mix(in srgb, white 78%, var(--accent-green));
 }
 
 [data-theme='dark'] .task-filter-tab {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-secondary);
 }
 
 [data-theme='dark'] .task-filter-tab:hover {
@@ -4163,7 +4163,7 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-filter-pill {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-secondary);
 }
 
 [data-theme='dark'] .task-filter-pill:hover:not(:disabled) {
@@ -4171,17 +4171,17 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-search-wrap {
-  background: rgba(0, 0, 0, 0.2);
+  background: color-mix(in srgb, var(--bg-elevated) 68%, black);
   border-color: var(--border-color);
 }
 
 [data-theme='dark'] .task-view-toggle {
-  background: rgba(0, 0, 0, 0.2);
+  background: color-mix(in srgb, var(--bg-elevated) 68%, black);
   border-color: var(--border-color);
 }
 
 [data-theme='dark'] .task-view-btn {
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--text-muted);
 }
 
 [data-theme='dark'] .task-view-btn--active {
@@ -4190,7 +4190,7 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-card {
-  background: rgba(22, 38, 28, 0.7);
+  background: color-mix(in srgb, var(--bg-elevated) 86%, black);
   border-color: var(--border-color);
 }
 
@@ -4200,11 +4200,11 @@ function statusClass(s: Status) {
 
 [data-theme='dark'] .task-card-avatar {
   background: color-mix(in srgb, var(--accent-green) 26%, transparent);
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text-primary);
 }
 
 [data-theme='dark'] .task-column-empty {
-  background: rgba(0, 0, 0, 0.2);
+  background: color-mix(in srgb, var(--bg-elevated) 68%, black);
   border-color: var(--border-color);
 }
 
@@ -4220,13 +4220,13 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-list-wrap {
-  background: rgba(22, 38, 28, 0.6);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, black);
   border-color: var(--border-color);
 }
 
 [data-theme='dark'] .task-list-avatar {
   background: color-mix(in srgb, var(--accent-green) 26%, transparent);
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text-primary);
 }
 
 [data-theme='dark'] .task-kanban-column--drag-over .task-column-cards {
@@ -4235,7 +4235,7 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-modal-close:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--interactive-hover);
   color: var(--text-primary);
 }
 
@@ -4244,22 +4244,22 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-detail-btn--edit {
-  background: rgba(0, 0, 0, 0.35);
+  background: color-mix(in srgb, var(--bg-elevated) 76%, black);
   border-color: var(--border-color);
   color: var(--text-primary);
 }
 
 [data-theme='dark'] .task-detail-btn--edit:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--interactive-hover);
 }
 
 [data-theme='dark'] .task-detail-card {
-  background: rgba(22, 38, 28, 0.72);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, black);
   border-color: var(--border-color);
 }
 
 [data-theme='dark'] .task-chat-input {
-  background: rgba(22, 38, 28, 0.72);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, black);
   border-color: var(--border-color);
 }
 

@@ -503,13 +503,13 @@ watch(
   max-width: 520px;
   border-radius: 20px;
   border: 1px solid var(--border-color);
-  background: var(--bg-panel);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.16);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
 }
 
 [data-theme='dark'] .app-modal {
-  background: var(--bg-panel);
+  background: var(--bg-elevated);
   border-color: var(--border-color);
 }
 
@@ -533,7 +533,7 @@ watch(
   height: 40px;
   border-radius: 50%;
   border: none;
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--interactive-hover);
   color: var(--text-secondary);
   cursor: pointer;
   display: inline-flex;
@@ -544,10 +544,6 @@ watch(
   opacity: 0.7;
   cursor: not-allowed;
 }
-[data-theme='dark'] .app-modal-close {
-  background: rgba(255, 255, 255, 0.08);
-}
-
 .app-modal-body {
   padding: 18px 20px;
 }
@@ -564,11 +560,7 @@ watch(
   gap: 12px;
   padding: 16px 20px;
   border-top: 1px solid var(--border-color);
-  background: rgba(0, 0, 0, 0.02);
-}
-[data-theme='dark'] .app-modal-footer {
-  background: var(--bg-panel);
-  border-top-color: var(--border-color);
+  background: var(--bg-overlay);
 }
 
 .app-modal-btn {
@@ -584,13 +576,9 @@ watch(
   cursor: not-allowed;
 }
 .app-modal-btn--ghost {
-  background: #fff;
-  border-color: #e2e8f0;
-  color: var(--text-primary);
-}
-[data-theme='dark'] .app-modal-btn--ghost {
-  background: var(--bg-panel);
+  background: var(--bg-elevated);
   border-color: var(--border-color);
+  color: var(--text-primary);
 }
 .app-modal-btn--danger {
   background: var(--danger-red);
@@ -650,14 +638,14 @@ watch(
 }
 
 .app-theme-cd-toggle:has(.app-theme-cd-input:focus-visible) {
-  outline: 2px solid color-mix(in srgb, #2196f3 55%, white);
+  outline: 2px solid var(--focus-ring);
   outline-offset: calc(3px * 0.7 * 1.08);
 }
 
 .app-theme-cd-icon {
   grid-column: 1 / 1;
   grid-row: 1 / 1;
-  transition: transform 500ms;
+  transition: transform 400ms;
   line-height: 0;
   display: flex;
   align-items: center;
@@ -670,12 +658,12 @@ watch(
 }
 
 .app-theme-cd-icon--moon {
-  transition-delay: 200ms;
+  transition-delay: 160ms;
 }
 
 .app-theme-cd-icon--sun {
   transform: scale(0);
-  color: #ca8a04;
+  color: var(--corn-yellow);
 }
 
 .app-theme-cd-input:checked + .app-theme-cd-icon--moon {
@@ -683,7 +671,7 @@ watch(
 }
 
 .app-theme-cd-input:checked ~ .app-theme-cd-icon--sun {
-  transition-delay: 200ms;
+  transition-delay: 160ms;
   transform: scale(1) rotate(360deg);
 }
 

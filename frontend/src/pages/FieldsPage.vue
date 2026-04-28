@@ -4168,29 +4168,29 @@ onMounted(async () => {
 
 /* ——— Тёмная тема: модальное окно добавления/редактирования поля ——— */
 [data-theme='dark'] .fields-page .modal-backdrop {
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--modal-backdrop);
 }
 [data-theme='dark'] .modal.modal-fields--add {
-  background: rgba(18, 32, 20, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px color-mix(in srgb, white 6%, transparent);
 }
 [data-theme='dark'] .modal-header--fields {
-  border-bottom-color: rgba(255, 255, 255, 0.1);
-  background: rgba(0, 0, 0, 0.15);
+  border-bottom-color: var(--border-color);
+  background: var(--bg-overlay);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-form--add {
   background: transparent;
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-label {
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--text-secondary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-input,
 [data-theme='dark'] .modal.modal-fields--add .modal-select,
 [data-theme='dark'] .modal.modal-fields--add .modal-textarea {
-  background: color-mix(in srgb, var(--bg-panel) 72%, black);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, black);
   border-color: var(--border-color);
-  color: #fff;
+  color: var(--text-primary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-input::placeholder,
 [data-theme='dark'] .modal.modal-fields--add .modal-textarea::placeholder {
@@ -4200,11 +4200,11 @@ onMounted(async () => {
 [data-theme='dark'] .modal.modal-fields--add .modal-select:focus,
 [data-theme='dark'] .modal.modal-fields--add .modal-textarea:focus {
   border-color: var(--accent-green);
-  background: color-mix(in srgb, var(--bg-panel) 64%, black);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-green) 24%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, black);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-select {
-  background-color: rgba(0, 0, 0, 0.35);
+  background-color: color-mix(in srgb, var(--bg-elevated) 76%, black);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;
@@ -4212,29 +4212,29 @@ onMounted(async () => {
   padding-right: 40px;
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-select option {
-  background: #1a2f1a;
-  color: #fff;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, black);
+  color: var(--text-primary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-input-suffix {
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--text-muted);
 }
 [data-theme='dark'] .modal.modal-fields--add .field-geometry-switch {
   border-color: var(--border-color);
 }
 [data-theme='dark'] .modal.modal-fields--add .field-geometry-switch-btn {
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--text-secondary);
 }
 [data-theme='dark'] .modal.modal-fields--add .field-geometry-switch-btn--active {
   background: color-mix(in srgb, var(--accent-green) 22%, transparent);
   color: var(--accent-green);
 }
 [data-theme='dark'] .modal.modal-fields--add .field-address-candidates-label {
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--text-muted);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-dropzone-label {
-  background: rgba(0, 0, 0, 0.25);
-  border-color: rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.7);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, black);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-dropzone-label:hover {
   background: color-mix(in srgb, var(--accent-green) 16%, transparent);
@@ -4242,7 +4242,7 @@ onMounted(async () => {
   color: var(--accent-green);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-file-hint {
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--text-muted);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-actions--fields {
   background: color-mix(in srgb, var(--bg-panel) 78%, black);
@@ -4256,38 +4256,38 @@ onMounted(async () => {
 [data-theme='dark'] .modal.modal-fields--add .modal-btn-ghost:hover {
   background: color-mix(in srgb, var(--accent-green) 16%, transparent);
   border-color: color-mix(in srgb, var(--accent-green) 34%, var(--border-color));
-  color: #fff;
+  color: var(--text-primary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-btn {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-scheme-preview-img {
-  background: rgba(0, 0, 0, 0.3);
-  border-color: rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--bg-elevated) 74%, black);
+  border-color: var(--border-color);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-scheme-preview-pdf {
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--text-secondary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-dropzone-filename {
-  color: rgba(255, 255, 255, 0.95);
+  color: var(--text-primary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-expand-btn {
-  border-color: rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.72);
-  background: rgba(0, 0, 0, 0.18);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, black);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-expand-btn:hover {
-  border-color: color-mix(in srgb, var(--accent-green) 58%, rgba(255, 255, 255, 0.18));
+  border-color: color-mix(in srgb, var(--accent-green) 58%, var(--border-color));
   background: color-mix(in srgb, var(--accent-green) 18%, transparent);
-  color: #fff;
+  color: var(--text-primary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-expand-btn--active {
-  border-color: color-mix(in srgb, var(--accent-green) 72%, rgba(255, 255, 255, 0.18));
+  border-color: color-mix(in srgb, var(--accent-green) 72%, var(--border-color));
   background: color-mix(in srgb, var(--accent-green) 24%, transparent);
   color: var(--accent-green);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-close:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--interactive-hover);
 }
 
 .field-map-picker-wrap {

@@ -478,11 +478,11 @@ onMounted(async () => {
 }
 .news-editor-error {
   margin: 0;
-  color: #b42318;
+  color: var(--danger-red);
   font-size: 0.9rem;
 }
 .news-editor-form {
-  background: #fff;
+  background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   border-radius: 14px;
   padding: 14px;
@@ -512,7 +512,7 @@ onMounted(async () => {
   font-size: 0.9375rem;
   font-weight: 400;
   color: var(--text-primary);
-  background: #fff;
+  background: var(--bg-elevated);
   transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.2s ease;
 }
 .news-field input::placeholder,
@@ -523,8 +523,8 @@ onMounted(async () => {
 .news-field textarea:focus,
 .news-select:focus {
   outline: none;
-  border-color: color-mix(in srgb, var(--accent-green) 58%, var(--border-color));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 18%, transparent);
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .news-field textarea {
   resize: vertical;
@@ -540,7 +540,7 @@ onMounted(async () => {
   height: 32px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: #fff;
+  background: var(--bg-elevated);
   color: var(--text-primary);
   padding: 0 10px;
   font-size: 0.8125rem;
@@ -577,7 +577,7 @@ onMounted(async () => {
   font-size: 0.9rem;
   font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
   color: var(--text-primary);
-  background: #fff;
+  background: var(--bg-elevated);
   line-height: 1.45;
 }
 .news-html-insert-actions,
@@ -599,7 +599,7 @@ onMounted(async () => {
   font-size: 0.9375rem;
   font-weight: 400;
   color: var(--text-primary);
-  background: #fff;
+  background: var(--bg-elevated);
   min-height: 220px;
   line-height: 1.48;
   overflow-wrap: anywhere;
@@ -611,8 +611,8 @@ onMounted(async () => {
 }
 .news-rich-editor:focus {
   outline: none;
-  border-color: color-mix(in srgb, var(--accent-green) 58%, var(--border-color));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 18%, transparent);
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .news-rich-editor :deep(p) {
   margin: 0 0 0.8rem;
@@ -675,7 +675,7 @@ onMounted(async () => {
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text-primary);
-  background: #fff;
+  background: var(--bg-elevated);
   transition: background 0.2s ease, border-color 0.2s ease, transform 0.16s ease;
 }
 .news-upload-btn:hover {
@@ -702,11 +702,11 @@ onMounted(async () => {
 }
 .news-editor-btn--ghost {
   border-color: var(--border-color);
-  background: #fff;
+  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 .news-editor-btn--ghost:hover:not(:disabled) {
-  background: #fff;
+  background: var(--bg-panel-hover);
   border-color: color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
 }
 
@@ -720,7 +720,41 @@ onMounted(async () => {
 [data-theme='dark'] .news-upload-btn,
 [data-theme='dark'] .news-editor-btn--ghost,
 [data-theme='dark'] .news-editor-btn--ghost:hover:not(:disabled) {
-  background: var(--bg-panel);
+  background: var(--bg-elevated);
+}
+[data-theme='dark'] .news-editor-hint,
+[data-theme='dark'] .news-image-size-row > span {
+  color: var(--text-secondary);
+}
+[data-theme='dark'] .news-field input,
+[data-theme='dark'] .news-field textarea,
+[data-theme='dark'] .news-select,
+[data-theme='dark'] .news-html-insert-textarea,
+[data-theme='dark'] .news-rich-editor {
+  background: color-mix(in srgb, var(--bg-elevated) 86%, black);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+[data-theme='dark'] .news-field input::placeholder,
+[data-theme='dark'] .news-field textarea::placeholder,
+[data-theme='dark'] .news-rich-editor:empty::before {
+  color: var(--text-muted);
+}
+[data-theme='dark'] .news-field input:focus,
+[data-theme='dark'] .news-field textarea:focus,
+[data-theme='dark'] .news-select:focus,
+[data-theme='dark'] .news-rich-editor:focus {
+  background: color-mix(in srgb, var(--bg-elevated) 94%, black);
+}
+[data-theme='dark'] .news-toolbar-btn,
+[data-theme='dark'] .news-upload-btn,
+[data-theme='dark'] .news-editor-btn--ghost {
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+[data-theme='dark'] .news-html-insert-panel {
+  border-color: var(--border-color);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, black);
 }
 .news-editor-btn--primary {
   background: var(--accent-green);

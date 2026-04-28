@@ -5952,7 +5952,7 @@ async function confirmDeleteTask() {
 
 /* Фикс: базовый .modal-chip объявлен ниже и перебивал дизайн-версию */
 .modal-chip.modal-chip--design {
-  background: #fff;
+  background: var(--bg-elevated);
 }
 
 .modal-chip-avatar {
@@ -6007,6 +6007,19 @@ async function confirmDeleteTask() {
 
 .modal-chip-remove:hover {
   color: #dc2626;
+}
+
+html[data-theme='dark'] .calendar-page .modal-chip.modal-chip--design {
+  background: color-mix(in srgb, var(--bg-elevated) 88%, black);
+  border-color: var(--border-color);
+}
+
+html[data-theme='dark'] .calendar-page .modal-chip-label {
+  color: var(--text-primary);
+}
+
+html[data-theme='dark'] .calendar-page .modal-chip-remove {
+  color: var(--text-secondary);
 }
 
 .modal-files-grid {
@@ -6969,106 +6982,106 @@ html[data-theme='dark'] .calendar-page .event-participation--declined {
 
 /* Модалка события в dark: повышаем читаемость без смены общей палитры */
 html[data-theme='dark'] .calendar-page .modal-calendar {
-  background: color-mix(in srgb, var(--bg-panel) 92%, #0e1512);
-  border-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+  background: var(--bg-elevated);
+  border-color: var(--border-color);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-header--design {
-  background: color-mix(in srgb, var(--bg-panel) 90%, #101916);
-  border-bottom-color: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  background: var(--bg-overlay);
+  border-bottom-color: var(--border-color);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-body {
-  background: color-mix(in srgb, var(--bg-base) 86%, #0d1411);
+  background: var(--bg-elevated);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-label--design,
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-task-id--design,
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-task-owner--design,
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-subtitle {
-  color: color-mix(in srgb, #fff 72%, #9fb7cc);
+  color: var(--text-secondary);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-title--design {
-  color: #eef6ff;
+  color: var(--text-primary);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-input.modal-input--design,
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-select.modal-select--design,
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-textarea.modal-textarea--design {
-  background: color-mix(in srgb, var(--bg-panel) 88%, #121c18);
-  border-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
-  color: #eef6ff;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, black);
+  border-color: var(--border-color);
+  color: var(--text-primary);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-input.modal-input--design::placeholder,
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-textarea.modal-textarea--design::placeholder {
-  color: color-mix(in srgb, #fff 54%, #8ea4b8);
+  color: var(--text-muted);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .repeat-apply-box,
 html[data-theme='dark'] .calendar-page .modal-calendar .participation-box,
 html[data-theme='dark'] .calendar-page .modal-calendar .assignee-status-column {
-  background: color-mix(in srgb, var(--bg-panel) 86%, #101916);
-  border-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 86%, black);
+  border-color: var(--border-color);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-attach-placeholder--design {
-  background: color-mix(in srgb, var(--bg-panel) 86%, #101916);
-  border-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 86%, black);
+  border-color: var(--border-color);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-actions.modal-actions--design {
-  background: color-mix(in srgb, var(--bg-panel) 90%, #111a17);
-  border-top-color: color-mix(in srgb, var(--text-primary) 18%, transparent);
+  background: var(--bg-overlay);
+  border-top-color: var(--border-color);
 }
 
 html[data-theme='dark'] .calendar-page .modal-calendar .modal-btn-ghost.modal-btn-ghost--design {
-  background: color-mix(in srgb, var(--bg-panel) 88%, #18231f);
-  border-color: color-mix(in srgb, var(--text-primary) 20%, transparent);
-  color: #d9e5dc;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, black);
+  border-color: var(--border-color);
+  color: var(--text-primary);
 }
 
 html[data-theme='dark'] .calendar-page .modal-chip-status--accepted {
-  background: rgba(34, 197, 94, 0.24);
-  color: #bbf7d0;
+  background: color-mix(in srgb, var(--accent-green) 24%, transparent);
+  color: color-mix(in srgb, white 84%, var(--accent-green));
 }
 
 html[data-theme='dark'] .calendar-page .modal-chip-status--pending {
-  background: rgba(245, 158, 11, 0.28);
-  color: #fde68a;
+  background: color-mix(in srgb, var(--warning-orange) 26%, transparent);
+  color: color-mix(in srgb, white 84%, var(--warning-orange));
 }
 
 html[data-theme='dark'] .calendar-page .modal-chip-status--declined {
-  background: rgba(239, 68, 68, 0.24);
-  color: #fecaca;
+  background: color-mix(in srgb, var(--danger-red) 24%, transparent);
+  color: color-mix(in srgb, white 84%, var(--danger-red));
 }
 
 html[data-theme='dark'] .calendar-page .assignees-tooltip-float {
-  background: color-mix(in srgb, var(--bg-panel) 90%, #0f1f18);
-  border-color: color-mix(in srgb, var(--text-primary) 16%, transparent);
-  color: #eaf2ee;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, black);
+  border-color: var(--border-color);
+  color: var(--text-primary);
 }
 
 html[data-theme='dark'] .calendar-page .assignee-status-column {
-  background: rgba(15, 23, 42, 0.56);
-  border-color: rgba(148, 163, 184, 0.28);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, black);
+  border-color: var(--border-color);
 }
 
 html[data-theme='dark'] .calendar-page .assignee-status-title {
-  color: #cbd5e1;
+  color: var(--text-secondary);
 }
 
 html[data-theme='dark'] .calendar-page .assignee-status-chip {
-  background: rgba(30, 41, 59, 0.6);
-  border-color: rgba(148, 163, 184, 0.28);
-  color: #e2e8f0;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, black);
+  border-color: var(--border-color);
+  color: var(--text-primary);
 }
 
 html[data-theme='dark'] .calendar-page .assignee-status-chip--declined {
-  background: rgba(127, 29, 29, 0.38);
-  border-color: rgba(248, 113, 113, 0.5);
-  color: #fecaca;
+  background: color-mix(in srgb, var(--danger-red) 24%, transparent);
+  border-color: color-mix(in srgb, var(--danger-red) 42%, var(--border-color));
+  color: color-mix(in srgb, white 84%, var(--danger-red));
 }
 
 @media (max-width: 820px) {

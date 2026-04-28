@@ -6018,7 +6018,7 @@ onMounted(() => void reloadAll())
     animation: none;
   }
 }
-[data-theme='dark'] .lands-wip-mini-loader path { stroke: rgba(255, 255, 255, 0.88); }
+[data-theme='dark'] .lands-wip-mini-loader path { stroke: color-mix(in srgb, white 88%, var(--accent-green)); }
 [data-theme='dark'] .lands-list,
 [data-theme='dark'] .lands-card,
 [data-theme='dark'] .lands-overview-item,
@@ -6039,13 +6039,13 @@ onMounted(() => void reloadAll())
 [data-theme='dark'] .lands-field textarea,
 [data-theme='dark'] .lands-field select { background:var(--bg-panel); }
 [data-theme='dark'] .lands-page {
-  --lands-input-bg: rgba(0, 0, 0, 0.35);
+  --lands-input-bg: color-mix(in srgb, var(--bg-elevated) 76%, black);
   --lands-input-border: var(--border-color);
 }
 [data-theme='dark'] .lands-modal {
-  background: var(--bg-panel);
+  background: var(--bg-elevated);
   border-color: var(--border-color);
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-card);
 }
 [data-theme='dark'] .lands-modal-head,
 [data-theme='dark'] .lands-modal-actions {
@@ -6057,7 +6057,7 @@ onMounted(() => void reloadAll())
   color: var(--text-secondary);
 }
 [data-theme='dark'] .lands-modal-close:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--interactive-hover);
   color: var(--text-primary);
   transform: rotate(90deg) scale(1.08);
 }
@@ -6065,21 +6065,21 @@ onMounted(() => void reloadAll())
 [data-theme='dark'] .lands-modal .lands-field textarea,
 [data-theme='dark'] .lands-modal .lands-field select {
   background: var(--lands-input-bg);
-  border-color: color-mix(in srgb, var(--border-color) 92%, #cbd5e1 8%);
+  border-color: var(--border-color);
   color: var(--text-primary);
 }
 [data-theme='dark'] .lands-modal .lands-field input:focus,
 [data-theme='dark'] .lands-modal .lands-field textarea:focus,
 [data-theme='dark'] .lands-modal .lands-field select:focus {
-  border-color: color-mix(in srgb, var(--accent-green) 58%, #94a3b8);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-green) 35%, transparent);
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 1px var(--focus-ring);
 }
 [data-theme='dark'] .lands-modal .lands-field span {
   color: var(--text-secondary);
 }
 [data-theme='dark'] .lands-modal .lands-field input::placeholder,
 [data-theme='dark'] .lands-modal .lands-field textarea::placeholder {
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
 [data-theme='dark'] .lands-tabs--melioration .lands-tab-btn {
