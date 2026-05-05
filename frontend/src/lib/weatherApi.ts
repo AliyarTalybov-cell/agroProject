@@ -1,13 +1,4 @@
-/**
- * Yandex Weather GraphQL API (Spectaql)
- */
-
-const YANDEX_PROXY = '/api/weather'
-const YANDEX_TIMEOUT_MS = 4500
-const OPENWEATHER_TIMEOUT_MS = 5000
-const YANDEX_RATE_LIMIT_COOLDOWN_MS = 60_000
-const YANDEX_AUTH_COOLDOWN_MS = 10 * 60_000
-let yandexRateLimitedUntil = 0
+const OPENMETEO_TIMEOUT_MS = 5000
 
 export type WeatherData = {
   cityName: string
@@ -43,52 +34,14 @@ export type WeatherData = {
   meanSeaLevelPressure?: number | null
   altitude?: number | null
   pressureNorm?: number | null
+  windGusts?: number | null
+  precipitation?: number | null
+  rain?: number | null
+  showers?: number | null
+  vapourPressureDeficit?: number | null
+  apparentPressure?: number | null
 }
 
-// Преобразование Yandex conditions
-function parseCondition(c: string): string {
-  const cond = c?.toLowerCase() || ''
-  if (cond.includes('clear')) return 'clear'
-  if (cond.includes('cloud') || cond.includes('overcast')) return 'clouds'
-  if (cond.includes('rain') || cond.includes('drizzle') || cond.includes('shower')) return 'rain'
-  if (cond.includes('snow')) return 'snow'
-  if (cond.includes('storm')) return 'thunderstorm'
-  return 'clear'
-}
-
-function parseWindDir(dir: string): string {
-  const dirs: Record<string, string> = {
-    nw: 'СЗ',
-    n: 'С',
-    ne: 'СВ',
-    e: 'В',
-    se: 'ЮВ',
-    s: 'Ю',
-    sw: 'ЮЗ',
-    w: 'З',
-    c: 'Штиль',
-    NW: 'СЗ',
-    N: 'С',
-    NE: 'СВ',
-    E: 'В',
-    SE: 'ЮВ',
-    S: 'Ю',
-    SW: 'ЮЗ',
-    W: 'З',
-    C: 'Штиль',
-    NORTH_WEST: 'СЗ',
-    NORTH: 'С',
-    NORTH_EAST: 'СВ',
-    EAST: 'В',
-    SOUTH_EAST: 'ЮВ',
-    SOUTH: 'Ю',
-    SOUTH_WEST: 'ЮЗ',
-    WEST: 'З',
-    CALM: 'Штиль',
-  }
-  const key = (dir || '').trim()
-  return dirs[key] || dirs[key.toUpperCase()] || dir
-}
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController()
@@ -100,53 +53,6 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
   }
 }
 
-function shouldSkipYandex(): boolean {
-  return Date.now() < yandexRateLimitedUntil
-}
-
-function markYandexRateLimited() {
-  yandexRateLimitedUntil = Date.now() + YANDEX_RATE_LIMIT_COOLDOWN_MS
-}
-
-function markYandexUnauthorized() {
-  yandexRateLimitedUntil = Date.now() + YANDEX_AUTH_COOLDOWN_MS
-}
-
-function hasYandexAuthError(payload: unknown): boolean {
-  const errors = (payload as { errors?: Array<{ message?: string; extensions?: { code?: string } }> })?.errors
-  if (!Array.isArray(errors) || !errors.length) return false
-  return errors.some((err) => {
-    const code = String(err?.extensions?.code ?? '').toUpperCase()
-    const message = String(err?.message ?? '').toLowerCase()
-    return code.includes('UNAUTH') || code.includes('FORBID') || message.includes('unauthor') || message.includes('forbidden') || message.includes('token')
-  })
-}
-
-const GQL_NOW_QUERY = `
-  query WeatherNow($lat: Float!, $lon: Float!) {
-    weatherByPoint(request: { lat: $lat, lon: $lon }) {
-      now {
-        temperature
-        condition
-        windSpeed
-        windDirection
-        humidity
-        pressure
-        visibility
-        icon(format: SVG)
-        precProbability
-        kpIndex
-        meanSeaLevelPressure
-      }
-      forecast {
-        days(limit: 1) {
-          sunrise
-          sunset
-        }
-      }
-    }
-  }
-`
 
 import { RUSSIAN_CITIES } from './cities'
 
@@ -169,105 +75,17 @@ export async function fetchWeather(cityOrLat: string | number, lonOrNull: number
     }
   }
 
-  // Ключ на фронтенде больше не нужен, он подставляется в Serverless Function на Vercel
-  if (shouldSkipYandex()) {
-    const fallback = await fetchWeatherFallback(lat, lon, label)
-    if (fallback) {
-      setCachedWeather(lat, lon, fallback)
-      return fallback
-    }
-    return getCachedWeather(lat, lon)
+  const direct = await fetchWeatherFallback(lat, lon, label)
+  if (direct) {
+    setCachedWeather(lat, lon, direct)
+    return direct
   }
-  try {
-    const response = await fetchWithTimeout(YANDEX_PROXY, {
-      method: 'POST',
-      headers: {
-        // 'X-Yandex-Weather-Key': key, // Ключ подставляется на сервере
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        query: GQL_NOW_QUERY,
-        variables: { lat, lon }
-      })
-    }, YANDEX_TIMEOUT_MS)
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        markYandexRateLimited()
-      } else if (response.status === 401 || response.status === 403) {
-        markYandexUnauthorized()
-      }
-      throw new Error(`Yandex HTTP Error: ${response.status}`);
-    }
-    const result = await response.json()
-    
-    if (result?.errors?.length) {
-      if (hasYandexAuthError(result)) {
-        markYandexUnauthorized()
-      }
-      throw new Error(`Yandex GraphQL error: ${JSON.stringify(result.errors)}`)
-    }
-
-    const weatherData = result.data?.weatherByPoint
-    if (!weatherData || !weatherData.now) {
-      throw new Error('Yandex Missing Data')
-    }
-
-    const now = weatherData.now
-    const loc = weatherData.location || {}
-    const todayForecast = weatherData.forecast?.days?.[0] || {}
-
-    const mapped: WeatherData = {
-      cityName: label,
-      condition: parseCondition(now.condition),
-      coord: { lon, lat },
-      temp: now.temperature,
-      feelsLike: null,
-      description: now.condition,
-      icon: now.icon, // У нас вернется полная SVG-ссылка 'https://yastatic.net/...'
-      humidity: now.humidity,
-      pressure: now.pressure,
-      seaLevel: null,
-      grndLevel: null,
-      visibility: now.visibility,
-      windSpeed: now.windSpeed,
-      windDeg: null,
-      windDirection: parseWindDir(now.windDirection),
-      clouds: null, // Доступна только в PRO, поэтому скрываем
-      precProbability: now.precProbability ?? 0,
-      sunrise: todayForecast.sunrise || '—',
-      sunset: todayForecast.sunset || '—',
-      dt: Math.floor(Date.now() / 1000),
-      timezone: 0,
-      uvIndex: now.uvIndex ?? null,
-      soilTemperature: now.soilTemperature ?? null,
-      soilMoisture: now.soilMoisture ?? null,
-      leafWetnessIndex: now.leafWetnessIndex ?? null,
-      precType: now.precType ?? null,
-      precStrength: now.precStrength ?? null,
-      isThunder: now.isThunder ?? null,
-      dewPoint: now.dewPoint ?? null,
-      kpIndex: now.kpIndex ?? null,
-      meanSeaLevelPressure: now.meanSeaLevelPressure ?? null,
-      altitude: loc.altitude ?? null,
-      pressureNorm: loc.pressureNorm ?? null,
-    }
-    setCachedWeather(lat, lon, mapped)
-    return mapped
-  } catch (e) {
-    console.warn('Yandex Weather error, trying OpenWeather fallback:', e)
-    const fallback = await fetchWeatherFallback(lat, lon, label)
-    if (fallback) {
-      setCachedWeather(lat, lon, fallback)
-      return fallback
-    }
-    return getCachedWeather(lat, lon)
-  }
+  return getCachedWeather(lat, lon)
 }
 
 export function getWeatherIconUrl(iconOrUrl: string): string {
   // Поскольку GraphQL сразу отдает абсолютный URL SVG, возвращаем как есть 
-  if (iconOrUrl && iconOrUrl.startsWith('http')) {
+  if (iconOrUrl && (iconOrUrl.startsWith('http') || iconOrUrl.startsWith('data:'))) {
     return iconOrUrl
   }
   return `https://yastatic.net/weather/i/icons/funky/dark/${iconOrUrl}.svg`
@@ -298,6 +116,56 @@ export type ForecastDayItem = {
   windSpeed: number | null
   pop: number
   alert?: string
+  precipitationSum?: number | null
+  precipitationHours?: number | null
+  windGusts?: number | null
+  windDirection?: string
+  uvIndexMax?: number | null
+  sunshineDuration?: number | null
+  daylightDuration?: number | null
+  shortwaveRadiationSum?: number | null
+  evapotranspiration?: number | null
+  apparentTempMin?: number | null
+  apparentTempMax?: number | null
+}
+
+export type WeatherHourlyInsight = {
+  time: string
+  hourLabel: string
+  precipitationProbability: number | null
+  precipitation: number | null
+  windGusts: number | null
+  dewPoint: number | null
+  vapourPressureDeficit: number | null
+  soilTemperature: number | null
+  soilMoisture: number | null
+  uvIndex: number | null
+}
+
+export type WeatherAirQuality = {
+  europeanAqi: number | null
+  pm10: number | null
+  pm25: number | null
+  ozone: number | null
+  dust: number | null
+  uvIndex: number | null
+}
+
+export type WeatherHistorySummary = {
+  startDate: string
+  endDate: string
+  precipitationSum: number | null
+  rainyDays: number
+  evapotranspirationSum: number | null
+  tempMin: number | null
+  tempMax: number | null
+}
+
+export type WeatherInsights = {
+  hourly: WeatherHourlyInsight[]
+  daily: ForecastDayItem[]
+  airQuality: WeatherAirQuality | null
+  history: WeatherHistorySummary | null
 }
 
 type ForecastCacheEntry = {
@@ -310,11 +178,19 @@ type WeatherCacheEntry = {
   item: WeatherData
 }
 
+type WeatherInsightsCacheEntry = {
+  savedAt: number
+  item: WeatherInsights
+}
+
 const WEATHER_CACHE_TTL_MS = 30 * 60 * 1000
 const weatherCacheByCoords = new Map<string, WeatherCacheEntry>()
 
 const FORECAST_CACHE_TTL_MS = 30 * 60 * 1000
 const forecastCacheByCoords = new Map<string, ForecastCacheEntry>()
+
+const WEATHER_INSIGHTS_CACHE_TTL_MS = 30 * 60 * 1000
+const weatherInsightsCacheByCoords = new Map<string, WeatherInsightsCacheEntry>()
 
 function forecastCacheKey(lat: number, lon: number): string {
   // Округляем, чтобы близкие координаты не создавали лишние ключи
@@ -359,117 +235,44 @@ function setCachedForecast(lat: number, lon: number, items: ForecastDayItem[]) {
   forecastCacheByCoords.set(key, { savedAt: Date.now(), items })
 }
 
-const GQL_FORECAST_QUERY = `
-  query WeatherForecast($lat: Float!, $lon: Float!) {
-    weatherByPoint(request: { lat: $lat, lon: $lon }) {
-      forecast {
-        days(limit: 5) {
-          time
-          parts {
-            day {
-              minTemperature
-              maxTemperature
-              icon(format: SVG)
-              condition
-              windSpeed
-              precProbability
-            }
-          }
-        }
-      }
-    }
+function getCachedWeatherInsights(lat: number, lon: number): WeatherInsights | null {
+  const key = weatherCacheKey(lat, lon)
+  const cached = weatherInsightsCacheByCoords.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.savedAt > WEATHER_INSIGHTS_CACHE_TTL_MS) {
+    weatherInsightsCacheByCoords.delete(key)
+    return null
   }
-`
-
-export async function fetchForecast5(lat: number, lon: number): Promise<ForecastDayItem[]> {
-  if (shouldSkipYandex()) {
-    const fallback = await fetchForecast5Fallback(lat, lon)
-    if (fallback.length) {
-      setCachedForecast(lat, lon, fallback)
-      return fallback
-    }
-    return getCachedForecast(lat, lon) ?? []
-  }
-  try {
-    const response = await fetchWithTimeout(YANDEX_PROXY, {
-      method: 'POST',
-      headers: {
-        // 'X-Yandex-Weather-Key': key, // Ключ подставляется на сервере
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        query: GQL_FORECAST_QUERY,
-        variables: { lat, lon }
-      })
-    }, YANDEX_TIMEOUT_MS)
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        markYandexRateLimited()
-      } else if (response.status === 401 || response.status === 403) {
-        markYandexUnauthorized()
-      }
-      throw new Error(`Yandex HTTP Error: ${response.status}`)
-    }
-    const result = await response.json()
-    if (result?.errors?.length) {
-      if (hasYandexAuthError(result)) {
-        markYandexUnauthorized()
-      }
-      throw new Error(`Forecast GraphQL response errors: ${JSON.stringify(result.errors)}`)
-    }
-    
-    const days = result.data?.weatherByPoint?.forecast?.days
-    if (!days) throw new Error('Yandex missing forecast days')
-    
-    const dayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
-    const monthNames: Record<number, string> = { 1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр', 5: 'Май', 6: 'Июн', 7: 'Июл', 8: 'Авг', 9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек' }
-
-    const mapped = days.map((day: any) => {
-      const d = new Date(day.time)
-      const dayLabel = dayLabels[d.getUTCDay()]
-      const dateLabel = `${d.getUTCDate()} ${monthNames[d.getUTCMonth() + 1]}`
-      
-      const p = day.parts?.day || {}
-      
-      let alert: string | undefined
-      if (p.windSpeed > 12) alert = 'СИЛЬНЫЙ ВЕТЕР ОТЛОЖИТЕ УБОРКУ'
-
-      return {
-        date: day.time.split('T')[0],
-        dayLabel,
-        dateLabel,
-        tempMin: p.minTemperature ?? p.maxTemperature ?? 0,
-        tempMax: p.maxTemperature ?? 0,
-        icon: p.icon || '', // Полный SVG URL
-        condition: parseCondition(p.condition || ''),
-        windSpeed: p.windSpeed ?? null,
-        pop: p.precProbability ?? 0,
-        alert,
-      }
-    })
-    setCachedForecast(lat, lon, mapped)
-    return mapped
-  } catch (e) {
-    console.warn('Forecast GraphQL API error, trying OpenWeather fallback:', e)
-    const fallback = await fetchForecast5Fallback(lat, lon)
-    if (fallback.length) {
-      setCachedForecast(lat, lon, fallback)
-      return fallback
-    }
-    return getCachedForecast(lat, lon) ?? []
-  }
+  return cached.item
 }
 
-// ——— OpenWeather Возвратный фукнционал на случай отказа Yandex ———
+function setCachedWeatherInsights(lat: number, lon: number, item: WeatherInsights | null) {
+  if (!item) return
+  const key = weatherCacheKey(lat, lon)
+  weatherInsightsCacheByCoords.set(key, { savedAt: Date.now(), item })
+}
 
-const OPENWEATHER_BASE = 'https://api.openweathermap.org/data/2.5/weather'
-const OPENWEATHER_FORECAST = 'https://api.openweathermap.org/data/2.5/forecast'
-const APPID = 'f8a7bf6a4c76418c05f1f818fd12375f' // Предыдущий ключ для OpenWeatherMap
-const UNITS = 'metric'
-const LANG = 'ru'
+export async function fetchForecast5(lat: number, lon: number): Promise<ForecastDayItem[]> {
+  const direct = await fetchForecast5Fallback(lat, lon)
+  if (direct.length) {
+    setCachedForecast(lat, lon, direct)
+    return direct
+  }
+  return getCachedForecast(lat, lon) ?? []
+}
+
+// ——— Open-Meteo fallback на случай отказа Yandex ———
+
+const OPENMETEO_FORECAST = 'https://api.open-meteo.com/v1/forecast'
+const OPENMETEO_AIR_QUALITY = 'https://air-quality-api.open-meteo.com/v1/air-quality'
+const OPENMETEO_ARCHIVE = 'https://archive-api.open-meteo.com/v1/archive'
 const WIND_DIRECTIONS = ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ']
-const OPENWEATHER_RETRY_DELAY_MS = 700
+
+type OpenMeteoWeatherMeta = {
+  condition: string
+  description: string
+  icon: string
+}
 
 function windDegToLabel(deg: number | null | undefined): string {
   if (deg == null) return '—'
@@ -477,245 +280,365 @@ function windDegToLabel(deg: number | null | undefined): string {
   return WIND_DIRECTIONS[index]
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function openMeteoWeatherMeta(code: number | null | undefined, isDay = true): OpenMeteoWeatherMeta {
+  if (code == null) {
+    return { condition: 'clear', description: '—', icon: openMeteoIconDataUrl('clear', isDay) }
+  }
+  if (code === 0) {
+    return { condition: 'clear', description: 'Ясно', icon: openMeteoIconDataUrl('clear', isDay) }
+  }
+  if ([1, 2, 3].includes(code)) {
+    return { condition: 'clouds', description: 'Переменная облачность', icon: openMeteoIconDataUrl('clouds', isDay) }
+  }
+  if ([45, 48].includes(code)) {
+    return { condition: 'clouds', description: 'Туман', icon: openMeteoIconDataUrl('fog', isDay) }
+  }
+  if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) {
+    return { condition: 'rain', description: 'Дождь', icon: openMeteoIconDataUrl('rain', isDay) }
+  }
+  if ([71, 73, 75, 77, 85, 86].includes(code)) {
+    return { condition: 'snow', description: 'Снег', icon: openMeteoIconDataUrl('snow', isDay) }
+  }
+  if ([95, 96, 99].includes(code)) {
+    return { condition: 'thunderstorm', description: 'Гроза', icon: openMeteoIconDataUrl('thunderstorm', isDay) }
+  }
+  return { condition: 'clear', description: '—', icon: openMeteoIconDataUrl('clear', isDay) }
 }
 
-function shouldRetryOpenWeather(status: number): boolean {
-  return status === 429 || status >= 500
+function formatOpenMeteoTime(value: string | null | undefined): string {
+  if (!value) return '—'
+  const time = value.split('T')[1]
+  return time ? time.slice(0, 5) : '—'
+}
+
+function roundNullable(value: unknown, digits = 0): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  const factor = 10 ** digits
+  return Math.round(value * factor) / factor
+}
+
+function formatHourLabel(value: string | null | undefined): string {
+  if (!value) return '—'
+  const time = value.split('T')[1]
+  return time ? time.slice(0, 5) : '—'
+}
+
+function isoDateShift(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+function openMeteoIconDataUrl(condition: string, isDay: boolean): string {
+  const sun = isDay ? '#f59e0b' : '#e5e7eb'
+  const cloud = isDay ? '#94a3b8' : '#cbd5e1'
+  const rain = '#38bdf8'
+  const snow = '#93c5fd'
+  const bolt = '#facc15'
+  const fog = '#94a3b8'
+  const svgByCondition: Record<string, string> = {
+    clear: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="14" fill="${sun}"/><path d="M32 8v8M32 48v8M8 32h8M48 32h8M15 15l6 6M43 43l6 6M49 15l-6 6M21 43l-6 6" stroke="${sun}" stroke-width="4" stroke-linecap="round"/></svg>`,
+    clouds: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="23" cy="25" r="10" fill="${sun}" opacity=".9"/><path d="M19 43h31a9 9 0 0 0 0-18h-2.2A16 16 0 0 0 17 31.5 6.5 6.5 0 0 0 19 43Z" fill="${cloud}"/></svg>`,
+    rain: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M18 39h32a9 9 0 0 0 0-18h-2.5A16 16 0 0 0 17 28.5 7 7 0 0 0 18 39Z" fill="${cloud}"/><path d="M23 47l-3 7M33 47l-3 7M43 47l-3 7" stroke="${rain}" stroke-width="4" stroke-linecap="round"/></svg>`,
+    snow: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M18 39h32a9 9 0 0 0 0-18h-2.5A16 16 0 0 0 17 28.5 7 7 0 0 0 18 39Z" fill="${cloud}"/><circle cx="24" cy="50" r="3" fill="${snow}"/><circle cx="34" cy="54" r="3" fill="${snow}"/><circle cx="44" cy="50" r="3" fill="${snow}"/></svg>`,
+    thunderstorm: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M18 39h32a9 9 0 0 0 0-18h-2.5A16 16 0 0 0 17 28.5 7 7 0 0 0 18 39Z" fill="${cloud}"/><path d="M34 39l-7 13h8l-4 10 13-16h-8l5-7z" fill="${bolt}"/></svg>`,
+    fog: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M16 25h33M12 36h40M18 47h28" stroke="${fog}" stroke-width="5" stroke-linecap="round"/></svg>`,
+  }
+  const svg = svgByCondition[condition] ?? svgByCondition.clear
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
 }
 
 async function fetchWeatherFallback(lat: number, lon: number, cityName: string): Promise<WeatherData | null> {
   const params = new URLSearchParams({
-    lat: String(lat),
-    lon: String(lon),
-    appid: APPID,
-    units: UNITS,
-    lang: LANG,
+    latitude: String(lat),
+    longitude: String(lon),
+    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,surface_pressure,pressure_msl,cloud_cover,visibility,precipitation,rain,showers,dew_point_2m,vapour_pressure_deficit,soil_temperature_0cm,soil_moisture_0_to_1cm,is_day',
+    daily: 'sunrise,sunset',
+    timezone: 'auto',
+    forecast_days: '1',
+    wind_speed_unit: 'ms',
   })
-  try {
-    const requestUrl = `${OPENWEATHER_BASE}?${params.toString()}`
-    let response = await fetchWithTimeout(requestUrl, { method: 'GET' }, OPENWEATHER_TIMEOUT_MS)
-    if (!response.ok && shouldRetryOpenWeather(response.status)) {
-      await sleep(OPENWEATHER_RETRY_DELAY_MS)
-      response = await fetchWithTimeout(requestUrl, { method: 'GET' }, OPENWEATHER_TIMEOUT_MS)
-    }
-    if (!response.ok) return null
-    const raw = await response.json()
-    const weather = raw.weather?.[0]
-    const main = raw.main ?? {}
-    const wind = raw.wind ?? {}
-    const sys = raw.sys ?? {}
-    const clouds = raw.clouds ?? {}
-    const tz = raw.timezone ?? 0
 
-    const formatTime = (ts: number | null | undefined) => 
-      ts ? new Date((ts + tz) * 1000).toISOString().substring(11, 16) : '—'
+  try {
+    const response = await fetchWithTimeout(`${OPENMETEO_FORECAST}?${params.toString()}`, { method: 'GET' }, OPENMETEO_TIMEOUT_MS)
+    if (!response.ok) return null
+
+    const raw = await response.json()
+    const current = raw.current ?? {}
+    const meta = openMeteoWeatherMeta(current.weather_code, current.is_day !== 0)
+    const pressure = current.surface_pressure != null ? Math.round(current.surface_pressure) : null
 
     return {
-      cityName: cityName || (raw.name ?? '—'),
-      condition: parseCondition(weather?.main || 'clear'),
+      cityName,
+      condition: meta.condition,
       coord: { lon, lat },
-      temp: main.temp != null ? Math.round(main.temp) : null,
-      feelsLike: main.feels_like != null ? Math.round(main.feels_like) : null,
-      description: weather?.description ?? '—',
-      icon: `https://openweathermap.org/img/wn/${weather?.icon ?? '01d'}@2x.png`,
-      humidity: main.humidity ?? null,
-      pressure: main.pressure ?? null,
-      seaLevel: main.sea_level ?? null,
-      grndLevel: main.grnd_level ?? null,
-      visibility: raw.visibility ?? null,
-      windSpeed: wind.speed ?? null,
-      windDeg: wind.deg ?? null,
-      windDirection: windDegToLabel(wind.deg),
-      clouds: clouds.all ?? null,
+      temp: current.temperature_2m != null ? Math.round(current.temperature_2m) : null,
+      feelsLike: current.apparent_temperature != null ? Math.round(current.apparent_temperature) : null,
+      description: meta.description,
+      icon: meta.icon,
+      humidity: current.relative_humidity_2m ?? null,
+      pressure,
+      seaLevel: current.pressure_msl != null ? Math.round(current.pressure_msl) : null,
+      grndLevel: pressure,
+      visibility: current.visibility ?? null,
+      windSpeed: current.wind_speed_10m ?? null,
+      windDeg: current.wind_direction_10m ?? null,
+      windDirection: windDegToLabel(current.wind_direction_10m),
+      clouds: current.cloud_cover ?? null,
       precProbability: 0,
-      sunrise: formatTime(sys.sunrise),
-      sunset: formatTime(sys.sunset),
-      dt: raw.dt ?? Math.floor(Date.now() / 1000),
-      timezone: tz,
+      sunrise: formatOpenMeteoTime(raw.daily?.sunrise?.[0]),
+      sunset: formatOpenMeteoTime(raw.daily?.sunset?.[0]),
+      dt: Math.floor(Date.now() / 1000),
+      timezone: raw.utc_offset_seconds ?? 0,
+      uvIndex: null,
+      soilTemperature: roundNullable(current.soil_temperature_0cm, 1),
+      soilMoisture: roundNullable(current.soil_moisture_0_to_1cm, 3),
+      leafWetnessIndex: null,
+      dewPoint: roundNullable(current.dew_point_2m, 1),
+      meanSeaLevelPressure: current.pressure_msl != null ? Math.round(current.pressure_msl) : null,
+      windGusts: roundNullable(current.wind_gusts_10m, 1),
+      precipitation: roundNullable(current.precipitation, 1),
+      rain: roundNullable(current.rain, 1),
+      showers: roundNullable(current.showers, 1),
+      vapourPressureDeficit: roundNullable(current.vapour_pressure_deficit, 2),
+      apparentPressure: pressure,
     }
-  } catch (e) {
-    try {
-      await sleep(OPENWEATHER_RETRY_DELAY_MS)
-      const response = await fetchWithTimeout(
-        `${OPENWEATHER_BASE}?${params.toString()}`,
-        { method: 'GET' },
-        OPENWEATHER_TIMEOUT_MS,
-      )
-      if (!response.ok) return null
-      const raw = await response.json()
-      const weather = raw.weather?.[0]
-      const main = raw.main ?? {}
-      const wind = raw.wind ?? {}
-      const sys = raw.sys ?? {}
-      const clouds = raw.clouds ?? {}
-      const tz = raw.timezone ?? 0
-      const formatTime = (ts: number | null | undefined) =>
-        ts ? new Date((ts + tz) * 1000).toISOString().substring(11, 16) : '—'
-
-      return {
-        cityName: cityName || (raw.name ?? '—'),
-        condition: parseCondition(weather?.main || 'clear'),
-        coord: { lon, lat },
-        temp: main.temp != null ? Math.round(main.temp) : null,
-        feelsLike: main.feels_like != null ? Math.round(main.feels_like) : null,
-        description: weather?.description ?? '—',
-        icon: `https://openweathermap.org/img/wn/${weather?.icon ?? '01d'}@2x.png`,
-        humidity: main.humidity ?? null,
-        pressure: main.pressure ?? null,
-        seaLevel: main.sea_level ?? null,
-        grndLevel: main.grnd_level ?? null,
-        visibility: raw.visibility ?? null,
-        windSpeed: wind.speed ?? null,
-        windDeg: wind.deg ?? null,
-        windDirection: windDegToLabel(wind.deg),
-        clouds: clouds.all ?? null,
-        precProbability: 0,
-        sunrise: formatTime(sys.sunrise),
-        sunset: formatTime(sys.sunset),
-        dt: raw.dt ?? Math.floor(Date.now() / 1000),
-        timezone: tz,
-      }
-    } catch (retryError) {
-      console.error('OpenWeather Fallback error:', retryError)
-      return null
-    }
+  } catch (error) {
+    console.error('Open-Meteo Fallback error:', error)
+    return null
   }
 }
 
 async function fetchForecast5Fallback(lat: number, lon: number): Promise<ForecastDayItem[]> {
   const params = new URLSearchParams({
-    lat: String(lat),
-    lon: String(lon),
-    appid: APPID,
-    units: UNITS,
-    lang: LANG,
-    cnt: '40',
+    latitude: String(lat),
+    longitude: String(lon),
+    daily: 'temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_sum,precipitation_hours,precipitation_probability_max,weather_code,wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant,uv_index_max,sunshine_duration,daylight_duration,shortwave_radiation_sum,et0_fao_evapotranspiration',
+    timezone: 'auto',
+    forecast_days: '5',
+    wind_speed_unit: 'ms',
   })
-  try {
-    const requestUrl = `${OPENWEATHER_FORECAST}?${params.toString()}`
-    let response = await fetchWithTimeout(requestUrl, { method: 'GET' }, OPENWEATHER_TIMEOUT_MS)
-    if (!response.ok && shouldRetryOpenWeather(response.status)) {
-      await sleep(OPENWEATHER_RETRY_DELAY_MS)
-      response = await fetchWithTimeout(requestUrl, { method: 'GET' }, OPENWEATHER_TIMEOUT_MS)
-    }
-    if (!response.ok) return []
-    const raw = await response.json()
-    const list = raw?.list ?? []
-    const timezone = raw?.city?.timezone ?? 0
 
-    const byDay = new Map<string, any>()
-    for (const item of list) {
-      const d = new Date((item.dt + timezone) * 1000)
-      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
-      const tempMin = item.main?.temp_min ?? item.main?.temp_max ?? 0
-      const tempMax = item.main?.temp_max ?? item.main?.temp_min ?? 0
-      if (!byDay.has(key)) {
-        byDay.set(key, { min: tempMin, max: tempMax, icons: [], conditions: [], wind: [], pop: [] })
-      }
-      const row = byDay.get(key)!
-      row.min = Math.min(row.min, tempMin)
-      row.max = Math.max(row.max, tempMax)
-      const icon = item.weather?.[0]?.icon ?? '01d'
-      row.icons.push(`https://openweathermap.org/img/wn/${icon}@2x.png`)
-      row.conditions.push(item.weather?.[0]?.main ?? '')
-      if (item.wind?.speed != null) row.wind.push(item.wind.speed)
-      if (item.pop != null) row.pop.push(item.pop)
-    }
-    
+  try {
+    const response = await fetchWithTimeout(`${OPENMETEO_FORECAST}?${params.toString()}`, { method: 'GET' }, OPENMETEO_TIMEOUT_MS)
+    if (!response.ok) return []
+
+    const raw = await response.json()
+    const daily = raw.daily ?? {}
+    const dates: string[] = daily.time ?? []
     const dayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
     const monthNames: Record<number, string> = { 1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр', 5: 'Май', 6: 'Июн', 7: 'Июл', 8: 'Авг', 9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек' }
-    const sorted = Array.from(byDay.entries()).sort((a, b) => a[0].localeCompare(b[0])).slice(0, 5)
 
-    return sorted.map(([dateStr, row]) => {
+    return dates.slice(0, 5).map((dateStr, index) => {
       const d = new Date(dateStr + 'T12:00:00Z')
-      const dayLabel = dayLabels[d.getUTCDay()]
-      const dateLabel = `${d.getUTCDate()} ${monthNames[d.getUTCMonth() + 1]}`
-      const mid = Math.floor(row.icons.length / 2)
-      const icon = row.icons[mid] ?? row.icons[0]
-      const condition = parseCondition(row.conditions[mid] ?? row.conditions[0])
-      const windAvg = row.wind.length ? row.wind.reduce((a: number, b: number) => a + b, 0) / row.wind.length : null
-      const popMax = row.pop.length ? Math.max(...row.pop) : 0
-      let alert: string | undefined
-      if (windAvg != null && windAvg > 12) alert = 'СИЛЬНЫЙ ВЕТЕР ОТЛОЖИТЕ УБОРКУ'
+      const meta = openMeteoWeatherMeta(daily.weather_code?.[index])
+      const windSpeed = daily.wind_speed_10m_max?.[index] ?? null
+      const windGusts = roundNullable(daily.wind_gusts_10m_max?.[index], 1)
+      const precipitationSum = roundNullable(daily.precipitation_sum?.[index], 1)
+      const alert =
+        windGusts != null && windGusts > 12
+          ? 'СИЛЬНЫЕ ПОРЫВЫ ВЕТРА'
+          : windSpeed != null && windSpeed > 12
+            ? 'СИЛЬНЫЙ ВЕТЕР ОТЛОЖИТЕ УБОРКУ'
+            : precipitationSum != null && precipitationSum > 8
+              ? 'ОЖИДАЮТСЯ ОСАДКИ'
+              : undefined
+
       return {
         date: dateStr,
-        dayLabel,
-        dateLabel,
-        tempMin: Math.round(row.min),
-        tempMax: Math.round(row.max),
-        icon,
-        condition,
-        windSpeed: windAvg,
-        pop: popMax,
+        dayLabel: dayLabels[d.getUTCDay()],
+        dateLabel: `${d.getUTCDate()} ${monthNames[d.getUTCMonth() + 1]}`,
+        tempMin: Math.round(daily.temperature_2m_min?.[index] ?? daily.temperature_2m_max?.[index] ?? 0),
+        tempMax: Math.round(daily.temperature_2m_max?.[index] ?? daily.temperature_2m_min?.[index] ?? 0),
+        icon: meta.icon,
+        condition: meta.condition,
+        windSpeed,
+        pop: daily.precipitation_probability_max?.[index] ?? 0,
         alert,
+        precipitationSum,
+        precipitationHours: roundNullable(daily.precipitation_hours?.[index], 1),
+        windGusts,
+        windDirection: windDegToLabel(daily.wind_direction_10m_dominant?.[index]),
+        uvIndexMax: roundNullable(daily.uv_index_max?.[index], 1),
+        sunshineDuration: roundNullable(daily.sunshine_duration?.[index]),
+        daylightDuration: roundNullable(daily.daylight_duration?.[index]),
+        shortwaveRadiationSum: roundNullable(daily.shortwave_radiation_sum?.[index], 1),
+        evapotranspiration: roundNullable(daily.et0_fao_evapotranspiration?.[index], 1),
+        apparentTempMin: roundNullable(daily.apparent_temperature_min?.[index]),
+        apparentTempMax: roundNullable(daily.apparent_temperature_max?.[index]),
       }
     })
-  } catch (e) {
-    try {
-      await sleep(OPENWEATHER_RETRY_DELAY_MS)
-      const response = await fetchWithTimeout(
-        `${OPENWEATHER_FORECAST}?${params.toString()}`,
-        { method: 'GET' },
-        OPENWEATHER_TIMEOUT_MS,
-      )
-      if (!response.ok) return []
-      const raw = await response.json()
-      const list = raw?.list ?? []
-      const timezone = raw?.city?.timezone ?? 0
+  } catch (error) {
+    console.error('Forecast Open-Meteo Fallback error:', error)
+    return []
+  }
+}
 
-      const byDay = new Map<string, any>()
-      for (const item of list) {
-        const d = new Date((item.dt + timezone) * 1000)
-        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
-        const tempMin = item.main?.temp_min ?? item.main?.temp_max ?? 0
-        const tempMax = item.main?.temp_max ?? item.main?.temp_min ?? 0
-        if (!byDay.has(key)) {
-          byDay.set(key, { min: tempMin, max: tempMax, icons: [], conditions: [], wind: [], pop: [] })
-        }
-        const row = byDay.get(key)!
-        row.min = Math.min(row.min, tempMin)
-        row.max = Math.max(row.max, tempMax)
-        const icon = item.weather?.[0]?.icon ?? '01d'
-        row.icons.push(`https://openweathermap.org/img/wn/${icon}@2x.png`)
-        row.conditions.push(item.weather?.[0]?.main ?? '')
-        if (item.wind?.speed != null) row.wind.push(item.wind.speed)
-        if (item.pop != null) row.pop.push(item.pop)
+async function fetchOpenMeteoForecastInsights(lat: number, lon: number): Promise<{ hourly: WeatherHourlyInsight[]; daily: ForecastDayItem[] }> {
+  const params = new URLSearchParams({
+    latitude: String(lat),
+    longitude: String(lon),
+    hourly: 'precipitation_probability,precipitation,rain,showers,wind_gusts_10m,dew_point_2m,vapour_pressure_deficit,soil_temperature_0cm,soil_moisture_0_to_1cm,uv_index',
+    daily: 'temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_sum,precipitation_hours,precipitation_probability_max,weather_code,wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant,uv_index_max,sunshine_duration,daylight_duration,shortwave_radiation_sum,et0_fao_evapotranspiration',
+    timezone: 'auto',
+    forecast_days: '5',
+    forecast_hours: '24',
+    wind_speed_unit: 'ms',
+  })
+
+  const response = await fetchWithTimeout(`${OPENMETEO_FORECAST}?${params.toString()}`, { method: 'GET' }, OPENMETEO_TIMEOUT_MS)
+  if (!response.ok) return { hourly: [], daily: [] }
+
+  const raw = await response.json()
+  const hourly = raw.hourly ?? {}
+  const times: string[] = hourly.time ?? []
+  const daily = raw.daily ?? {}
+  const dates: string[] = daily.time ?? []
+  const dayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
+  const monthNames: Record<number, string> = { 1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр', 5: 'Май', 6: 'Июн', 7: 'Июл', 8: 'Авг', 9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек' }
+
+  return {
+    hourly: times.slice(0, 24).map((time, index) => ({
+      time,
+      hourLabel: formatHourLabel(time),
+      precipitationProbability: roundNullable(hourly.precipitation_probability?.[index]),
+      precipitation: roundNullable(hourly.precipitation?.[index], 1),
+      windGusts: roundNullable(hourly.wind_gusts_10m?.[index], 1),
+      dewPoint: roundNullable(hourly.dew_point_2m?.[index], 1),
+      vapourPressureDeficit: roundNullable(hourly.vapour_pressure_deficit?.[index], 2),
+      soilTemperature: roundNullable(hourly.soil_temperature_0cm?.[index], 1),
+      soilMoisture: roundNullable(hourly.soil_moisture_0_to_1cm?.[index], 3),
+      uvIndex: roundNullable(hourly.uv_index?.[index], 1),
+    })),
+    daily: dates.slice(0, 5).map((dateStr, index) => {
+      const d = new Date(dateStr + 'T12:00:00Z')
+      const meta = openMeteoWeatherMeta(daily.weather_code?.[index])
+      const windSpeed = daily.wind_speed_10m_max?.[index] ?? null
+      const windGusts = roundNullable(daily.wind_gusts_10m_max?.[index], 1)
+      const precipitationSum = roundNullable(daily.precipitation_sum?.[index], 1)
+      const alert =
+        windGusts != null && windGusts > 12
+          ? 'СИЛЬНЫЕ ПОРЫВЫ ВЕТРА'
+          : windSpeed != null && windSpeed > 12
+            ? 'СИЛЬНЫЙ ВЕТЕР ОТЛОЖИТЕ УБОРКУ'
+            : precipitationSum != null && precipitationSum > 8
+              ? 'ОЖИДАЮТСЯ ОСАДКИ'
+              : undefined
+
+      return {
+        date: dateStr,
+        dayLabel: dayLabels[d.getUTCDay()],
+        dateLabel: `${d.getUTCDate()} ${monthNames[d.getUTCMonth() + 1]}`,
+        tempMin: Math.round(daily.temperature_2m_min?.[index] ?? daily.temperature_2m_max?.[index] ?? 0),
+        tempMax: Math.round(daily.temperature_2m_max?.[index] ?? daily.temperature_2m_min?.[index] ?? 0),
+        icon: meta.icon,
+        condition: meta.condition,
+        windSpeed,
+        pop: daily.precipitation_probability_max?.[index] ?? 0,
+        alert,
+        precipitationSum,
+        precipitationHours: roundNullable(daily.precipitation_hours?.[index], 1),
+        windGusts,
+        windDirection: windDegToLabel(daily.wind_direction_10m_dominant?.[index]),
+        uvIndexMax: roundNullable(daily.uv_index_max?.[index], 1),
+        sunshineDuration: roundNullable(daily.sunshine_duration?.[index]),
+        daylightDuration: roundNullable(daily.daylight_duration?.[index]),
+        shortwaveRadiationSum: roundNullable(daily.shortwave_radiation_sum?.[index], 1),
+        evapotranspiration: roundNullable(daily.et0_fao_evapotranspiration?.[index], 1),
+        apparentTempMin: roundNullable(daily.apparent_temperature_min?.[index]),
+        apparentTempMax: roundNullable(daily.apparent_temperature_max?.[index]),
       }
+    }),
+  }
+}
 
-      const dayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
-      const monthNames: Record<number, string> = { 1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр', 5: 'Май', 6: 'Июн', 7: 'Июл', 8: 'Авг', 9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек' }
-      const sorted = Array.from(byDay.entries()).sort((a, b) => a[0].localeCompare(b[0])).slice(0, 5)
+async function fetchOpenMeteoAirQuality(lat: number, lon: number): Promise<WeatherAirQuality | null> {
+  const params = new URLSearchParams({
+    latitude: String(lat),
+    longitude: String(lon),
+    current: 'european_aqi,pm10,pm2_5,ozone,dust,uv_index',
+    timezone: 'auto',
+    forecast_days: '1',
+  })
 
-      return sorted.map(([dateStr, row]) => {
-        const d = new Date(dateStr + 'T12:00:00Z')
-        const dayLabel = dayLabels[d.getUTCDay()]
-        const dateLabel = `${d.getUTCDate()} ${monthNames[d.getUTCMonth() + 1]}`
-        const mid = Math.floor(row.icons.length / 2)
-        const icon = row.icons[mid] ?? row.icons[0]
-        const condition = parseCondition(row.conditions[mid] ?? row.conditions[0])
-        const windAvg = row.wind.length ? row.wind.reduce((a: number, b: number) => a + b, 0) / row.wind.length : null
-        const popMax = row.pop.length ? Math.max(...row.pop) : 0
-        let alert: string | undefined
-        if (windAvg != null && windAvg > 12) alert = 'СИЛЬНЫЙ ВЕТЕР ОТЛОЖИТЕ УБОРКУ'
-        return {
-          date: dateStr,
-          dayLabel,
-          dateLabel,
-          tempMin: Math.round(row.min),
-          tempMax: Math.round(row.max),
-          icon,
-          condition,
-          windSpeed: windAvg,
-          pop: popMax,
-          alert,
-        }
-      })
-    } catch (retryError) {
-      console.error('Forecast Fallback API error:', retryError)
-      return []
+  try {
+    const response = await fetchWithTimeout(`${OPENMETEO_AIR_QUALITY}?${params.toString()}`, { method: 'GET' }, OPENMETEO_TIMEOUT_MS)
+    if (!response.ok) return null
+    const raw = await response.json()
+    const current = raw.current ?? {}
+    return {
+      europeanAqi: roundNullable(current.european_aqi),
+      pm10: roundNullable(current.pm10, 1),
+      pm25: roundNullable(current.pm2_5, 1),
+      ozone: roundNullable(current.ozone, 1),
+      dust: roundNullable(current.dust, 1),
+      uvIndex: roundNullable(current.uv_index, 1),
     }
+  } catch (error) {
+    console.error('Open-Meteo Air Quality error:', error)
+    return null
+  }
+}
+
+async function fetchOpenMeteoHistorySummary(lat: number, lon: number): Promise<WeatherHistorySummary | null> {
+  const endDate = isoDateShift(-1)
+  const startDate = isoDateShift(-7)
+  const params = new URLSearchParams({
+    latitude: String(lat),
+    longitude: String(lon),
+    start_date: startDate,
+    end_date: endDate,
+    daily: 'temperature_2m_max,temperature_2m_min,precipitation_sum,et0_fao_evapotranspiration',
+    timezone: 'auto',
+    wind_speed_unit: 'ms',
+  })
+
+  try {
+    const response = await fetchWithTimeout(`${OPENMETEO_ARCHIVE}?${params.toString()}`, { method: 'GET' }, OPENMETEO_TIMEOUT_MS)
+    if (!response.ok) return null
+    const raw = await response.json()
+    const daily = raw.daily ?? {}
+    const precip: number[] = ((daily.precipitation_sum ?? []) as unknown[]).filter((v: unknown): v is number => typeof v === 'number' && Number.isFinite(v))
+    const et0: number[] = ((daily.et0_fao_evapotranspiration ?? []) as unknown[]).filter((v: unknown): v is number => typeof v === 'number' && Number.isFinite(v))
+    const tMin: number[] = ((daily.temperature_2m_min ?? []) as unknown[]).filter((v: unknown): v is number => typeof v === 'number' && Number.isFinite(v))
+    const tMax: number[] = ((daily.temperature_2m_max ?? []) as unknown[]).filter((v: unknown): v is number => typeof v === 'number' && Number.isFinite(v))
+
+    return {
+      startDate,
+      endDate,
+      precipitationSum: precip.length ? roundNullable(precip.reduce((sum: number, value: number) => sum + value, 0), 1) : null,
+      rainyDays: precip.filter((value: number) => value > 0.2).length,
+      evapotranspirationSum: et0.length ? roundNullable(et0.reduce((sum: number, value: number) => sum + value, 0), 1) : null,
+      tempMin: tMin.length ? Math.round(Math.min(...tMin)) : null,
+      tempMax: tMax.length ? Math.round(Math.max(...tMax)) : null,
+    }
+  } catch (error) {
+    console.error('Open-Meteo Archive error:', error)
+    return null
+  }
+}
+
+export async function fetchWeatherInsights(lat: number, lon: number): Promise<WeatherInsights | null> {
+  const cached = getCachedWeatherInsights(lat, lon)
+  if (cached) return cached
+
+  try {
+    const [forecast, airQuality, history] = await Promise.all([
+      fetchOpenMeteoForecastInsights(lat, lon),
+      fetchOpenMeteoAirQuality(lat, lon),
+      fetchOpenMeteoHistorySummary(lat, lon),
+    ])
+    const insights: WeatherInsights = {
+      hourly: forecast.hourly,
+      daily: forecast.daily,
+      airQuality,
+      history,
+    }
+    setCachedWeatherInsights(lat, lon, insights)
+    return insights
+  } catch (error) {
+    console.error('Weather insights error:', error)
+    return cached
   }
 }
 

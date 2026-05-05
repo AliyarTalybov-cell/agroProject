@@ -6,10 +6,13 @@ import { isSupabaseConfigured } from '@/lib/supabase'
 import {
   fetchWeather,
   fetchForecast5,
+  fetchWeatherInsights,
   getWeatherIconUrl,
   conditionCategoryLabelRu,
   type WeatherData,
   type ForecastDayItem,
+  type WeatherInsights,
+  type WeatherHourlyInsight,
 } from '@/lib/weatherApi'
 import { parseLatLonFromGeolocationString } from '@/lib/yandexGeocode'
 import { RUSSIAN_CITIES } from '@/lib/cities'
@@ -20,9 +23,11 @@ import YandexMap from '@/components/YandexMap.vue'
 const { cityValue, setCity, city, country } = useWeatherCity()
 const weather = ref<WeatherData | null>(null)
 const forecastDays = ref<ForecastDayItem[]>([])
+const weatherInsights = ref<WeatherInsights | null>(null)
 const fields = ref<FieldRow[]>([])
 const crops = ref<CropRow[]>([])
 const loading = ref(true)
+const insightsLoading = ref(false)
 const error = ref(false)
 const pickedCoords = ref<{ lat: number; lon: number } | null>(null)
 const pickedCoordsCopied = ref(false)
@@ -96,12 +101,25 @@ const fieldsSortedForWeather = computed(() => [...fields.value].sort(compareFiel
 
 async function load() {
   loading.value = true
+  insightsLoading.value = false
   error.value = false
   const data = await fetchWeather(city(), country())
   weather.value = data
   forecastDays.value = []
+  weatherInsights.value = null
   if (data?.coord?.lat != null && data?.coord?.lon != null) {
-    forecastDays.value = await fetchForecast5(data.coord.lat, data.coord.lon)
+    const lat = data.coord.lat
+    const lon = data.coord.lon
+    forecastDays.value = await fetchForecast5(lat, lon)
+    insightsLoading.value = true
+    try {
+      weatherInsights.value = await fetchWeatherInsights(lat, lon)
+      if (weatherInsights.value?.daily.length) {
+        forecastDays.value = weatherInsights.value.daily
+      }
+    } finally {
+      insightsLoading.value = false
+    }
   }
   loading.value = false
   if (!data) error.value = true
@@ -203,6 +221,202 @@ const daylightDuration = computed(() => {
   return `${hrs} ч ${mins} мин`
 })
 
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return '—'
+  const totalMinutes = Math.round(seconds / 60)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return minutes ? `${hours} ч ${minutes} мин` : `${hours} ч`
+}
+
+function formatValue(value: number | null | undefined, unit = '', digits = 0): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${value.toFixed(digits).replace(/\.0+$/, '')}${unit}`
+}
+
+type HourlyRiskLevel = 'safe' | 'warn' | 'risk'
+
+type HourlyRiskAssessment = {
+  level: HourlyRiskLevel
+  probability: number
+  severity: number
+  score: number
+  action: string
+}
+
+function factorMatrix(probability: number, severity: number): HourlyRiskAssessment {
+  const score = probability * severity
+  const level: HourlyRiskLevel = score >= 13 ? 'risk' : score >= 7 ? 'warn' : 'safe'
+  const action =
+    score >= 20
+      ? 'Критично: остановить работы на открытом воздухе'
+      : score >= 13
+        ? 'Высокий риск: ограничить открытые/высотные работы'
+        : score >= 7
+          ? 'Средний риск: работать с мерами защиты'
+          : 'Низкий риск: работы допустимы'
+  return { level, probability, severity, score, action }
+}
+
+function assessHourlyRisk(hour: WeatherHourlyInsight): HourlyRiskAssessment {
+  const rainProb = hour.precipitationProbability ?? 0
+  const rainMm = hour.precipitation ?? 0
+  const gust = hour.windGusts ?? 0
+  const temp = hour.soilTemperature ?? weather.value?.temp ?? 0
+  const uv = hour.uvIndex ?? weatherInsights.value?.airQuality?.uvIndex ?? 0
+
+  // 1) Осадки: интенсивность + вероятность
+  let rainP = 1
+  let rainS = 1
+  if (rainMm > 6 || rainProb >= 70) {
+    rainP = 5
+    rainS = 4
+  } else if (rainMm >= 2 || rainProb >= 40) {
+    rainP = 4
+    rainS = 3
+  } else if (rainMm >= 0.5 || rainProb >= 20) {
+    rainP = 3
+    rainS = 2
+  }
+
+  // 2) Ветер: порывы
+  let windP = 1
+  let windS = 1
+  if (gust > 20) {
+    windP = 5
+    windS = 5
+  } else if (gust > 15) {
+    windP = 5
+    windS = 4
+  } else if (gust > 10) {
+    windP = 4
+    windS = 3
+  } else if (gust >= 6) {
+    windP = 3
+    windS = 2
+  }
+
+  // 3) Температура/микроклимат
+  let tempP = 1
+  let tempS = 1
+  if (temp > 32.5) {
+    tempP = 4
+    tempS = 4
+  } else if (temp < -30) {
+    tempP = 5
+    tempS = 5
+  } else if (temp <= -15) {
+    tempP = 4
+    tempS = 4
+  }
+
+  // 4) UV
+  let uvP = 1
+  let uvS = 1
+  if (uv >= 8) {
+    uvP = 4
+    uvS = 4
+  } else if (uv >= 6) {
+    uvP = 3
+    uvS = 3
+  } else if (uv >= 3) {
+    uvP = 2
+    uvS = 2
+  }
+
+  const probability = Math.max(rainP, windP, tempP, uvP)
+  const severity = Math.max(rainS, windS, tempS, uvS)
+  return factorMatrix(probability, severity)
+}
+
+function aqiLabel(value: number | null | undefined): string {
+  if (value == null) return 'Нет данных'
+  if (value <= 20) return 'Хорошо'
+  if (value <= 40) return 'Умеренно'
+  if (value <= 60) return 'Нежелательно'
+  if (value <= 80) return 'Плохо'
+  if (value <= 100) return 'Очень плохо'
+  return 'Экстремально'
+}
+
+const nextHours = computed<WeatherHourlyInsight[]>(() => weatherInsights.value?.hourly.slice(0, 8) ?? [])
+
+const nextHoursWithRisk = computed(() => {
+  return nextHours.value.map((hour) => ({ ...hour, risk: assessHourlyRisk(hour) }))
+})
+
+const bestSprayWindow = computed(() => {
+  const hours = weatherInsights.value?.hourly ?? []
+  const good = hours.find((h) => {
+    const gust = h.windGusts ?? 0
+    const rainRisk = h.precipitationProbability ?? 0
+    const precip = h.precipitation ?? 0
+    return gust <= 5 && rainRisk <= 30 && precip <= 0.2
+  })
+  if (!good) return { title: 'Окно не найдено', subtitle: 'В ближайшие 24 часа есть ограничения по ветру или осадкам', status: 'warn' }
+  return { title: good.hourLabel, subtitle: `Порывы ${formatValue(good.windGusts, ' м/с', 1)}, осадки ${formatValue(good.precipitationProbability, '%')}`, status: 'ok' }
+})
+
+const agroRiskCards = computed(() => {
+  const w = weather.value
+  const daily = forecastWithLabels.value[0]
+  const hourly = weatherInsights.value?.hourly ?? []
+  const maxRainRisk = Math.max(0, ...hourly.map((h) => h.precipitationProbability ?? 0))
+  const maxGust = Math.max(w?.windGusts ?? 0, daily?.windGusts ?? 0, ...hourly.map((h) => h.windGusts ?? 0))
+  const soilMoisture = w?.soilMoisture ?? hourly.find((h) => h.soilMoisture != null)?.soilMoisture ?? null
+  const vpd = w?.vapourPressureDeficit ?? hourly.find((h) => h.vapourPressureDeficit != null)?.vapourPressureDeficit ?? null
+  const et0 = daily?.evapotranspiration ?? null
+
+  return [
+    {
+      title: 'Опрыскивание',
+      value: bestSprayWindow.value.status === 'ok' ? `с ${bestSprayWindow.value.title}` : 'отложить',
+      text: bestSprayWindow.value.subtitle,
+      status: bestSprayWindow.value.status,
+    },
+    {
+      title: 'Осадки 24ч',
+      value: `${Math.round(maxRainRisk)}%`,
+      text: maxRainRisk > 60 ? 'Высокий риск дождя, проверьте план работ' : 'Критичных осадков не видно',
+      status: maxRainRisk > 60 ? 'risk' : maxRainRisk > 35 ? 'warn' : 'ok',
+    },
+    {
+      title: 'Порывы ветра',
+      value: formatValue(maxGust, ' м/с', 1),
+      text: maxGust > 10 ? 'Лучше не проводить обработку и точные работы' : 'Условия по ветру рабочие',
+      status: maxGust > 10 ? 'risk' : maxGust > 6 ? 'warn' : 'ok',
+    },
+    {
+      title: 'Влага почвы',
+      value: formatValue(soilMoisture, '', 3),
+      text: soilMoisture == null ? 'Нет данных по верхнему слою' : soilMoisture < 0.18 ? 'Верхний слой сухой' : 'Верхний слой в норме',
+      status: soilMoisture == null ? 'muted' : soilMoisture < 0.18 ? 'warn' : 'ok',
+    },
+    {
+      title: 'Испарение ET₀',
+      value: formatValue(et0, ' мм', 1),
+      text: et0 != null && et0 > 4 ? 'Высокая потеря влаги за день' : 'Потеря влаги умеренная',
+      status: et0 != null && et0 > 4 ? 'warn' : 'ok',
+    },
+    {
+      title: 'Стресс растений',
+      value: formatValue(vpd, ' кПа', 2),
+      text: vpd != null && vpd > 1.6 ? 'Воздух сушит лист, следите за поливом' : 'VPD в спокойной зоне',
+      status: vpd != null && vpd > 1.6 ? 'warn' : 'ok',
+    },
+  ]
+})
+
+const weatherHistoryCards = computed(() => {
+  const h = weatherInsights.value?.history
+  if (!h) return []
+  return [
+    { label: 'Осадки за 7 дней', value: formatValue(h.precipitationSum, ' мм', 1), sub: `${h.rainyDays} дн. с дождем` },
+    { label: 'Испарение за 7 дней', value: formatValue(h.evapotranspirationSum, ' мм', 1), sub: 'ET₀ по архиву' },
+    { label: 'Температурный диапазон', value: `${formatValue(h.tempMin, '°')} / ${formatValue(h.tempMax, '°')}`, sub: `${h.startDate} — ${h.endDate}` },
+  ]
+})
+
 /** Класс сценки неба по condition из API (Clear, Clouds, Rain, Snow, Mist и т.д.) */
 const weatherSkyClass = computed(() => {
   const c = (weather.value?.condition ?? '').toLowerCase()
@@ -236,7 +450,7 @@ const heroRecommendation = computed(() => {
   const data = weather.value
   if (!data) return { title: '', items: [] }
   const wind = data.windSpeed ?? 0
-  const precip = data.clouds != null ? 100 - data.clouds : 90
+  const precip = data.precProbability ?? 0
   const okForSpray = wind <= 5 && (data.temp ?? 15) >= 5 && (data.temp ?? 15) <= 28
   const title = okForSpray ? 'Идеально для опрыскивания' : wind > 5 ? 'Отложите опрыскивание' : 'Умеренные условия'
   const items = [
@@ -374,6 +588,15 @@ const weatherMapFieldMarkers = computed(() => {
 <template>
   <section class="weather-page">
     <header class="header-area header-weather page-enter-item">
+      <div class="weather-page-title">
+        <span class="weather-page-title-icon" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>
+        </span>
+        <div>
+          <h1>АгроМетео</h1>
+          <p>Мониторинг условий для полей и работ</p>
+        </div>
+      </div>
       <div class="weather-header-actions">
         <select
           :value="cityValue"
@@ -392,6 +615,8 @@ const weatherMapFieldMarkers = computed(() => {
     </div>
     <div v-else-if="error" class="weather-detail-error">Не удалось загрузить погоду</div>
     <template v-else-if="weather">
+      <div class="weather-dashboard-layout">
+        <main class="weather-dashboard-main">
       <!-- Герой-карточка как в design: волна + локация | температура | рекомендация -->
       <div class="weather-hero page-enter-item" style="--enter-delay: 60ms">
         <svg class="weather-hero-wave" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 320" preserveAspectRatio="none" aria-hidden="true">
@@ -405,7 +630,11 @@ const weatherMapFieldMarkers = computed(() => {
             </div>
             <h2 class="weather-hero-city">{{ weather.cityName }}</h2>
             <p v-if="weather.coord" class="weather-hero-coords">Координаты: {{ weather.coord.lat?.toFixed(4) }}° N, {{ weather.coord.lon?.toFixed(4) }}° E</p>
-            <p class="weather-hero-datetime">Сегодня, {{ dateStr }} • {{ timeStr }}</p>
+            <p class="weather-hero-datetime">
+              <span>Сегодня, {{ dateStr }}</span>
+              <span class="weather-hero-datetime-sep" aria-hidden="true">•</span>
+              <span>{{ timeStr }}</span>
+            </p>
           </div>
           <div class="weather-hero-temp-block">
             <img class="weather-current-icon" :src="getWeatherIconUrl(weather.icon)" alt="" width="96" height="96" />
@@ -430,7 +659,7 @@ const weatherMapFieldMarkers = computed(() => {
         </div>
       </div>
 
-      <h2 class="weather-section-title page-enter-item" style="--enter-delay: 120ms">Подробные показатели</h2>
+      <h2 class="weather-section-title weather-section-title--main page-enter-item" style="--enter-delay: 120ms">Подробные показатели</h2>
       <div class="weather-indicators-grid page-enter-item" style="--enter-delay: 180ms">
         <div class="weather-indicator-card">
           <div class="weather-indicator-icon weather-icon-wind">
@@ -439,7 +668,7 @@ const weatherMapFieldMarkers = computed(() => {
           <div>
             <div class="weather-indicator-label">Ветер</div>
             <div class="weather-indicator-value">{{ weather.windSpeed != null ? weather.windSpeed : '—' }} <span class="weather-indicator-muted">м/с, {{ weather.windDirection || '—' }}</span></div>
-            <div class="weather-indicator-sub">{{ windStrong ? 'Осторожно' : 'Безопасно для работ' }}</div>
+            <div class="weather-indicator-sub">Порывы: {{ weather.windGusts != null ? weather.windGusts + ' м/с' : '—' }}</div>
           </div>
         </div>
         <div class="weather-indicator-card">
@@ -454,8 +683,8 @@ const weatherMapFieldMarkers = computed(() => {
           <div class="weather-indicator-icon weather-icon-pressure"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></svg></div>
           <div>
             <div class="weather-indicator-label">Давление</div>
-            <div class="weather-indicator-value">{{ weather.pressure != null ? weather.pressure : '—' }}<span class="weather-indicator-muted"> мм</span></div>
-            <div class="weather-indicator-sub">Привед. к морю: {{ weather.meanSeaLevelPressure != null ? weather.meanSeaLevelPressure + ' мм' : '—' }}</div>
+            <div class="weather-indicator-value">{{ weather.pressure != null ? weather.pressure : '—' }}<span class="weather-indicator-muted"> гПа</span></div>
+            <div class="weather-indicator-sub">Привед. к морю: {{ weather.meanSeaLevelPressure != null ? weather.meanSeaLevelPressure + ' гПа' : '—' }}</div>
           </div>
         </div>
         <div class="weather-indicator-card">
@@ -470,9 +699,9 @@ const weatherMapFieldMarkers = computed(() => {
           <div class="weather-indicator-icon weather-icon-clouds"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></svg></div>
           <div>
             <div class="weather-indicator-label">Облачность</div>
-            <div class="weather-indicator-value">{{ weather.clouds != null ? weather.clouds : 'PRO API' }}<span class="weather-indicator-muted" v-if="weather.clouds != null">%</span></div>
+            <div class="weather-indicator-value">{{ weather.clouds != null ? weather.clouds : '—' }}<span class="weather-indicator-muted" v-if="weather.clouds != null">%</span></div>
             <div class="weather-indicator-sub" v-if="weather.clouds != null">Прогресс: <span class="weather-progress"><span class="weather-progress-fill" :style="{ width: (weather.clouds ?? 0) + '%' }"></span></span></div>
-            <div class="weather-indicator-sub" v-else>Недоступно по тарифу</div>
+            <div class="weather-indicator-sub" v-else>Нет данных</div>
           </div>
         </div>
         <div class="weather-indicator-card">
@@ -487,27 +716,18 @@ const weatherMapFieldMarkers = computed(() => {
           <div class="weather-indicator-icon weather-icon-uv"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" /></svg></div>
           <div>
             <div class="weather-indicator-label">УФ-Индекс</div>
-            <div class="weather-indicator-value">{{ weather.uvIndex != null ? weather.uvIndex : 'PRO API' }} <span v-if="weather.uvIndex != null" class="weather-badge" :class="(weather.uvIndex || 0) > 5 ? 'weather-badge-high' : 'weather-badge-low'">{{ (weather.uvIndex || 0) > 5 ? 'Высокий' : 'Низкий' }}</span></div>
-            <div class="weather-indicator-sub">{{ weather.uvIndex != null ? ((weather.uvIndex || 0) > 5 ? 'Требуется защита' : 'Защита не требуется') : 'Недоступно по тарифу' }}</div>
+            <div class="weather-indicator-value">{{ forecastWithLabels[0]?.uvIndexMax ?? weatherInsights?.airQuality?.uvIndex ?? weather.uvIndex ?? '—' }} <span v-if="forecastWithLabels[0]?.uvIndexMax != null || weatherInsights?.airQuality?.uvIndex != null || weather.uvIndex != null" class="weather-badge" :class="((forecastWithLabels[0]?.uvIndexMax ?? weatherInsights?.airQuality?.uvIndex ?? weather.uvIndex ?? 0) > 5) ? 'weather-badge-high' : 'weather-badge-low'">{{ ((forecastWithLabels[0]?.uvIndexMax ?? weatherInsights?.airQuality?.uvIndex ?? weather.uvIndex ?? 0) > 5) ? 'Высокий' : 'Низкий' }}</span></div>
+            <div class="weather-indicator-sub">{{ ((forecastWithLabels[0]?.uvIndexMax ?? weatherInsights?.airQuality?.uvIndex ?? weather.uvIndex ?? 0) > 5) ? 'Требуется защита' : 'Контроль УФ по прогнозу' }}</div>
           </div>
         </div>
-        <div class="weather-indicator-card">
-          <div class="weather-indicator-icon weather-icon-sun"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v8" /><path d="m4.93 10.93 1.41 1.41" /><path d="M2 18h2" /><path d="M20 18h2" /><path d="m19.07 10.93-1.41 1.41" /><path d="M22 22H2" /><path d="m8 6 4-4 4 4" /><path d="M16 18a4 4 0 0 0-8 0" /></svg></div>
-          <div>
-            <div class="weather-indicator-label">Солнце</div>
-            <div class="weather-indicator-value weather-indicator-value-sm"><span>Восход: {{ weather.sunrise || '—' }}</span><br><span>Закат: {{ weather.sunset || '—' }}</span></div>
-            <div class="weather-indicator-sub">Световой день: {{ daylightDuration }}</div>
-          </div>
-        </div>
-        
         <div class="weather-indicator-card">
           <div class="weather-indicator-icon weather-icon-soil" style="color: #8B4513; background: rgba(139,69,19,0.15)">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" /></svg>
           </div>
           <div>
             <div class="weather-indicator-label">Темп. почвы</div>
-            <div class="weather-indicator-value">{{ weather.soilTemperature != null ? weather.soilTemperature : 'PRO API' }}<span class="weather-indicator-muted" v-if="weather.soilTemperature != null">°C</span></div>
-            <div class="weather-indicator-sub">{{ weather.soilTemperature != null ? 'Слой: 10 см' : 'Недоступно по тарифу' }}</div>
+            <div class="weather-indicator-value">{{ weather.soilTemperature != null ? weather.soilTemperature : '—' }}<span class="weather-indicator-muted" v-if="weather.soilTemperature != null">°C</span></div>
+            <div class="weather-indicator-sub">{{ weather.soilTemperature != null ? 'Поверхность почвы' : 'Нет данных' }}</div>
           </div>
         </div>
         
@@ -517,8 +737,8 @@ const weatherMapFieldMarkers = computed(() => {
           </div>
           <div>
             <div class="weather-indicator-label">Влажн. почвы</div>
-            <div class="weather-indicator-value">{{ weather.soilMoisture != null ? weather.soilMoisture : 'PRO API' }}</div>
-            <div class="weather-indicator-sub">{{ weather.soilMoisture != null ? 'Доля влаги' : 'Недоступно по тарифу' }}</div>
+            <div class="weather-indicator-value">{{ weather.soilMoisture != null ? weather.soilMoisture : '—' }}</div>
+            <div class="weather-indicator-sub">{{ weather.soilMoisture != null ? 'Верхний слой 0–1 см' : 'Нет данных' }}</div>
           </div>
         </div>
 
@@ -528,8 +748,8 @@ const weatherMapFieldMarkers = computed(() => {
           </div>
           <div>
             <div class="weather-indicator-label">Листья</div>
-            <div class="weather-indicator-value">{{ weather.leafWetnessIndex != null ? (weather.leafWetnessIndex ? 'Мокрые' : 'Сухие') : 'PRO API' }}</div>
-            <div class="weather-indicator-sub">{{ weather.leafWetnessIndex != null ? 'Риск болезней' : 'Недоступно по тарифу' }}</div>
+            <div class="weather-indicator-value">{{ weather.vapourPressureDeficit != null ? weather.vapourPressureDeficit : '—' }}<span class="weather-indicator-muted" v-if="weather.vapourPressureDeficit != null"> кПа</span></div>
+            <div class="weather-indicator-sub">{{ weather.vapourPressureDeficit != null && weather.vapourPressureDeficit > 1.6 ? 'Сухой воздух, стресс листа' : 'VPD / риск пересыхания' }}</div>
           </div>
         </div>
 
@@ -538,115 +758,89 @@ const weatherMapFieldMarkers = computed(() => {
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
           </div>
           <div>
-            <div class="weather-indicator-label">Магнитные бури</div>
-            <div class="weather-indicator-value">{{ weather.kpIndex != null ? weather.kpIndex : 'PRO API' }}<span class="weather-indicator-muted" v-if="weather.kpIndex != null"> Kp</span></div>
-            <div class="weather-indicator-sub">{{ weather.kpIndex != null ? (weather.kpIndex >= 4 ? 'Сбои навигации RTK' : 'Фон спокойный') : 'Недоступно по тарифу' }}</div>
+            <div class="weather-indicator-label">Осадки сейчас</div>
+            <div class="weather-indicator-value">{{ weather.precipitation != null ? weather.precipitation : '—' }}<span class="weather-indicator-muted" v-if="weather.precipitation != null"> мм</span></div>
+            <div class="weather-indicator-sub">Дождь: {{ weather.rain != null ? weather.rain + ' мм' : '—' }}, ливни: {{ weather.showers != null ? weather.showers + ' мм' : '—' }}</div>
           </div>
         </div>
 
-        <div class="weather-indicator-card">
+        <div class="weather-indicator-card weather-indicator-card--bottom weather-indicator-card--sun">
+          <div class="weather-indicator-icon weather-icon-sun"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v8" /><path d="m4.93 10.93 1.41 1.41" /><path d="M2 18h2" /><path d="M20 18h2" /><path d="m19.07 10.93-1.41 1.41" /><path d="M22 22H2" /><path d="m8 6 4-4 4 4" /><path d="M16 18a4 4 0 0 0-8 0" /></svg></div>
+          <div>
+            <div class="weather-indicator-label">Солнце</div>
+            <div class="weather-indicator-value weather-indicator-value-sun">
+              <span>Вос: {{ weather.sunrise || '—' }}</span>
+              <span>Зак: {{ weather.sunset || '—' }}</span>
+            </div>
+            <div class="weather-indicator-sub weather-indicator-sub-sun">День: {{ daylightDuration }}</div>
+          </div>
+        </div>
+
+        <div class="weather-indicator-card weather-indicator-card--bottom weather-indicator-card--dew">
           <div class="weather-indicator-icon weather-icon-dew" style="color: #2563eb; background: rgba(37,99,235,0.15)">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7l-3.3 3.3a4.67 4.67 0 0 0 0 6.6 4.67 4.67 0 0 0 6.6 0 4.67 4.67 0 0 0 0-6.6Z"/></svg>
           </div>
           <div>
             <div class="weather-indicator-label">Точка росы</div>
-            <div class="weather-indicator-value">{{ weather.dewPoint != null ? weather.dewPoint : 'PRO API' }}<span class="weather-indicator-muted" v-if="weather.dewPoint != null">°C</span></div>
-            <div class="weather-indicator-sub">{{ weather.dewPoint != null ? 'Риск конденсата' : 'Недоступно по тарифу' }}</div>
+            <div class="weather-indicator-value weather-indicator-value-dew">
+              <span>{{ weather.dewPoint != null ? weather.dewPoint : '—' }}<span class="weather-indicator-muted" v-if="weather.dewPoint != null">°C</span></span>
+              <span v-if="weather.dewPoint != null" class="weather-dew-pill">Риск конденсата и росы</span>
+            </div>
+            <div v-if="weather.dewPoint == null" class="weather-indicator-sub">Нет данных</div>
           </div>
         </div>
       </div>
 
-      <h2 class="weather-section-title page-enter-item" style="--enter-delay: 280ms">Прогноз на 5 дней</h2>
-      <div class="weather-forecast-strip page-enter-item" style="--enter-delay: 320ms">
+      <h2 class="weather-section-title weather-section-title--main page-enter-item" style="--enter-delay: 220ms">Агро-условия на ближайшие сутки</h2>
+      <div class="weather-agro-grid page-enter-item" style="--enter-delay: 240ms">
         <div
-          v-for="day in forecastWithLabels"
-          :key="day.date"
-          class="weather-forecast-card"
-          :class="{ 'weather-forecast-card-alert': day.alert }"
+          v-for="card in agroRiskCards"
+          :key="card.title"
+          class="weather-agro-card"
+          :class="`weather-agro-card--${card.status}`"
         >
-          <div class="weather-forecast-day">{{ day.displayLabel }}</div>
-          <div class="weather-forecast-date">{{ day.dateLabel }}</div>
-          <img :src="getWeatherIconUrl(day.icon)" alt="" width="40" height="40" style="margin-bottom:12px;" />
-          <div class="weather-forecast-temps">
-            <span class="weather-forecast-temp-high">{{ day.tempMax }}°</span>
-            <span class="weather-forecast-temp-low">{{ day.tempMin }}°</span>
-          </div>
-          <div v-if="day.alert" class="weather-forecast-alert">{{ day.alert }}</div>
+          <div class="weather-agro-card-label">{{ card.title }}</div>
+          <div class="weather-agro-card-value">{{ card.value }}</div>
+          <p>{{ card.text }}</p>
         </div>
       </div>
 
-      <!-- Карта -->
-      <h2 class="weather-section-title page-enter-item" style="--enter-delay: 360ms">Карта наблюдения полей</h2>
-      <div class="page-enter-item weather-map-wrap" style="--enter-delay: 400ms">
-        <YandexMap
-          :lat="weather.coord?.lat ?? 55.7558"
-          :lon="weather.coord?.lon ?? 37.6176"
-          :zoom="10"
-          :field-markers="weatherMapFieldMarkers"
-          :fit-field-markers="weatherMapFieldMarkers.length > 0"
-          @pick="(c) => pickedCoords = c"
-        />
-        <div v-if="pickedCoords" class="ymap-picked-coords">
-          <div class="ymap-picked-coords-main">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
-            <span
-              >Выбрана точка:
-              <strong>{{ pickedCoords.lat.toFixed(5) }}° N, {{ pickedCoords.lon.toFixed(5) }}° E</strong></span
+      <div class="weather-insights-row page-enter-item" style="--enter-delay: 260ms">
+        <div class="weather-insight-panel card-rounded">
+          <div class="weather-insight-head">
+            <div>
+              <h2 class="weather-block-title">
+                Почасовой риск работ
+                <span class="weather-help" tabindex="0" aria-label="Как рассчитывается риск">
+                  <span class="weather-help-icon">?</span>
+                  <span class="weather-help-tooltip">
+                    Риск = Вероятность (1-5) x Тяжесть (1-5).<br>
+                    Факторы: осадки (мм/ч и %), порывы ветра, температура, UV.<br>
+                    Ключевые пороги: ветер &gt;10 м/с, дождь &gt;2 мм/ч или &gt;40%, жара &gt;32.5°C, UV &gt;=6.<br>
+                    Итог: 1-6 низкий, 7-12 средний, 13-25 высокий.
+                  </span>
+                </span>
+              </h2>
+              <p class="weather-block-subtitle">Осадки, порывы ветра, почва и УФ на ближайшие часы.</p>
+            </div>
+            <span v-if="insightsLoading" class="weather-mini-badge">обновляем</span>
+          </div>
+          <div v-if="nextHoursWithRisk.length" class="weather-hourly-strip">
+            <div
+              v-for="hour in nextHoursWithRisk"
+              :key="hour.time"
+              class="weather-hourly-card"
+              :class="`weather-hourly-card--${hour.risk.level}`"
+              :title="hour.risk.action"
             >
+              <div class="weather-hourly-time">{{ hour.hourLabel }}</div>
+              <div class="weather-hourly-main">{{ hour.precipitationProbability ?? 0 }}%</div>
+              <div class="weather-hourly-sub">риск {{ hour.risk.score }}/25</div>
+              <div class="weather-hourly-meta">порывы {{ formatValue(hour.windGusts, ' м/с', 1) }}</div>
+              <div class="weather-hourly-meta">почва {{ formatValue(hour.soilTemperature, '°', 1) }} • UV {{ formatValue(hour.uvIndex, '') }}</div>
+            </div>
           </div>
-          <button
-            type="button"
-            class="ymap-copy-coords-btn"
-            :title="pickedCoordsCopied ? 'Скопировано' : 'Копировать координаты'"
-            :aria-label="pickedCoordsCopied ? 'Скопировано в буфер' : 'Копировать координаты в буфер обмена'"
-            @click="copyPickedCoords"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-              <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-            </svg>
-          </button>
-        </div>
-        <p class="weather-map-hint">
-          Поля на карте показаны по их геометрии: точечные — зелёными метками, контурные — зелёными полигонами. Красная метка —
-          точка, которую вы выбрали на карте или в поиске.
-        </p>
-      </div>
-
-      <div class="weather-recommendations card-rounded weather-anim-card" style="--anim-delay: 450ms">
-        <h2 class="weather-block-title">Рекомендации по культурам на сегодня</h2>
-        <p class="weather-block-subtitle">Блок в стадии разработки.</p>
-        <div class="weather-dev-widget">
-          <!-- Виджет в разработке: как на странице "Обзор", но компактнее -->
-          <svg
-            class="weather-wip-loader"
-            viewBox="0 0 64 64"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            aria-hidden="true"
-          >
-            <path pathLength="360" d="M 56.3752 2 H 7.6248 C 7.2797 2 6.9999 2.268 6.9999 2.5985 V 61.4015 C 6.9999 61.7321 7.2797 62 7.6248 62 H 56.3752 C 56.7203 62 57.0001 61.7321 57.0001 61.4015 V 2.5985 C 57.0001 2.268 56.7203 2 56.3752 2 Z" />
-            <path pathLength="360" d="M 55.7503 60.803 H 8.2497 V 3.1971 H 55.7503 V 60.803 Z" />
-            <path pathLength="360" d="M 29.7638 47.6092 C 29.4971 47.3997 29.1031 47.4368 28.8844 47.6925 C 28.6656 47.9481 28.7046 48.3253 28.9715 48.5348 L 32.8768 51.6023 C 32.9931 51.6936 33.1333 51.738 33.2727 51.738 C 33.4533 51.738 33.6328 51.6634 33.7562 51.519 C 33.975 51.2634 33.936 50.8862 33.6692 50.6767 L 29.7638 47.6092 Z" />
-            <path pathLength="360" d="M 42.3557 34.9046 C 38.4615 34.7664 36.9617 37.6749 36.7179 39.2213 L 35.8587 44.2341 C 35.8029 44.5604 36.0335 44.8681 36.374 44.9218 C 36.4084 44.9272 36.4424 44.9299 36.476 44.9299 C 36.7766 44.9299 37.0415 44.7214 37.0918 44.4281 L 37.9523 39.4076 C 37.9744 39.2673 38.544 35.9737 42.311 36.1007 C 42.6526 36.1124 42.9454 35.8544 42.9577 35.524 C 42.9702 35.1937 42.7006 34.9164 42.3557 34.9046 Z" />
-            <path pathLength="360" d="M 13.1528 55.5663 C 13.1528 55.8968 13.4326 56.1648 13.7777 56.1648 H 50.2223 C 50.5674 56.1648 50.8472 55.8968 50.8472 55.5663 V 8.4339 C 50.8472 8.1034 50.5674 7.8354 50.2223 7.8354 H 13.7777 C 13.4326 7.8354 13.1528 8.1034 13.1528 8.4339 V 55.5663 Z" />
-            <path pathLength="360" d="M 25.3121 26.5567 C 24.9717 27.4941 25.0042 28.8167 25.0634 29.5927 C 23.6244 29.8484 20.3838 31.0913 18.9478 37.0352 C 18.5089 37.5603 17.8746 38.1205 17.2053 38.7114 C 16.2598 39.546 15.2351 40.4515 14.4027 41.5332 V 20.5393 H 23.7222 C 23.7178 22.6817 24.1666 25.4398 25.3121 26.5567 Z" />
-            <path pathLength="360" d="M 49.5975 43.4819 C 48.3838 39.1715 46.3138 33.6788 43.4709 29.7736 C 42.6161 28.5995 40.7095 27.0268 39.6852 26.1818 L 39.6352 26.1405 C 39.4176 24.783 39.1158 22.5803 38.8461 20.5394 H 49.5976 V 43.4819 Z" />
-            <path pathLength="360" d="M 29.8161 45.151 C 29.0569 44.7516 28.3216 44.4344 27.6455 44.185 C 27.6488 44.0431 27.6397 43.8917 27.6478 43.7715 C 27.9248 39.7036 30.4491 36.2472 35.1502 33.4979 C 38.7221 31.4091 42.2682 30.5427 42.3036 30.5341 C 42.3563 30.5213 42.416 30.5119 42.4781 30.5037 C 42.6695 30.7681 42.8577 31.0407 43.0425 31.3217 C 42.1523 31.4917 39.6591 32.0721 37.0495 33.6188 C 34.2273 35.2912 30.7775 38.4334 29.9445 44.0105 C 29.9025 44.2924 29.8211 45.0524 29.8161 45.151 Z" />
-            <path pathLength="360" d="M 32.2021 33.6346 C 29.1519 33.8959 26.6218 32.5634 25.6481 31.4461 C 25.9518 30.3095 28.4436 28.4847 30.2282 27.4911 C 30.436 27.3755 30.5563 27.1556 30.5372 26.9261 L 30.4311 25.6487 C 30.5264 25.6565 30.622 25.6621 30.7181 25.6642 L 30.8857 25.6672 C 32.0645 25.6912 33.2094 25.302 34.1059 24.5658 L 34.112 24.5607 L 34.4024 32.5344 C 33.8302 32.8724 33.2863 33.2227 32.7728 33.5852 C 32.5227 33.6032 32.3068 33.6258 32.2021 33.6346 Z" />
-            <path pathLength="360" d="M 27.8056 17.9207 C 27.8041 17.9207 27.8025 17.9207 27.8012 17.9207 L 27.0155 17.9259 L 26.8123 15.4718 C 26.8174 15.4609 26.8238 15.4501 26.8282 15.4389 C 27.2218 15.0856 28.158 14.3463 29.1923 14.252 C 31.0985 14.0778 33.442 14.3386 33.8213 16.5565 L 34.0564 23.0299 L 33.2927 23.6566 C 32.6306 24.2004 31.7888 24.4889 30.9118 24.4703 L 30.7437 24.4673 C 29.7977 24.4473 28.8841 24.0555 28.2376 23.3933 C 27.9671 23.1152 27.748 22.7967 27.5871 22.4474 C 27.426 22.0961 27.3292 21.7272 27.2989 21.3494 L 27.1145 19.1223 L 27.8097 19.1178 C 28.1548 19.1154 28.4327 18.8457 28.4303 18.5152 C 28.4278 18.186 28.1487 17.9207 27.8056 17.9207 Z" />
-            <path pathLength="360" d="M 38.4358 26.5433 C 38.4589 26.6829 38.5326 26.8101 38.6443 26.9026 L 38.8697 27.0889 C 39.5266 27.6307 40.6931 28.5938 41.5811 29.4829 C 40.6409 29.7428 38.2545 30.4762 35.6283 31.8516 L 35.3161 23.281 C 35.316 23.2777 35.3158 23.2743 35.3157 23.271 L 35.0692 16.4785 C 35.0682 16.455 35.0659 16.4316 35.0621 16.4082 C 34.6703 13.9692 32.4875 12.7498 29.0741 13.0603 C 28.5659 13.1067 28.0885 13.255 27.6614 13.4468 C 28.321 12.6324 29.4568 11.8605 31.3984 11.8605 C 32.892 11.8605 34.2086 12.4323 35.3118 13.5599 C 36.3478 14.6187 36.9981 15.9821 37.1923 17.5023 C 37.5097 19.987 38.0932 24.4655 38.4358 26.5433 Z" />
-            <path pathLength="360" d="M 25.6994 17.1716 L 26.053 21.4425 C 26.094 21.9536 26.225 22.4539 26.4434 22.93 C 26.6613 23.403 26.9574 23.8335 27.3242 24.2106 C 27.833 24.7317 28.4641 25.128 29.1549 25.3746 L 29.2609 26.6526 C 28.8063 26.9219 27.959 27.4459 27.0978 28.0926 C 26.7982 28.3177 26.5261 28.5365 26.2766 28.7503 C 26.2677 27.9385 26.3477 27.0941 26.6128 26.699 C 26.7087 26.5561 26.7368 26.3807 26.6898 26.2168 C 26.6428 26.0528 26.5253 25.9159 26.3667 25.8398 C 25.2812 25.3198 24.639 20.7943 25.134 18.7283 C 25.2757 18.1366 25.4822 17.6126 25.6994 17.1716 Z" />
-            <path pathLength="360" d="M 14.4025 54.9677 V 43.9616 C 15.1297 42.1745 16.6798 40.8031 18.052 39.5917 C 18.5756 39.1296 19.0771 38.6852 19.5054 38.243 C 20.1455 38.2763 21.8243 38.4721 22.2856 39.611 C 22.526 40.696 22.9861 41.6387 23.6573 42.3985 C 23.7809 42.5383 23.9573 42.6104 24.1347 42.6104 C 24.2773 42.6104 24.4206 42.5639 24.5381 42.4688 C 24.8014 42.2553 24.8343 41.8776 24.6115 41.6252 C 22.2978 39.0062 23.8504 34.5445 23.8663 34.4997 C 23.9782 34.1872 23.8046 33.8471 23.4785 33.7397 C 23.1507 33.6321 22.7964 33.7986 22.6843 34.1111 C 22.6657 34.1631 22.2262 35.4024 22.1149 37.0253 C 22.0992 37.2529 22.0927 37.476 22.0916 37.6958 C 21.4663 37.3478 20.7678 37.1827 20.215 37.1057 C 21.266 32.9598 23.2109 31.5061 24.4867 30.9973 C 24.4164 31.2001 24.3769 31.3974 24.3692 31.5894 C 24.3639 31.7208 24.404 31.8501 24.4831 31.9575 C 25.0708 32.7551 26.1363 33.5207 27.4065 34.0584 C 28.2686 34.4232 29.5576 34.8194 31.1457 34.861 C 28.2499 37.3877 26.6257 40.39 26.4009 43.6936 C 26.3992 43.7195 26.3962 43.7461 26.3928 43.7729 C 25.1023 43.399 24.2167 43.2969 24.1252 43.2873 C 23.9888 43.2728 23.8487 43.3023 23.7304 43.3716 C 23.0495 43.7702 22.591 44.3922 22.4046 45.1703 C 22.2331 45.8868 22.3106 46.6885 22.6019 47.3807 C 22.0046 47.6438 21.3269 47.7784 20.7914 47.848 C 19.4939 45.6912 20.8219 44.6351 20.989 44.5146 C 21.2655 44.3207 21.3274 43.9492 21.1268 43.6822 C 20.9253 43.4139 20.5346 43.3533 20.2546 43.5462 C 19.4539 44.0983 18.406 45.6195 19.3656 47.7888 C 18.685 47.5329 17.6255 46.8145 17.8055 44.832 C 17.8836 43.9718 18.1884 43.3352 18.7117 42.9403 C 19.5815 42.2834 20.8198 42.451 20.8366 42.4537 C 21.1748 42.503 21.4952 42.2819 21.5494 41.9563 C 21.6037 41.6297 21.3713 41.3231 21.0306 41.2712 C 20.9582 41.2599 19.2558 41.0142 17.9494 41.9917 C 17.1375 42.5992 16.6703 43.5199 16.5605 44.7282 C 16.1991 48.7092 19.7376 49.1126 19.7732 49.116 C 19.7951 49.1182 22.2326 49.1079 23.7782 48.1211 C 23.8053 48.1039 24.4158 47.7528 24.4158 47.7528 C 24.5214 47.8841 24.6624 48.0532 24.8294 48.2438 L 22.3598 49.4874 C 22.1544 49.5908 22.0257 49.7949 22.0257 50.0171 V 51.8127 C 22.0257 52.1432 22.3054 52.4112 22.6505 52.4112 S 23.2754 52.1432 23.2754 51.8127 V 50.3786 L 25.6987 49.1582 C 26.021 49.4709 26.3894 49.7985 26.7963 50.1188 L 24.6627 50.7144 C 24.4768 50.7663 24.3269 50.8977 24.2559 51.0702 L 23.3968 53.1651 C 23.2704 53.4729 23.4286 53.8202 23.7498 53.9409 C 23.8248 53.9694 23.9023 53.9825 23.9782 53.9825 C 24.2277 53.9825 24.4632 53.8384 24.5599 53.6028 L 25.307 51.7814 L 28.0879 51.0053 C 28.5412 51.2713 29.0239 51.51 29.5341 51.6979 C 29.6079 51.7252 29.6836 51.738 29.7582 51.738 C 30.0092 51.738 30.246 51.592 30.3415 51.3542 C 30.4653 51.0457 30.3048 50.6994 29.9825 50.5808 C 27.1642 49.5423 25.2952 46.9394 25.2771 46.9138 C 25.1245 46.6979 24.8439 46.6013 24.5831 46.6746 L 23.7537 46.9082 C 23.5672 46.4465 23.5125 45.8992 23.623 45.4377 C 23.7168 45.046 23.9138 44.7341 24.21 44.508 C 25.267 44.6734 29.863 45.5842 33.2732 49.2905 C 33.3967 49.4247 33.569 49.4932 33.7423 49.4932 C 33.889 49.4932 34.0364 49.444 34.1551 49.3437 C 34.414 49.1251 34.439 48.747 34.2108 48.4989 C 33.9947 48.2641 33.7738 48.0421 33.5507 47.8278 L 38.211 47.0175 C 38.3595 47.0014 40.1672 46.8356 41.295 48.2161 C 41.4182 48.3671 41.6019 48.4458 41.7875 48.4458 C 41.9222 48.4458 42.0578 48.4043 42.1721 48.3186 C 42.4439 48.1148 42.4919 47.7386 42.2791 47.4784 C 40.6703 45.5094 38.1379 45.8184 38.0305 45.8327 C 38.0218 45.8339 38.0132 45.8353 38.0043 45.8368 L 32.3855 46.8136 C 31.945 46.4667 31.4998 46.1528 31.0557 45.8697 C 31.0618 45.5534 31.0651 45.1775 31.0836 44.9842 C 31.1138 44.6713 31.1524 44.3635 31.1997 44.0606 C 31.8329 40.0032 34.0061 36.8432 37.6695 34.6587 C 40.6334 32.8915 43.5195 32.4536 43.5682 32.4464 C 43.604 32.4413 43.663 32.4341 43.7302 32.4251 C 47.2229 38.3378 49.3982 46.7588 49.5976 49.5158 V 54.9673 H 14.4025 Z" />
-            <path pathLength="360" d="M 49.5975 9.0325 V 19.3422 H 38.689 C 38.5937 18.6105 38.5061 17.9301 38.4329 17.3569 C 38.2063 15.5828 37.4422 13.9868 36.2237 12.7413 C 34.8748 11.3624 33.2514 10.6633 31.3984 10.6633 C 27.3688 10.6633 25.8233 13.5309 25.556 15.0901 C 25.1526 15.5932 24.3175 16.7856 23.916 18.46 C 23.8568 18.7069 23.8106 19.0066 23.7778 19.3421 H 14.4025 V 9.0323 H 49.5975 Z" />
-            <path pathLength="360" d="M 30.2223 21.2875 C 30.5674 21.2875 30.8471 21.0195 30.8471 20.6889 V 18.92 L 31.9916 18.9675 C 32.3376 18.9833 32.628 18.7259 32.643 18.3956 C 32.658 18.0654 32.3907 17.786 32.0459 17.7717 L 30.2495 17.6969 C 30.077 17.6889 29.9133 17.7497 29.7902 17.8624 C 29.6671 17.9753 29.5976 18.1315 29.5976 18.2948 V 20.6889 C 29.5974 21.0195 29.8772 21.2875 30.2223 21.2875 Z" />
-          </svg>
-          <div>
-            <div class="weather-dev-widget-title">Рекомендации скоро появятся</div>
-            <p class="weather-dev-widget-text">
-              Здесь будет персонализированная агрономическая аналитика по культурам на основе погоды, состояния полей и истории операций.
-            </p>
-          </div>
+          <p v-else class="weather-block-subtitle">Расширенный почасовой прогноз пока недоступен.</p>
         </div>
       </div>
 
@@ -685,6 +879,127 @@ const weatherMapFieldMarkers = computed(() => {
           </RouterLink>
         </div>
       </div>
+        </main>
+
+        <aside class="weather-dashboard-side">
+
+      <div class="weather-side-panel weather-side-panel--forecast page-enter-item" style="--enter-delay: 280ms">
+        <h2 class="weather-section-title weather-section-title--side">Прогноз на 5 дней</h2>
+        <div class="weather-forecast-strip">
+          <div
+            v-for="day in forecastWithLabels"
+            :key="day.date"
+            class="weather-forecast-card"
+            :class="{ 'weather-forecast-card-alert': day.alert }"
+          >
+            <div class="weather-forecast-day">{{ day.displayLabel }}</div>
+            <div class="weather-forecast-date">{{ day.dateLabel }}</div>
+            <img :src="getWeatherIconUrl(day.icon)" alt="" width="40" height="40" style="margin-bottom:12px;" />
+            <div class="weather-forecast-temps">
+              <span class="weather-forecast-temp-high">{{ day.tempMax }}°</span>
+              <span class="weather-forecast-temp-low">{{ day.tempMin }}°</span>
+            </div>
+            <div class="weather-forecast-extra">
+              <span>Осадки {{ day.pop }}%</span>
+              <span v-if="day.precipitationSum != null">{{ day.precipitationSum }} мм</span>
+              <span v-if="day.windGusts != null">Порывы {{ day.windGusts }} м/с</span>
+              <span v-if="day.evapotranspiration != null">ET₀ {{ day.evapotranspiration }} мм</span>
+              <span v-if="day.sunshineDuration != null">Солнце {{ formatDuration(day.sunshineDuration) }}</span>
+            </div>
+            <div v-if="day.alert" class="weather-forecast-alert">{{ day.alert }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="weather-side-panel weather-side-panel--air page-enter-item" style="--enter-delay: 320ms">
+        <div class="weather-side-head">
+          <h2 class="weather-section-title weather-section-title--side">Качество воздуха</h2>
+          <span class="weather-air-status">{{ aqiLabel(weatherInsights?.airQuality?.europeanAqi) }}</span>
+        </div>
+        <div class="weather-air-card">
+          <div class="weather-air-main">
+            <div class="weather-air-value">{{ weatherInsights?.airQuality?.europeanAqi ?? '—' }}</div>
+            <svg class="weather-air-wind-icon" xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 8h10a3 3 0 1 0-3-3" />
+              <path d="M3 12h15a3 3 0 1 1-3 3" />
+              <path d="M3 16h8" />
+            </svg>
+            <div class="weather-air-sub">European AQI</div>
+          </div>
+          <div class="weather-air-metrics">
+            <span><b>PM2.5</b><strong>{{ formatValue(weatherInsights?.airQuality?.pm25, '') }}</strong></span>
+            <span><b>PM10</b><strong>{{ formatValue(weatherInsights?.airQuality?.pm10, '') }}</strong></span>
+            <span><b>O₃</b><strong>{{ formatValue(weatherInsights?.airQuality?.ozone, '') }}</strong></span>
+            <span><b>Пыль</b><strong>{{ formatValue(weatherInsights?.airQuality?.dust, '') }}</strong></span>
+          </div>
+        </div>
+        <div v-if="weatherHistoryCards.length" class="weather-history-grid">
+          <div v-for="item in weatherHistoryCards" :key="item.label" class="weather-history-card">
+            <div class="weather-history-label">{{ item.label }}</div>
+            <div class="weather-history-value">{{ item.value }}</div>
+            <div class="weather-history-sub">{{ item.sub }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Карта -->
+      <div class="weather-side-panel weather-side-panel--map page-enter-item" style="--enter-delay: 360ms">
+        <h2 class="weather-section-title weather-section-title--side">Карта наблюдения полей</h2>
+        <div class="weather-map-wrap">
+          <YandexMap
+            :lat="weather.coord?.lat ?? 55.7558"
+            :lon="weather.coord?.lon ?? 37.6176"
+            :zoom="10"
+            :field-markers="weatherMapFieldMarkers"
+            :fit-field-markers="weatherMapFieldMarkers.length > 0"
+            @pick="(c) => pickedCoords = c"
+          />
+          <div v-if="pickedCoords" class="ymap-picked-coords">
+            <div class="ymap-picked-coords-main">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+              <span
+                >Выбрана точка:
+                <strong>{{ pickedCoords.lat.toFixed(5) }}° N, {{ pickedCoords.lon.toFixed(5) }}° E</strong></span
+              >
+            </div>
+            <button
+              type="button"
+              class="ymap-copy-coords-btn"
+              :title="pickedCoordsCopied ? 'Скопировано' : 'Копировать координаты'"
+              :aria-label="pickedCoordsCopied ? 'Скопировано в буфер' : 'Копировать координаты в буфер обмена'"
+              @click="copyPickedCoords"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+              </svg>
+            </button>
+          </div>
+          <p class="weather-map-hint">
+            Поля на карте показаны по их геометрии: точечные — зелёными метками, контурные — зелёными полигонами. Красная метка —
+            точка, которую вы выбрали на карте или в поиске.
+          </p>
+        </div>
+      </div>
+
+      <div class="weather-recommendations card-rounded weather-anim-card" style="--anim-delay: 450ms">
+        <h2 class="weather-block-title">Рекомендации на сегодня</h2>
+        <p class="weather-block-subtitle">Быстрые правила по текущему прогнозу</p>
+        <div class="weather-crops-list">
+          <div v-for="card in agroRiskCards.slice(0, 4)" :key="card.title" class="weather-crop-item">
+            <div class="weather-crop-icon corn">✓</div>
+            <div>
+              <div>
+                <strong>{{ card.title }}</strong>
+                <span class="weather-crop-status" :class="card.status === 'risk' ? 'risk' : card.status === 'warn' ? 'warn' : 'ok'">{{ card.value }}</span>
+              </div>
+              <p class="weather-crop-desc">{{ card.text }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+        </aside>
+      </div>
     </template>
   </section>
 </template>
@@ -696,8 +1011,28 @@ const weatherMapFieldMarkers = computed(() => {
   gap: var(--space-md);
 }
 
+.weather-dashboard-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.85fr) minmax(320px, 0.95fr);
+  align-items: start;
+  gap: var(--space-lg);
+}
+
+.weather-dashboard-main,
+.weather-dashboard-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.weather-dashboard-side {
+  gap: var(--space-md);
+}
+
 /* Компактная верхняя полоса (город / обновить): без лишних отступов от .header-area */
 .weather-page > .header-weather.header-area {
+  justify-content: space-between;
   align-items: center;
   padding-top: 0;
   padding-bottom: 6px;
@@ -705,110 +1040,874 @@ const weatherMapFieldMarkers = computed(() => {
   gap: 8px;
 }
 
+.weather-page-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.weather-page-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  color: #fff;
+  background: var(--accent-green);
+  box-shadow: var(--shadow-card);
+  flex-shrink: 0;
+}
+
+.weather-page-title h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.weather-page-title p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.weather-detail-loading,
+.weather-detail-error {
+  grid-column: 1 / -1;
+}
+
 /* Чуть плотнее блоки погоды (контент тот же) */
 .weather-page :deep(.weather-hero) {
-  margin-bottom: 14px;
-  border-radius: 18px;
+  margin-bottom: 0;
+  border-radius: 22px;
+  min-height: 228px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent-green) 78%, #064e3b) 0%, #064e3b 100%);
+  box-shadow: 0 18px 36px -26px color-mix(in srgb, var(--accent-green) 80%, black);
+}
+
+.weather-page :deep(.weather-hero-wave) {
+  opacity: 0.08;
 }
 
 .weather-page :deep(.weather-hero-inner) {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.9fr) minmax(240px, 1.15fr) minmax(220px, 0.95fr);
+  min-height: 228px;
   padding: 22px;
-  gap: 20px;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.weather-page :deep(.weather-hero-main) {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.weather-page :deep(.weather-hero-coords),
+.weather-page :deep(.weather-hero-datetime) {
+  margin: 0;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.weather-page :deep(.weather-hero .weather-current-icon) {
+  width: 88px;
+  height: 88px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  filter: drop-shadow(0 14px 20px rgba(0, 0, 0, 0.18));
 }
 
 .weather-page :deep(.weather-hero-temp-block) {
-  padding: 14px 0;
+  padding: 14px 0 14px 6px;
   gap: 16px;
+  margin-right: 10px;
 }
 
 @media (min-width: 1024px) {
   .weather-page :deep(.weather-hero-temp-block) {
-    padding: 0 22px;
+    padding: 0 18px 0 4px;
   }
 }
 
 .weather-page :deep(.weather-hero-temp-wrap) {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
   gap: 16px;
 }
 
 .weather-page :deep(.weather-hero-temp) {
-  font-size: 3.35rem;
+  font-size: clamp(2.1rem, 3.6vw, 3.1rem);
 }
 
 .weather-page :deep(.weather-hero-city) {
-  font-size: 1.65rem;
+  font-size: 1.5rem;
 }
 
 .weather-page :deep(.weather-hero-desc) {
-  font-size: 1.08rem;
+  font-size: 0.95rem;
+}
+
+.weather-page :deep(.weather-hero-datetime) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.weather-page :deep(.weather-hero-datetime-sep) {
+  opacity: 0.7;
 }
 
 .weather-page :deep(.weather-recommendation-inline) {
+  width: 100%;
+  max-width: 360px;
   padding: 16px;
-  border-radius: 14px;
+  border-radius: 18px;
+  background: color-mix(in srgb, white 12%, transparent);
+  border: 1px solid color-mix(in srgb, white 22%, transparent);
+  backdrop-filter: blur(12px);
+  min-width: 0;
 }
 
 .weather-page :deep(.weather-recommendation-inline h3) {
+  display: flex;
+  align-items: center;
   margin-bottom: 8px;
-  font-size: 1.05rem;
+  font-size: 0.9rem;
   gap: 10px;
 }
 
 .weather-page :deep(.weather-recommendation-inline p) {
   margin-bottom: 8px;
-  font-size: 0.94rem;
+  font-size: 0.82rem;
+  line-height: 1.2;
 }
 
 .weather-page :deep(.weather-recommendation-inline ul) {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
 }
 
+.weather-page :deep(.weather-recommendation-inline li) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.76rem;
+  line-height: 1.15;
+}
+
+.weather-page :deep(.weather-recommendation-inline li > span:first-child) {
+  min-width: 0;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.weather-page :deep(.weather-recommendation-inline li > span:last-child) {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-weight: 700;
+  white-space: nowrap;
+  font-size: 0.72rem;
+}
+
 .weather-page :deep(.weather-section-title) {
-  margin: 18px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 8px 0 0;
   font-size: 1.05rem;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-primary);
+}
+
+.weather-page :deep(.weather-section-title)::before {
+  content: none;
+}
+
+.weather-side-panel {
+  min-width: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.05),
+    0 1px 2px rgba(15, 23, 42, 0.03);
+}
+
+.weather-side-panel--forecast {
+  padding-top: 24px;
+}
+
+.weather-side-panel .weather-section-title {
+  margin: 0 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.weather-side-panel--forecast .weather-section-title {
+  margin-bottom: 16px;
+  color: #334155;
+  font-size: 0.875rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .weather-page :deep(.weather-indicators-grid) {
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 0;
 }
 
 @media (min-width: 768px) {
   .weather-page :deep(.weather-indicators-grid) {
-    gap: 16px;
+    gap: 10px;
   }
 }
 
 .weather-page :deep(.weather-indicator-card) {
-  padding: 14px 15px;
-  gap: 12px;
-  border-radius: 12px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-areas:
+    "icon label"
+    "value value"
+    "sub sub";
+  align-content: start;
+  row-gap: 4px;
+  column-gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  min-height: 104px;
 }
 
 .weather-page :deep(.weather-indicator-icon) {
-  width: 42px;
-  height: 42px;
+  width: 32px;
+  height: 32px;
   border-radius: 10px;
+  grid-area: icon;
+  align-self: start;
+}
+
+.weather-page :deep(.weather-indicator-icon svg) {
+  width: 18px;
+  height: 18px;
 }
 
 .weather-page :deep(.weather-indicator-value) {
-  font-size: 1.28rem;
+  font-size: 0.875rem;
+  line-height: 1.2;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0;
+  grid-area: value;
 }
 
 .weather-page :deep(.weather-indicator-label) {
-  font-size: 0.8125rem;
-  margin-bottom: 2px;
+  font-size: 0.66rem;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: #94a3b8;
+  line-height: 1.1;
+  grid-area: label;
+  align-self: center;
 }
 
-.weather-page :deep(.weather-forecast-strip) {
+.weather-page :deep(.weather-indicator-sub) {
+  font-size: 0.625rem;
+  line-height: 1.25;
+  color: #94a3b8;
+  margin-top: 4px;
+  grid-area: sub;
+}
+
+.weather-page :deep(.weather-indicator-card > div:last-child) {
+  display: contents;
+}
+
+.weather-page :deep(.weather-indicator-card--bottom) {
+  grid-column: 1 / -1;
+  min-height: 88px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.weather-page :deep(.weather-indicator-value-sun) {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.875rem;
+  line-height: 1.2;
+}
+
+.weather-page :deep(.weather-indicator-value-sun span) {
+  display: inline-block;
+}
+
+.weather-page :deep(.weather-indicator-sub-sun) {
+  margin-top: 2px;
+  color: #ef4444;
+  font-weight: 700;
+  font-size: 0.625rem;
+}
+
+.weather-page :deep(.weather-indicator-value-dew) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  padding-bottom: 10px;
-  margin-top: 10px;
+  font-size: 0.875rem;
+  line-height: 1.2;
+}
+
+.weather-page :deep(.weather-dew-pill) {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #eef2ff;
+  border: 1px solid #e0e7ff;
+  color: #4f46e5;
+  font-size: 0.625rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.weather-page :deep(.weather-indicator-card--sun .weather-indicator-label),
+.weather-page :deep(.weather-indicator-card--dew .weather-indicator-label) {
+  font-size: 0.68rem;
+}
+
+.weather-icon-wind { color: #2563eb; background: color-mix(in srgb, #dbeafe 82%, transparent); }
+.weather-icon-humidity { color: #0891b2; background: color-mix(in srgb, #cffafe 82%, transparent); }
+.weather-icon-pressure { color: #9333ea; background: color-mix(in srgb, #f3e8ff 82%, transparent); }
+.weather-icon-visibility { color: #ea580c; background: color-mix(in srgb, #ffedd5 82%, transparent); }
+.weather-icon-clouds { color: #64748b; background: color-mix(in srgb, #f1f5f9 82%, transparent); }
+.weather-icon-precip { color: #0284c7; background: color-mix(in srgb, #e0f2fe 82%, transparent); }
+.weather-icon-uv { color: #d97706; background: color-mix(in srgb, #fef3c7 82%, transparent); }
+.weather-icon-sun { color: #e11d48; background: color-mix(in srgb, #ffe4e6 82%, transparent); }
+
+.weather-page :deep(.weather-forecast-strip) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 0;
+  margin-top: 0;
+  overflow: visible;
 }
 
 .weather-page :deep(.weather-forecast-card) {
-  padding: 14px 14px;
+  width: 100%;
+  min-width: 0;
+  min-height: 72px;
+  padding: 12px;
+  border-radius: 16px;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  text-align: left;
+  gap: 2px 12px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  box-shadow: none;
+}
+
+.weather-page :deep(.weather-forecast-card:first-child) {
+  background: #ecfdf5;
+  border-color: #d1fae5;
+}
+
+.weather-page :deep(.weather-forecast-card-alert) {
+  background: #f8fafc;
+  border-color: #f1f5f9;
+  box-shadow: none;
+}
+
+.weather-page :deep(.weather-forecast-card-alert::before) {
+  content: none;
+}
+
+.weather-page :deep(.weather-forecast-card img) {
+  display: block;
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  margin: 0 !important;
+  width: 40px;
+  height: 40px;
+  padding: 9px;
   border-radius: 12px;
-  min-width: 128px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  object-fit: contain;
+  align-self: center;
+}
+
+.weather-page :deep(.weather-forecast-day),
+.weather-page :deep(.weather-forecast-date) {
+  grid-column: 2;
+}
+
+.weather-page :deep(.weather-forecast-temps) {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+}
+
+.weather-page :deep(.weather-forecast-extra),
+.weather-page :deep(.weather-forecast-alert) {
+  grid-column: 2;
+}
+
+.weather-page :deep(.weather-forecast-temps) {
+  justify-content: flex-end;
+  font-size: 0.875rem;
+  font-weight: 800;
+  align-self: center;
+  color: #0f172a;
+}
+
+.weather-page :deep(.weather-forecast-day) {
+  font-size: 0.875rem;
+  font-weight: 800;
+  margin: 0;
+  line-height: 1.15;
+  color: #0f172a;
+}
+
+.weather-page :deep(.weather-forecast-date) {
+  font-size: 0.625rem;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.weather-agro-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 0;
+}
+
+.weather-agro-card {
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  box-shadow: var(--shadow-card);
+}
+
+.weather-agro-card--ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.weather-agro-card--warn {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.weather-agro-card--risk {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.weather-agro-card-label,
+.weather-air-label,
+.weather-history-label {
+  font-size: 0.62rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.weather-agro-card-value,
+.weather-air-value,
+.weather-history-value {
+  margin-top: 4px;
+  font-size: 1.08rem;
+  line-height: 1.1;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.weather-agro-card p,
+.weather-air-sub,
+.weather-history-sub {
+  margin: 4px 0 0;
+  font-size: 0.66rem;
+  line-height: 1.25;
+  color: var(--text-secondary);
+}
+
+.weather-insights-row {
+  display: block;
+  margin-top: 0;
+}
+
+.weather-insight-panel {
+  min-width: 0;
+  border-radius: 24px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  box-shadow: var(--shadow-card);
+}
+
+.weather-insight-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.weather-help {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  margin-left: 6px;
+  vertical-align: baseline;
+  outline: none;
+}
+
+.weather-help::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 12px;
+}
+
+.weather-help-icon {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  border: 0;
+  color: #64748b;
+  background: transparent;
+  font-size: 0.970rem;
+  font-weight: 900;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+}
+
+.weather-help-tooltip {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 6px);
+  transform: translateX(-50%);
+  z-index: 30;
+  min-width: 240px;
+  max-width: 300px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  box-shadow: var(--shadow-card);
+  display: none;
+  color: #334155;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 500;
+}
+
+.weather-help:hover .weather-help-tooltip,
+.weather-help:focus .weather-help-tooltip,
+.weather-help:focus-within .weather-help-tooltip {
+  display: block;
+}
+
+.weather-insight-panel .weather-block-title {
+  display: inline-flex;
+  align-items: baseline;
+  margin: 0 0 8px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.weather-insight-panel .weather-block-subtitle {
+  margin-bottom: 0;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.weather-mini-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  color: var(--accent-green);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.weather-hourly-strip {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.weather-hourly-card {
+  min-width: 0;
+  padding: 10px 8px;
+  border-radius: 12px;
+  border: 1px solid #f1f5f9;
+  background: #f8fafc;
+  text-align: center;
+  overflow: hidden;
+}
+
+.weather-hourly-card--safe {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
+.weather-hourly-card--warn {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.weather-hourly-card--risk {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.weather-hourly-time {
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.weather-hourly-main {
+  margin-top: 2px;
+  font-size: 0.875rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.weather-hourly-sub,
+.weather-hourly-meta {
+  font-size: 0.58rem;
+  color: #64748b;
+  line-height: 1.2;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.weather-hourly-meta:last-child {
+  color: #ea580c;
+  font-weight: 700;
+}
+
+.weather-air-card {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.7fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  padding: 0;
+  border-radius: 16px;
+  background: transparent;
+  border: 0;
+}
+
+.weather-air-value {
+  margin: 0;
+  font-size: 2.5rem;
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  font-weight: 800;
+  color: #1e293b;
+}
+
+.weather-air-main {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  justify-content: start;
+  gap: 10px;
+  padding: 8px 4px;
+}
+
+.weather-air-main .weather-air-sub {
+  grid-column: 1 / -1;
+  font-size: 0.72rem;
+}
+
+.weather-air-wind-icon {
+  margin-bottom: 2px;
+  color: #10b981;
+}
+
+.weather-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.weather-side-head .weather-section-title {
+  margin-bottom: 0;
+}
+
+.weather-air-status {
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #bbf7d0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.weather-air-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.weather-air-metrics span,
+.weather-forecast-extra span {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 72%, transparent);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  white-space: nowrap;
+}
+
+.weather-air-metrics span {
+  min-height: 66px;
+  justify-content: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  border-radius: 14px;
+  color: #1e293b;
+  box-shadow: var(--shadow-card);
+}
+
+.weather-air-metrics b {
+  color: #94a3b8;
+  font-size: 0.58rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.weather-air-metrics strong {
+  color: #1e293b;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.weather-forecast-extra span:nth-child(n + 3) {
+  display: none;
+}
+
+.weather-forecast-extra span {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #94a3b8;
+  font-size: 0.625rem;
+  font-weight: 600;
+}
+
+.weather-page :deep(.weather-forecast-card:first-child .weather-forecast-extra span) {
+  color: #059669;
+  font-weight: 800;
+}
+
+.weather-page :deep(.weather-forecast-card:not(:first-child) .weather-forecast-extra span:first-child) {
+  color: #94a3b8;
+}
+
+.weather-history-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.weather-history-card {
+  padding: 8px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  box-shadow: var(--shadow-card);
+}
+
+.weather-history-card .weather-history-label {
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+}
+
+.weather-history-card .weather-history-value {
+  font-size: 0.82rem;
+}
+
+.weather-history-card .weather-history-sub {
+  font-size: 0.68rem;
+}
+
+.weather-forecast-extra {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 6px;
+  margin-top: 3px;
+  max-width: 170px;
+  color: var(--text-secondary);
+}
+
+.weather-forecast-alert {
+  display: none;
 }
 
 .weather-page :deep(.weather-current-icon) {
@@ -823,11 +1922,18 @@ const weatherMapFieldMarkers = computed(() => {
 .weather-page :deep(.weather-block-title) {
   margin-bottom: 6px;
   font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.weather-fields-block > .weather-block-title,
+.weather-recommendations > .weather-block-title {
+  margin: 0 0 12px;
 }
 
 .weather-page :deep(.weather-block-subtitle) {
   margin-bottom: 10px;
-  font-size: 0.8125rem;
+  font-size: 0.85rem;
+  color: #94a3b8;
 }
 
 .weather-page :deep(.weather-fields-list) {
@@ -859,7 +1965,7 @@ const weatherMapFieldMarkers = computed(() => {
 }
 
 .weather-map-wrap :deep(.ymap-container) {
-  height: 360px;
+  height: 320px;
 }
 
 .ymap-picked-coords {
@@ -980,6 +2086,155 @@ const weatherMapFieldMarkers = computed(() => {
 [data-theme='dark'] .weather-city-select:hover {
   background-color: color-mix(in srgb, var(--bg-panel) 92%, white);
 }
+
+[data-theme='dark'] .weather-page :deep(.weather-side-panel),
+[data-theme='dark'] .weather-page :deep(.weather-insight-panel),
+[data-theme='dark'] .weather-fields-block,
+[data-theme='dark'] .weather-recommendations {
+  background: var(--bg-panel);
+  border-color: var(--border-color);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-forecast-card),
+[data-theme='dark'] .weather-page :deep(.weather-indicator-card),
+[data-theme='dark'] .weather-page :deep(.weather-hourly-card),
+[data-theme='dark'] .weather-page :deep(.weather-air-metrics span),
+[data-theme='dark'] .weather-history-card,
+[data-theme='dark'] .weather-field-mini {
+  background: var(--bg-panel-hover);
+  border-color: color-mix(in srgb, var(--border-color) 60%, #1b3b2b);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--border-color) 30%, transparent),
+    0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-forecast-card img) {
+  background: var(--bg-panel);
+  box-shadow: none;
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-indicator-card:hover),
+[data-theme='dark'] .weather-page :deep(.weather-forecast-card:hover),
+[data-theme='dark'] .weather-page :deep(.weather-hourly-card:hover),
+[data-theme='dark'] .weather-field-link:hover,
+[data-theme='dark'] .weather-air-metrics span:hover,
+[data-theme='dark'] .weather-history-card:hover {
+  border-color: color-mix(in srgb, var(--border-color) 45%, white);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-forecast-card:first-child),
+[data-theme='dark'] .weather-page :deep(.weather-hourly-card--safe) {
+  background: color-mix(in srgb, var(--accent-green) 18%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-hourly-card--warn) {
+  background: color-mix(in srgb, var(--warning-orange) 16%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--warning-orange) 38%, var(--border-color));
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-hourly-card--risk) {
+  background: color-mix(in srgb, var(--danger-red) 16%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--danger-red) 38%, var(--border-color));
+}
+
+[data-theme='dark'] .weather-agro-card {
+  background: var(--bg-panel-hover);
+  border-color: var(--border-color);
+}
+
+[data-theme='dark'] .weather-agro-card--ok {
+  background: color-mix(in srgb, var(--accent-green) 14%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--accent-green) 32%, var(--border-color));
+}
+
+[data-theme='dark'] .weather-agro-card--warn {
+  background: color-mix(in srgb, var(--warning-orange) 14%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--warning-orange) 32%, var(--border-color));
+}
+
+[data-theme='dark'] .weather-agro-card--risk {
+  background: color-mix(in srgb, var(--danger-red) 14%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--danger-red) 32%, var(--border-color));
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-section-title),
+[data-theme='dark'] .weather-page :deep(.weather-block-title),
+[data-theme='dark'] .weather-field-mini-name,
+[data-theme='dark'] .weather-field-mini-temp,
+[data-theme='dark'] .weather-page :deep(.weather-indicator-value),
+[data-theme='dark'] .weather-page :deep(.weather-air-value),
+[data-theme='dark'] .weather-page :deep(.weather-history-value),
+[data-theme='dark'] .weather-crop-item strong {
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-block-subtitle),
+[data-theme='dark'] .weather-page :deep(.weather-indicator-label),
+[data-theme='dark'] .weather-page :deep(.weather-indicator-sub),
+[data-theme='dark'] .weather-page :deep(.weather-forecast-date),
+[data-theme='dark'] .weather-page :deep(.weather-forecast-extra span),
+[data-theme='dark'] .weather-field-mini-crop,
+[data-theme='dark'] .weather-field-mini-wind,
+[data-theme='dark'] .weather-field-mini-extras,
+[data-theme='dark'] .weather-crop-desc,
+[data-theme='dark'] .weather-map-hint,
+[data-theme='dark'] .weather-page :deep(.weather-air-sub),
+[data-theme='dark'] .weather-page :deep(.weather-history-sub),
+[data-theme='dark'] .weather-page :deep(.weather-air-metrics b) {
+  color: var(--text-secondary);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-forecast-day),
+[data-theme='dark'] .weather-page :deep(.weather-forecast-temps),
+[data-theme='dark'] .weather-page :deep(.weather-air-metrics strong),
+[data-theme='dark'] .weather-page :deep(.weather-history-value),
+[data-theme='dark'] .weather-page :deep(.weather-air-status),
+[data-theme='dark'] .weather-page :deep(.weather-crop-status),
+[data-theme='dark'] .weather-field-mini-extra-em {
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-forecast-card .weather-forecast-extra span:first-child),
+[data-theme='dark'] .weather-page :deep(.weather-forecast-card .weather-forecast-extra span) {
+  color: color-mix(in srgb, var(--text-secondary) 92%, white);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-forecast-card:first-child .weather-forecast-extra span:first-child) {
+  color: color-mix(in srgb, var(--accent-green) 60%, white);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-air-label),
+[data-theme='dark'] .weather-page :deep(.weather-history-label),
+[data-theme='dark'] .weather-page :deep(.weather-agro-card-label),
+[data-theme='dark'] .weather-page :deep(.weather-hourly-time),
+[data-theme='dark'] .weather-page :deep(.weather-hourly-sub),
+[data-theme='dark'] .weather-page :deep(.weather-hourly-meta) {
+  color: color-mix(in srgb, var(--text-secondary) 95%, white);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-hourly-main) {
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .weather-map-hint {
+  color: color-mix(in srgb, var(--text-secondary) 90%, white);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-help-icon) {
+  color: color-mix(in srgb, var(--text-secondary) 92%, white);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-progress) {
+  background: color-mix(in srgb, var(--border-color) 70%, transparent);
+}
+
+[data-theme='dark'] .weather-page :deep(.weather-help-tooltip) {
+  background: var(--bg-elevated);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
 
 .weather-refresh-btn {
   display: inline-flex;
@@ -1268,15 +2523,16 @@ const weatherMapFieldMarkers = computed(() => {
 .weather-crops-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: 18px;
+  margin-top: 18px;
 }
 
 .weather-crop-item {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-md);
-  padding: var(--space-md) 0;
-  border-bottom: 1px solid var(--border-color);
+  gap: 18px;
+  padding: 0;
+  border-bottom: 0;
 }
 
 .weather-crop-item:last-child {
@@ -1284,13 +2540,14 @@ const weatherMapFieldMarkers = computed(() => {
 }
 
 .weather-crop-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.2rem;
+  font-size: 1.35rem;
+  font-weight: 400;
   flex-shrink: 0;
 }
 
@@ -1305,39 +2562,97 @@ const weatherMapFieldMarkers = computed(() => {
 }
 
 .weather-crop-icon.corn {
-  background: color-mix(in srgb, var(--accent-green) 22%, transparent);
-  color: var(--accent-green);
+  background: #d1fae5;
+  color: #059669;
 }
 
 .weather-crop-status {
   display: inline-block;
-  padding: 4px 10px;
+  margin-left: 6px;
+  padding: 0;
   border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: inherit;
+  font-weight: 800;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .weather-crop-status.ok {
-  background: color-mix(in srgb, var(--accent-green) 22%, transparent);
-  color: var(--accent-green);
+  background: transparent;
+  color: #059669;
 }
 
 .weather-crop-status.warn {
-  background: rgba(211, 130, 60, 0.25);
-  color: var(--warning-orange);
+  background: transparent;
+  color: #ea580c;
 }
 
 .weather-crop-status.risk {
-  background: rgba(211, 60, 60, 0.2);
-  color: var(--danger-red);
+  background: transparent;
+  color: #dc2626;
 }
 
 .weather-crop-desc {
-  margin: 8px 0 0 0;
-  font-size: 0.85rem;
-  color: var(--text-secondary);
+  margin: 3px 0 0 0;
+  font-size: 0.88rem;
+  line-height: 1.35;
+  color: #94a3b8;
+}
+
+.weather-crop-item strong {
+  color: #1e293b;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+/* Макетный размер шрифтов/иконок для блока рекомендаций */
+.weather-recommendations .weather-block-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 8px;
+}
+
+.weather-recommendations .weather-block-subtitle {
+  font-size: 10px;
+  line-height: 1.35;
+  color: #94a3b8;
+  margin: 0 0 24px;
+}
+
+.weather-recommendations .weather-crops-list {
+  gap: 16px;
+  margin-top: 0;
+}
+
+.weather-recommendations .weather-crop-item {
+  gap: 16px;
+}
+
+.weather-recommendations .weather-crop-icon {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.weather-recommendations .weather-crop-item strong,
+.weather-recommendations .weather-crop-status {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.weather-recommendations .weather-crop-status {
+  margin-left: 4px;
+}
+
+.weather-recommendations .weather-crop-desc {
+  margin: 2px 0 0;
+  font-size: 9px;
+  line-height: 1.35;
+  color: #94a3b8;
 }
 
 .weather-dev-widget {
@@ -1399,8 +2714,8 @@ const weatherMapFieldMarkers = computed(() => {
 }
 
 .weather-field-mini {
-  background: var(--chip-bg);
-  border: 1px solid var(--border-color);
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
   border-radius: 10px;
   padding: var(--space-md);
   display: flex;
@@ -1411,9 +2726,10 @@ const weatherMapFieldMarkers = computed(() => {
 
 .weather-field-mini-main {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-sm);
+  flex-wrap: wrap;
 }
 
 .weather-field-link {
@@ -1425,7 +2741,7 @@ const weatherMapFieldMarkers = computed(() => {
 .weather-field-link:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-card);
-  border-color: color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+  border-color: #e2e8f0;
 }
 
 .weather-field-mini-name {
@@ -1443,6 +2759,8 @@ const weatherMapFieldMarkers = computed(() => {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .weather-field-mini-weather--loading {
@@ -1458,6 +2776,8 @@ const weatherMapFieldMarkers = computed(() => {
 .weather-field-mini-wind {
   font-size: 0.8rem;
   color: var(--text-secondary);
+  white-space: normal;
+  word-break: break-word;
 }
 
 .weather-field-mini-wind.wind-strong {
@@ -1488,6 +2808,18 @@ const weatherMapFieldMarkers = computed(() => {
 }
 
 @media (max-width: 1024px) {
+  .weather-dashboard-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .weather-page :deep(.weather-indicators-grid) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .weather-page :deep(.weather-indicator-card--bottom) {
+    grid-column: 1 / -1;
+  }
+
   .weather-current-block {
     grid-template-columns: 1fr;
   }
@@ -1495,15 +2827,98 @@ const weatherMapFieldMarkers = computed(() => {
   .weather-params-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+
+  .weather-insights-row {
+    grid-template-columns: 1fr;
+  }
+
+  .weather-page :deep(.weather-hero-inner) {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .weather-page :deep(.weather-hero-temp-block) {
+    padding: 0;
+    margin-right: 0;
+  }
+
+  .weather-page :deep(.weather-recommendation-inline) {
+    width: 100%;
+  }
+
+  .weather-hourly-strip {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(92px, 1fr);
+    grid-template-columns: none;
+    overflow-x: auto;
+  }
+
+  .weather-air-card {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .weather-history-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1280px) {
+  .weather-page :deep(.weather-hero-inner) {
+    grid-template-columns: minmax(150px, 0.85fr) minmax(220px, 1fr) minmax(200px, 0.95fr);
+    gap: 14px;
+  }
+
+  .weather-page :deep(.weather-hero-temp-block) {
+    margin-right: 6px;
+  }
+
+  .weather-page :deep(.weather-recommendation-inline p) {
+    font-size: 0.88rem;
+  }
+
+  .weather-page :deep(.weather-recommendation-inline li) {
+    font-size: 0.84rem;
+  }
 }
 
 @media (max-width: 900px) {
+  .weather-page :deep(.weather-indicators-grid) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .weather-page :deep(.weather-indicator-card--bottom) {
+    grid-column: span 2;
+  }
+
   .weather-forecast5-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 768px) {
+  .weather-page :deep(.weather-indicators-grid) {
+    grid-template-columns: 1fr;
+  }
+
+  .weather-page :deep(.weather-indicator-card--bottom) {
+    grid-column: span 1;
+  }
+
+  .weather-page :deep(.weather-indicator-value-sun) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    font-size: 1.6rem;
+  }
+
+  .weather-page :deep(.weather-indicator-value-dew) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 1.6rem;
+  }
+
   .weather-params-grid {
     grid-template-columns: 1fr;
   }
@@ -1514,6 +2929,56 @@ const weatherMapFieldMarkers = computed(() => {
 
   .weather-forecast5-grid {
     grid-template-columns: 1fr;
+  }
+
+  .weather-agro-grid,
+  .weather-history-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .weather-air-card {
+    grid-template-columns: 1fr;
+  }
+
+  .weather-air-metrics {
+    justify-content: flex-start;
+  }
+
+  .weather-hourly-strip {
+    grid-auto-columns: minmax(84px, 1fr);
+  }
+
+  .weather-page :deep(.weather-hero-city) {
+    font-size: 1.35rem;
+  }
+
+  .weather-page :deep(.weather-hero-temp) {
+    font-size: clamp(2rem, 10vw, 3rem);
+  }
+
+  .weather-page :deep(.weather-hero-desc) {
+    font-size: 0.95rem;
+  }
+
+  .weather-page :deep(.weather-hero-datetime-sep) {
+    display: none;
+  }
+
+  .weather-air-metrics,
+  .weather-history-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .weather-recommendations .weather-crop-item {
+    align-items: flex-start;
+  }
+
+  .weather-recommendations .weather-crop-item > div:last-child {
+    min-width: 0;
+  }
+
+  .weather-recommendations .weather-crop-desc {
+    word-break: break-word;
   }
 
   .header-weather {
