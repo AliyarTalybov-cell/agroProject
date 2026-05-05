@@ -24,7 +24,7 @@ import { getAuthUser, isAuthLoading } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
 export const routes = [
-  { path: '/', redirect: '/dashboard' },
+  { path: '/', redirect: '/news' },
   { path: '/login', name: 'login', component: LoginPage, meta: { title: 'Вход', public: true } },
   { path: '/rules', name: 'rules', component: PortalRulesPage, meta: { title: 'Правила портала', public: true, allowWhenAuth: true } },
   { path: '/dashboard', name: 'dashboard', component: DashboardPage, meta: { title: 'Обзор' } },

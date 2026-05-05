@@ -46,7 +46,7 @@ async function submit() {
     } else {
       await auth.register(trimmedEmail, trimmedPassword)
     }
-    const redirect = (route.query.redirect as string) || '/dashboard'
+    const redirect = (route.query.redirect as string) || '/news'
     router.push(redirect)
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
