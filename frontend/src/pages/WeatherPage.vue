@@ -650,7 +650,7 @@ const weatherMapFieldMarkers = computed(() => {
             </h3>
             <p>{{ heroRecommendation.title }}</p>
             <ul>
-              <li v-for="(item, i) in heroRecommendation.items" :key="i">
+              <li v-for="item in heroRecommendation.items" :key="`${item.label}:${item.value}`">
                 <span>✓ {{ item.label }}</span>
                 <span>{{ item.value }}</span>
               </li>

@@ -45,11 +45,11 @@ Deno.serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   })
 
-  // Try to delete profile row first (optional)
-  await admin.from('profiles').delete().eq('id', id)
-
   const { error: delErr } = await admin.auth.admin.deleteUser(id)
   if (delErr) return json({ error: delErr.message }, { status: 400 })
+
+  const { error: profileErr } = await admin.from('profiles').delete().eq('id', id)
+  if (profileErr) return json({ error: `User deleted, profile cleanup failed: ${profileErr.message}` }, { status: 400 })
 
   return json({ ok: true })
 })

@@ -37,18 +37,6 @@ Deno.serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   })
 
-  // Some Supabase deployments authenticate the request but do not forward Authorization header to the function.
-  // In that case we rely on platform-injected headers and verify caller via Admin API.
-  const authHeader = req.headers.get('authorization') ?? req.headers.get('Authorization') ?? ''
-  const platformUserId =
-    req.headers.get('x-supabase-user') ??
-    req.headers.get('x-supabase-auth-user') ??
-    req.headers.get('x-supabase-auth-user-id') ??
-    req.headers.get('x-sb-user') ??
-    null
-
-  let callerId: string | null = null
-
   let body: Payload
   try {
     body = (await req.json()) as Payload
@@ -56,42 +44,23 @@ Deno.serve(async (req) => {
     return json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
+  const authHeader = req.headers.get('authorization') ?? req.headers.get('Authorization') ?? ''
+  const bearerToken = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : ''
   const accessToken = body.accessToken ? String(body.accessToken) : ''
-  if (accessToken) {
-    const userClient = createClient(url, anonKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    })
-    const { data: userData, error: userErr } = await userClient.auth.getUser(accessToken)
-    if (!userErr && userData?.user?.id) callerId = userData.user.id
-  }
+  const token = accessToken || bearerToken
+  if (!token) return json({ error: 'Unauthorized' }, { status: 401 })
 
-  if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
-    const userClient = createClient(url, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-      auth: { persistSession: false, autoRefreshToken: false },
-    })
-    const { data: userData, error: userErr } = await userClient.auth.getUser()
-    if (!userErr && userData?.user?.id) callerId = userData.user.id
-  }
-  if (!callerId && platformUserId) callerId = String(platformUserId)
-  if (!callerId) {
-    const headerKeys: string[] = []
-    for (const [k] of req.headers.entries()) headerKeys.push(k)
-    console.error('[admin-update-employee] 401 cannot determine caller', {
-      hasAuthHeader: Boolean(authHeader),
-      headerKeys,
-    })
-    return json({ error: `Unauthorized: cannot determine caller. Headers: ${headerKeys.sort().join(', ')}` }, { status: 401 })
-  }
-
-  const { data: caller, error: callerErr } = await admin.auth.admin.getUserById(callerId)
-  if (callerErr || !caller?.user) {
-    console.error('[admin-update-employee] 401 cannot load caller', callerErr)
+  const userClient = createClient(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+  const { data: callerData, error: callerErr } = await userClient.auth.getUser(token)
+  if (callerErr || !callerData?.user) {
+    console.error('[admin-update-employee] 401 invalid token', callerErr)
     return json({ error: 'Unauthorized' }, { status: 401 })
   }
-  const callerRole = (caller.user.user_metadata as { role?: string } | null)?.role
+  const callerRole = (callerData.user.user_metadata as { role?: string } | null)?.role
   if (callerRole !== 'manager') {
-    return json({ error: 'Forbidden', callerId, callerRole: callerRole ?? null }, { status: 403 })
+    return json({ error: 'Forbidden' }, { status: 403 })
   }
 
   const id = String(body.id ?? '').trim()

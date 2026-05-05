@@ -316,7 +316,10 @@ export async function uploadTaskFile(taskId: string, file: File): Promise<Calend
     })
     .select()
     .single()
-  if (error) throw error
+  if (error) {
+    await supabase.storage.from(FILES_BUCKET).remove([path])
+    throw error
+  }
   return row as CalendarTaskFileRow
 }
 

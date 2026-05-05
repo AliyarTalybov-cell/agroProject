@@ -484,7 +484,10 @@ export async function uploadTaskFile(taskId: string, file: File): Promise<TaskFi
     })
     .select('id, task_id, file_path, file_name, file_size, created_at')
     .single()
-  if (error) throw error
+  if (error) {
+    await supabase.storage.from(TASK_FILES_BUCKET).remove([path])
+    throw error
+  }
   return data as TaskFileRow
 }
 

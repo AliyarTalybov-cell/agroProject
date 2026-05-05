@@ -109,8 +109,12 @@ Deno.serve(async (req) => {
   )
 
   if (upsertErr) {
-    // Best-effort: user already exists; profile may fail due to schema mismatch
-    return json({ error: upsertErr.message, id: userId }, { status: 200 })
+    // Keep auth/profiles consistency: best-effort rollback of created auth user.
+    const { error: rollbackErr } = await supabaseAdmin.auth.admin.deleteUser(userId)
+    if (rollbackErr) {
+      console.error('[admin-create-employee] rollback auth user failed', rollbackErr)
+    }
+    return json({ error: upsertErr.message }, { status: 400 })
   }
 
   return json({ id: userId })

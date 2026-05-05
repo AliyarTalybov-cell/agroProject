@@ -173,6 +173,11 @@ export async function createEmployee(payload: CreateEmployeePayload): Promise<{ 
     headers: { Authorization: `Bearer ${session.access_token}` },
   })
   if (error) throw error
+  const backendError =
+    data && typeof data === 'object' && 'error' in (data as Record<string, unknown>)
+      ? String((data as Record<string, unknown>).error ?? '')
+      : ''
+  if (backendError) throw new Error(backendError)
   if (!data?.id) throw new Error('Не удалось создать сотрудника')
   return { id: String(data.id) }
 }

@@ -195,6 +195,21 @@ const LAND_MELIORATION_TYPES_TABLE = 'land_melioration_types'
 const LAND_MELIORATION_SUBTYPES_TABLE = 'land_melioration_subtypes'
 const LAND_MELIORATION_EVENT_TYPES_TABLE = 'land_melioration_event_types'
 const LAND_CROP_ROTATION_TYPES_TABLE = 'land_crop_rotation_types'
+const LAND_TYPES_COLUMNS = 'id, name, sort_order, created_at'
+const LANDS_COLUMNS =
+  'id, number, name, land_type_id, area, cadastral_number, address, land_category, region, permitted_use_docs, efgis_zsn_field_number, center_lat, center_lon, location_description, geometry_mode, contour_geojson, document_area_ha, coordinate_area_ha, is_agri_land, agri_land_type_id, agri_land_area_ha, is_valuable_agri_land, irrigated_area_ha, drained_area_ha, actual_use_status, breeding_use, other_use_info, notes, created_at, updated_at'
+const LAND_RIGHTS_COLUMNS =
+  'id, land_id, holder_mode, right_type, holder_name, holder_inn, holder_kpp, holder_ogrn, cadastral_number, ownership_form, document_type, supporting_documents, document_name, document_number, document_date, starts_at, ends_at, notes, created_at, updated_at'
+const LAND_RIGHT_REF_COLUMNS = 'id, name, sort_order, created_at'
+const LAND_RIGHT_HOLDERS_COLUMNS = 'id, name, holder_type_id, inn, kpp, ogrn, created_at'
+const LAND_USERS_COLUMNS =
+  'id, land_id, user_id, holder_mode, right_holder_id, holder_name, holder_inn, holder_kpp, holder_ogrn, right_type, document_type, supporting_documents, usage_area_ha, organization_name, person_name, inn, basis, starts_at, ends_at, notes, created_at, updated_at'
+const LAND_CROP_ROTATIONS_COLUMNS =
+  'id, land_id, field_id, season, rotation_type, crop_key, seed_material_name, area_for_crops_ha, area_with_improved_products_ha, area_for_organic_ha, area_for_selection_seed_ha, produced_products_info, produced_crop_mass_tons, created_at, updated_at'
+const LAND_REAL_ESTATE_OBJECTS_COLUMNS =
+  'id, land_id, field_id, cadastral_number, name, location_description, area_sqm, permitted_use, purpose, address, depth_m, height_m, length_m, volume_m3, burial_depth_m, development_plan, floors, underground_floors, created_at, updated_at'
+const LAND_MELIORATION_ENTRIES_COLUMNS =
+  'id, land_id, field_id, crop_key, area_ha, melioration_kind, melioration_type, melioration_subtype, description_location, cadastral_number, commissioned_at, irrigated_area_ha, forest_area_ha, forest_characteristics, forest_year_created, reconstruction_info, event_type, event_date, project_approval, created_at, updated_at'
 
 function normalizeLandRow(row: Record<string, unknown>): LandRow {
   return {
@@ -233,14 +248,14 @@ function normalizeLandRow(row: Record<string, unknown>): LandRow {
 
 export async function loadLandTypes(): Promise<LandTypeRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_TYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  const { data, error } = await supabase.from(LAND_TYPES_TABLE).select(LAND_TYPES_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandTypeRow[]
 }
 
 export async function loadLands(searchQuery = ''): Promise<LandRow[]> {
   if (!supabase) return []
-  let req = supabase.from(LANDS_TABLE).select('*').order('number', { ascending: true })
+  let req = supabase.from(LANDS_TABLE).select(LANDS_COLUMNS).order('number', { ascending: true })
   const query = searchQuery.trim()
   if (query) req = req.or(`cadastral_number.ilike.%${query}%,address.ilike.%${query}%`)
   const { data, error } = await req
@@ -309,7 +324,7 @@ export async function addLand(payload: {
     notes: payload.notes?.trim() || null,
     updated_at: now,
   }
-  const { data, error } = await supabase.from(LANDS_TABLE).insert(insertPayload).select('*').single()
+  const { data, error } = await supabase.from(LANDS_TABLE).insert(insertPayload).select(LANDS_COLUMNS).single()
   if (error) throw error
   return normalizeLandRow(data as Record<string, unknown>)
 }
@@ -386,7 +401,7 @@ export async function loadLandRights(landId: string): Promise<LandRightRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from(LAND_RIGHTS_TABLE)
-    .select('*')
+    .select(LAND_RIGHTS_COLUMNS)
     .eq('land_id', landId)
     .order('created_at', { ascending: false })
   if (error) throw error
@@ -434,7 +449,7 @@ export async function addLandRight(payload: {
     notes: payload.notes?.trim() || null,
     updated_at: now,
   }
-  const { data, error } = await supabase.from(LAND_RIGHTS_TABLE).insert(insertPayload).select('*').single()
+  const { data, error } = await supabase.from(LAND_RIGHTS_TABLE).insert(insertPayload).select(LAND_RIGHTS_COLUMNS).single()
   if (error) throw error
   return data as LandRightRow
 }
@@ -506,14 +521,14 @@ export async function uploadLandRightFile(file: File, landId: string, rightId?: 
 
 export async function loadLandRightOwnershipForms(): Promise<LandRightRefRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_RIGHT_OWNERSHIP_FORMS_TABLE).select('*').order('sort_order', { ascending: true })
+  const { data, error } = await supabase.from(LAND_RIGHT_OWNERSHIP_FORMS_TABLE).select(LAND_RIGHT_REF_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandRightRefRow[]
 }
 
 export async function addLandRightOwnershipForm(name: string): Promise<LandRightRefRow> {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { data, error } = await supabase.from(LAND_RIGHT_OWNERSHIP_FORMS_TABLE).insert({ name: name.trim() }).select('*').single()
+  const { data, error } = await supabase.from(LAND_RIGHT_OWNERSHIP_FORMS_TABLE).insert({ name: name.trim() }).select(LAND_RIGHT_REF_COLUMNS).single()
   if (error) throw error
   return data as LandRightRefRow
 }
@@ -533,14 +548,14 @@ export async function updateLandRightOwnershipForm(id: string, name: string): Pr
 
 export async function loadLandRightTypes(): Promise<LandRightRefRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_RIGHT_TYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  const { data, error } = await supabase.from(LAND_RIGHT_TYPES_TABLE).select(LAND_RIGHT_REF_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandRightRefRow[]
 }
 
 export async function addLandRightType(name: string): Promise<LandRightRefRow> {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { data, error } = await supabase.from(LAND_RIGHT_TYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  const { data, error } = await supabase.from(LAND_RIGHT_TYPES_TABLE).insert({ name: name.trim() }).select(LAND_RIGHT_REF_COLUMNS).single()
   if (error) throw error
   return data as LandRightRefRow
 }
@@ -560,14 +575,14 @@ export async function updateLandRightType(id: string, name: string): Promise<voi
 
 export async function loadLandRightDocumentTypes(): Promise<LandRightRefRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_RIGHT_DOCUMENT_TYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  const { data, error } = await supabase.from(LAND_RIGHT_DOCUMENT_TYPES_TABLE).select(LAND_RIGHT_REF_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandRightRefRow[]
 }
 
 export async function addLandRightDocumentType(name: string): Promise<LandRightRefRow> {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { data, error } = await supabase.from(LAND_RIGHT_DOCUMENT_TYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  const { data, error } = await supabase.from(LAND_RIGHT_DOCUMENT_TYPES_TABLE).insert({ name: name.trim() }).select(LAND_RIGHT_REF_COLUMNS).single()
   if (error) throw error
   return data as LandRightRefRow
 }
@@ -587,14 +602,14 @@ export async function updateLandRightDocumentType(id: string, name: string): Pro
 
 export async function loadLandRightHolderTypes(): Promise<LandRightRefRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_RIGHT_HOLDER_TYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  const { data, error } = await supabase.from(LAND_RIGHT_HOLDER_TYPES_TABLE).select(LAND_RIGHT_REF_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandRightRefRow[]
 }
 
 export async function addLandRightHolderType(name: string): Promise<LandRightRefRow> {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { data, error } = await supabase.from(LAND_RIGHT_HOLDER_TYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  const { data, error } = await supabase.from(LAND_RIGHT_HOLDER_TYPES_TABLE).insert({ name: name.trim() }).select(LAND_RIGHT_REF_COLUMNS).single()
   if (error) throw error
   return data as LandRightRefRow
 }
@@ -614,21 +629,21 @@ export async function updateLandRightHolderType(id: string, name: string): Promi
 
 export async function loadLandRightHolders(): Promise<LandRightHolderRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_RIGHT_HOLDERS_TABLE).select('*').order('name', { ascending: true })
+  const { data, error } = await supabase.from(LAND_RIGHT_HOLDERS_TABLE).select(LAND_RIGHT_HOLDERS_COLUMNS).order('name', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandRightHolderRow[]
 }
 
 export async function loadLandMeliorationTypes(): Promise<LandRightRefRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_MELIORATION_TYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  const { data, error } = await supabase.from(LAND_MELIORATION_TYPES_TABLE).select(LAND_RIGHT_REF_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandRightRefRow[]
 }
 
 export async function addLandMeliorationType(name: string): Promise<LandRightRefRow> {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { data, error } = await supabase.from(LAND_MELIORATION_TYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  const { data, error } = await supabase.from(LAND_MELIORATION_TYPES_TABLE).insert({ name: name.trim() }).select(LAND_RIGHT_REF_COLUMNS).single()
   if (error) throw error
   return data as LandRightRefRow
 }
@@ -648,14 +663,14 @@ export async function updateLandMeliorationType(id: string, name: string): Promi
 
 export async function loadLandMeliorationSubtypes(): Promise<LandRightRefRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  const { data, error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).select(LAND_RIGHT_REF_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandRightRefRow[]
 }
 
 export async function addLandMeliorationSubtype(name: string): Promise<LandRightRefRow> {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { data, error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  const { data, error } = await supabase.from(LAND_MELIORATION_SUBTYPES_TABLE).insert({ name: name.trim() }).select(LAND_RIGHT_REF_COLUMNS).single()
   if (error) throw error
   return data as LandRightRefRow
 }
@@ -675,21 +690,21 @@ export async function updateLandMeliorationSubtype(id: string, name: string): Pr
 
 export async function loadLandMeliorationEventTypes(): Promise<LandRightRefRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_MELIORATION_EVENT_TYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  const { data, error } = await supabase.from(LAND_MELIORATION_EVENT_TYPES_TABLE).select(LAND_RIGHT_REF_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandRightRefRow[]
 }
 
 export async function loadLandCropRotationTypes(): Promise<LandCropRotationTypeRefRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase.from(LAND_CROP_ROTATION_TYPES_TABLE).select('*').order('sort_order', { ascending: true })
+  const { data, error } = await supabase.from(LAND_CROP_ROTATION_TYPES_TABLE).select(LAND_RIGHT_REF_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw error
   return (data ?? []) as LandCropRotationTypeRefRow[]
 }
 
 export async function addLandCropRotationType(name: string): Promise<LandCropRotationTypeRefRow> {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { data, error } = await supabase.from(LAND_CROP_ROTATION_TYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  const { data, error } = await supabase.from(LAND_CROP_ROTATION_TYPES_TABLE).insert({ name: name.trim() }).select(LAND_RIGHT_REF_COLUMNS).single()
   if (error) throw error
   return data as LandCropRotationTypeRefRow
 }
@@ -709,7 +724,7 @@ export async function updateLandCropRotationType(id: string, name: string): Prom
 
 export async function addLandMeliorationEventType(name: string): Promise<LandRightRefRow> {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { data, error } = await supabase.from(LAND_MELIORATION_EVENT_TYPES_TABLE).insert({ name: name.trim() }).select('*').single()
+  const { data, error } = await supabase.from(LAND_MELIORATION_EVENT_TYPES_TABLE).insert({ name: name.trim() }).select(LAND_RIGHT_REF_COLUMNS).single()
   if (error) throw error
   return data as LandRightRefRow
 }
@@ -744,7 +759,7 @@ export async function addLandRightHolder(payload: {
       kpp: payload.kpp?.trim() || null,
       ogrn: payload.ogrn?.trim() || null,
     })
-    .select('*')
+    .select(LAND_RIGHT_HOLDERS_COLUMNS)
     .single()
   if (error) throw error
   return data as LandRightHolderRow
@@ -782,7 +797,7 @@ export async function loadLandUsers(landId: string): Promise<LandUserRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from(LAND_USERS_TABLE)
-    .select('*')
+    .select(LAND_USERS_COLUMNS)
     .eq('land_id', landId)
     .order('created_at', { ascending: false })
   if (error) throw error
@@ -834,7 +849,7 @@ export async function addLandUser(payload: {
     notes: payload.notes?.trim() || null,
     updated_at: now,
   }
-  const { data, error } = await supabase.from(LAND_USERS_TABLE).insert(insertPayload).select('*').single()
+  const { data, error } = await supabase.from(LAND_USERS_TABLE).insert(insertPayload).select(LAND_USERS_COLUMNS).single()
   if (error) throw error
   return data as LandUserRow
 }
@@ -895,7 +910,7 @@ export async function loadLandCropRotations(landId: string): Promise<LandCropRot
   if (!supabase) return []
   const { data, error } = await supabase
     .from(LAND_CROP_ROTATIONS_TABLE)
-    .select('*')
+    .select(LAND_CROP_ROTATIONS_COLUMNS)
     .eq('land_id', landId)
     .order('created_at', { ascending: false })
   if (error) throw error
@@ -935,7 +950,7 @@ export async function addLandCropRotation(payload: {
       produced_crop_mass_tons: payload.produced_crop_mass_tons ?? null,
       updated_at: now,
     })
-    .select('*')
+    .select(LAND_CROP_ROTATIONS_COLUMNS)
     .single()
   if (error) throw error
   return data as LandCropRotationRow
@@ -985,7 +1000,7 @@ export async function loadLandRealEstateObjects(landId: string): Promise<LandRea
   if (!supabase) return []
   const { data, error } = await supabase
     .from(LAND_REAL_ESTATE_OBJECTS_TABLE)
-    .select('*')
+    .select(LAND_REAL_ESTATE_OBJECTS_COLUMNS)
     .eq('land_id', landId)
     .order('created_at', { ascending: false })
   if (error) throw error
@@ -1035,7 +1050,7 @@ export async function addLandRealEstateObject(payload: {
       underground_floors: payload.underground_floors?.trim() || null,
       updated_at: now,
     })
-    .select('*')
+    .select(LAND_REAL_ESTATE_OBJECTS_COLUMNS)
     .single()
   if (error) throw error
   return data as LandRealEstateObjectRow
@@ -1088,7 +1103,7 @@ export async function loadLandMeliorationEntries(landId: string): Promise<LandMe
   if (!supabase) return []
   const { data, error } = await supabase
     .from(LAND_MELIORATION_ENTRIES_TABLE)
-    .select('*')
+    .select(LAND_MELIORATION_ENTRIES_COLUMNS)
     .eq('land_id', landId)
     .order('created_at', { ascending: false })
   if (error) throw error
@@ -1099,7 +1114,7 @@ export async function loadAllLandMeliorationEntries(): Promise<LandMeliorationEn
   if (!supabase) return []
   const { data, error } = await supabase
     .from(LAND_MELIORATION_ENTRIES_TABLE)
-    .select('*')
+    .select(LAND_MELIORATION_ENTRIES_COLUMNS)
     .order('created_at', { ascending: false })
   if (error) throw error
   return (data ?? []) as LandMeliorationEntryRow[]
@@ -1150,7 +1165,7 @@ export async function addLandMeliorationEntry(payload: {
       project_approval: payload.project_approval?.trim() || null,
       updated_at: now,
     })
-    .select('*')
+    .select(LAND_MELIORATION_ENTRIES_COLUMNS)
     .single()
   if (error) throw error
   return data as LandMeliorationEntryRow
