@@ -529,6 +529,278 @@ function landEfisNumberDisplay(land: LandRow): string {
   return land.efgis_zsn_field_number || 'Нет данных'
 }
 
+function exportCellValue(value: unknown): string {
+  if (value == null) return '—'
+  if (typeof value === 'boolean') return value ? 'Да' : 'Нет'
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '—'
+  const normalized = String(value).trim()
+  return normalized || '—'
+}
+
+function downloadCsv(headers: string[], rows: string[][], fileName: string) {
+  if (!rows.length) return
+  const line = (arr: string[]) => arr.map(escapeXlsCell).join(XLS_SEP)
+  const csv = '\uFEFF' + [line(headers), ...rows.map((r) => line(r))].join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+async function downloadPdfTable(title: string, headers: string[], rows: string[][], fileName: string, width = 1100) {
+  if (!rows.length) return
+  const escapedRows = rows.map((r) => r.map((c) => escapeHtml(c)))
+  const tableRows = escapedRows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')
+  const headerCells = headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')
+  const html = `
+    <div style="position:fixed;left:-9999px;top:0;width:${width}px;font-family:Arial,sans-serif;font-size:12px;background:#fff;">
+      <h2 style="margin:0 0 12px 0;font-size:16px;">${escapeHtml(title)}</h2>
+      <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;">
+        <thead><tr style="background:#225533;color:#fff;">${headerCells}</tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  `
+  const wrap = document.createElement('div')
+  wrap.innerHTML = html.trim()
+  const el = wrap.firstElementChild as HTMLElement
+  document.body.appendChild(el)
+  try {
+    const canvas = await html2canvas(el, { scale: 2, useCORS: true, logging: false })
+    const imgData = canvas.toDataURL('image/png')
+    const pdf = new jsPDF('l', 'mm', 'a4')
+    const pageW = pdf.internal.pageSize.getWidth()
+    const pageH = pdf.internal.pageSize.getHeight()
+    const m = 8
+    const drawW = pageW - m * 2
+    const drawH = (canvas.height * drawW) / canvas.width
+    let remain = drawH
+    let y = m
+    let offset = 0
+    while (remain > 0) {
+      pdf.addImage(imgData, 'PNG', m, y - offset, drawW, drawH)
+      remain -= pageH - m * 2
+      offset += pageH - m * 2
+      if (remain > 0) pdf.addPage()
+    }
+    pdf.save(fileName)
+  } finally {
+    document.body.removeChild(el)
+  }
+}
+
+const LAND_INFO_EXPORT_HEADERS = ['Показатель', 'Значение']
+
+const landInfoExportRows = computed(() => {
+  const land = selectedLand.value
+  if (!land) return [] as string[][]
+  const geolocation = land.center_lat != null && land.center_lon != null ? `${land.center_lat}, ${land.center_lon}` : '—'
+  return [
+    ['Тип земли', landTypeLabelMap.value.get(land.land_type_id || '') || '—'],
+    ['Категория земель', exportCellValue(land.land_category)],
+    ['Регион', exportCellValue(land.region)],
+    ['Площадь земельного участка, га', exportCellValue(Number(land.area || 0).toFixed(2))],
+    ['Вид разрешенного использования по документам', exportCellValue(land.permitted_use_docs)],
+    ['Кадастровый номер', exportCellValue(land.cadastral_number)],
+    ['№ ПОЛЯ ЕФИС ЗСН', landEfisNumberDisplay(land)],
+    ['Геолокация', geolocation],
+    ['Адрес', exportCellValue(land.address)],
+    ['Описание местоположения', exportCellValue(land.location_description)],
+    ['Общая площадь по документам, га', exportCellValue(land.document_area_ha)],
+    ['Площадь сельхозугодий, га', exportCellValue(land.agri_land_area_ha)],
+    ['Отнесение к сельхозугодьям', landTypeLabelMap.value.get(land.agri_land_type_id || '') || '—'],
+    ['Особо ценные продуктивные угодья', land.is_valuable_agri_land == null ? '—' : land.is_valuable_agri_land ? 'Да' : 'Нет'],
+    ['Использование участка', exportCellValue(land.actual_use_status)],
+    ['Фактически орошаемая площадь, га', exportCellValue(land.irrigated_area_ha)],
+    ['Фактически осушаемая площадь, га', exportCellValue(land.drained_area_ha)],
+    ['Использование для племенного/селекции/семеноводства', land.breeding_use == null ? '—' : land.breeding_use ? 'Да' : 'Нет'],
+    ['Иные сведения об использовании', exportCellValue(land.other_use_info)],
+    ['Примечание', exportCellValue(land.notes)],
+  ]
+})
+
+const landRightsExportHeaders = [
+  'Наименование',
+  'ИНН',
+  'КПП',
+  'ОГРН',
+  'Кадастровый номер',
+  'Форма собственности',
+  'Вид права',
+  'Начало',
+  'Окончание',
+]
+
+const landRightsExportRows = computed(() => landRights.value.map((right) => ([
+  exportCellValue(right.holder_name),
+  exportCellValue(right.holder_inn),
+  exportCellValue(right.holder_kpp),
+  exportCellValue(right.holder_ogrn),
+  exportCellValue(right.cadastral_number),
+  exportCellValue(right.ownership_form),
+  exportCellValue(right.right_type),
+  exportCellValue(right.starts_at),
+  exportCellValue(right.ends_at),
+])))
+
+const landCropRotationExportHeaders = [
+  '№ ПОЛЯ ЕФИС ЗСН',
+  'Сезон',
+  'Тип',
+  'Культура',
+  'Площадь, га',
+  'Площадь для выращивания сельхозкультур, га',
+  'Масса произведенной сельхозкультуры, т',
+]
+
+const landCropRotationExportRows = computed(() => landCropRotations.value.map((rotation) => ([
+  exportCellValue(realEstateFieldLabel(rotation.field_id)),
+  exportCellValue(rotation.season),
+  exportCellValue(rotation.rotation_type),
+  exportCellValue(cropLabelMap.value.get(rotation.crop_key || '') || '—'),
+  exportCellValue(formatRotationMetric(cropRotationFieldMap.value.get(rotation.field_id)?.area)),
+  exportCellValue(formatRotationMetric(rotation.area_for_crops_ha)),
+  exportCellValue(formatRotationMetric(rotation.produced_crop_mass_tons)),
+])))
+
+const landRealEstateExportHeaders = [
+  '№ ПОЛЯ ЕФИС ЗСН',
+  'Кадастровый номер',
+  'Наименование',
+  'Адрес',
+  'Площадь, кв.м.',
+]
+
+const landRealEstateExportRows = computed(() => landRealEstateObjects.value.map((obj) => ([
+  exportCellValue(realEstateFieldLabel(obj.field_id)),
+  exportCellValue(obj.cadastral_number),
+  exportCellValue(obj.name),
+  exportCellValue(obj.address),
+  exportCellValue(formatRotationMetric(obj.area_sqm)),
+])))
+
+const landFieldsExportHeaders = [
+  'Название',
+  '№ ПОЛЯ ЕФИС ЗСН',
+  'Площадь, га',
+  'Культура',
+  'Тип земли',
+  'Муниципальное образование',
+  'Регион',
+  'Описание',
+]
+
+const landFieldsExportRows = computed(() => assignedFields.value.map((field) => ([
+  exportCellValue(`Поле №${field.number} ${field.name}`),
+  exportCellValue((field as { efis_zsn_number?: string | null }).efis_zsn_number),
+  exportCellValue(Number(field.area || 0).toFixed(2)),
+  exportCellValue(fieldCropLabel(field.crop_key)),
+  exportCellValue(field.land_type),
+  exportCellValue(field.municipality),
+  exportCellValue(field.region),
+  exportCellValue(field.location_description),
+])))
+
+function exportLandInfoToExcel() {
+  if (!selectedLand.value || !landInfoExportRows.value.length) return
+  downloadCsv(
+    LAND_INFO_EXPORT_HEADERS,
+    landInfoExportRows.value,
+    `сведения_об_участке_${selectedLand.value.cadastral_number || selectedLand.value.id}_${new Date().toISOString().slice(0, 10)}.csv`,
+  )
+}
+
+async function exportLandInfoToPdf() {
+  if (!selectedLand.value || !landInfoExportRows.value.length) return
+  await downloadPdfTable(
+    'Сведения об участке',
+    LAND_INFO_EXPORT_HEADERS,
+    landInfoExportRows.value,
+    `сведения_об_участке_${selectedLand.value.cadastral_number || selectedLand.value.id}_${new Date().toISOString().slice(0, 10)}.pdf`,
+    920,
+  )
+}
+
+function exportLandRightsToExcel() {
+  if (!landRightsExportRows.value.length) return
+  downloadCsv(
+    landRightsExportHeaders,
+    landRightsExportRows.value,
+    `права_владения_${new Date().toISOString().slice(0, 10)}.csv`,
+  )
+}
+
+async function exportLandRightsToPdf() {
+  if (!landRightsExportRows.value.length) return
+  await downloadPdfTable(
+    'Права владения',
+    landRightsExportHeaders,
+    landRightsExportRows.value,
+    `права_владения_${new Date().toISOString().slice(0, 10)}.pdf`,
+  )
+}
+
+function exportLandCropRotationToExcel() {
+  if (!landCropRotationExportRows.value.length) return
+  downloadCsv(
+    landCropRotationExportHeaders,
+    landCropRotationExportRows.value,
+    `севооборот_${new Date().toISOString().slice(0, 10)}.csv`,
+  )
+}
+
+async function exportLandCropRotationToPdf() {
+  if (!landCropRotationExportRows.value.length) return
+  await downloadPdfTable(
+    'Севооборот',
+    landCropRotationExportHeaders,
+    landCropRotationExportRows.value,
+    `севооборот_${new Date().toISOString().slice(0, 10)}.pdf`,
+  )
+}
+
+function exportLandRealEstateToExcel() {
+  if (!landRealEstateExportRows.value.length) return
+  downloadCsv(
+    landRealEstateExportHeaders,
+    landRealEstateExportRows.value,
+    `объекты_недвижимости_${new Date().toISOString().slice(0, 10)}.csv`,
+  )
+}
+
+async function exportLandRealEstateToPdf() {
+  if (!landRealEstateExportRows.value.length) return
+  await downloadPdfTable(
+    'Объекты недвижимости',
+    landRealEstateExportHeaders,
+    landRealEstateExportRows.value,
+    `объекты_недвижимости_${new Date().toISOString().slice(0, 10)}.pdf`,
+  )
+}
+
+function exportLandFieldsToExcel() {
+  if (!landFieldsExportRows.value.length) return
+  downloadCsv(
+    landFieldsExportHeaders,
+    landFieldsExportRows.value,
+    `поля_земли_${new Date().toISOString().slice(0, 10)}.csv`,
+  )
+}
+
+async function exportLandFieldsToPdf() {
+  if (!landFieldsExportRows.value.length) return
+  await downloadPdfTable(
+    'Поля земли',
+    landFieldsExportHeaders,
+    landFieldsExportRows.value,
+    `поля_земли_${new Date().toISOString().slice(0, 10)}.pdf`,
+    1260,
+  )
+}
+
 function exportLandsToExcel() {
   if (!lands.value.length) return
   const headers = [
@@ -3977,7 +4249,31 @@ onMounted(() => void reloadAll())
         </div>
 
         <template v-if="selectedLand && activeTab === 'info'">
-          <h2>Сведения об участке</h2>
+          <div class="lands-section-head">
+            <h2>Сведения об участке</h2>
+            <div class="task-export-btns">
+              <button type="button" class="task-btn-export action_has has_saved" :disabled="!landInfoExportRows.length" title="Экспорт в PDF" @click="exportLandInfoToPdf">
+                <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                  <path d="M12 18v-6" />
+                  <path d="M9 15h6" />
+                </svg>
+                PDF
+              </button>
+              <button type="button" class="task-btn-export action_has has_saved" :disabled="!landInfoExportRows.length" title="Экспорт в Excel" @click="exportLandInfoToExcel">
+                <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                  <path d="M8 13h2" />
+                  <path d="M8 17h2" />
+                  <path d="M14 13h2" />
+                  <path d="M14 17h2" />
+                </svg>
+                Excel
+              </button>
+            </div>
+          </div>
           <div v-if="!landInlineEditOpen" class="lands-overview-grid">
             <div class="lands-overview-item"><span>Общая площадь по документам, га</span><strong>{{ selectedLand.document_area_ha ?? '—' }}</strong></div>
             <div class="lands-overview-item"><span>Площадь земельного участка, га</span><strong>{{ Number(selectedLand.area || 0).toFixed(2) }}</strong></div>
@@ -4077,7 +4373,31 @@ onMounted(() => void reloadAll())
         </template>
 
         <template v-else-if="selectedLand && activeTab === 'fields'">
-          <h2>Поля земли</h2>
+          <div class="lands-section-head">
+            <h2>Поля земли</h2>
+            <div class="task-export-btns">
+              <button type="button" class="task-btn-export action_has has_saved" :disabled="!landFieldsExportRows.length" title="Экспорт в PDF" @click="exportLandFieldsToPdf">
+                <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                  <path d="M12 18v-6" />
+                  <path d="M9 15h6" />
+                </svg>
+                PDF
+              </button>
+              <button type="button" class="task-btn-export action_has has_saved" :disabled="!landFieldsExportRows.length" title="Экспорт в Excel" @click="exportLandFieldsToExcel">
+                <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                  <path d="M8 13h2" />
+                  <path d="M8 17h2" />
+                  <path d="M14 13h2" />
+                  <path d="M14 17h2" />
+                </svg>
+                Excel
+              </button>
+            </div>
+          </div>
           <div v-if="assignedFields.length" class="lands-table-wrap">
             <table class="lands-table lands-fields-table">
               <thead>
@@ -4128,11 +4448,35 @@ onMounted(() => void reloadAll())
         </template>
 
         <template v-else-if="selectedLand && activeTab === 'rights'">
-          <h2>Права владения</h2>
-          <div class="lands-actions lands-actions--crop">
-            <button type="button" class="lands-btn lands-btn--save lands-btn--add" @click="openRightModal">
-              Добавить
-            </button>
+          <div class="lands-section-head">
+            <h2>Права владения</h2>
+            <div class="lands-section-actions">
+              <div class="task-export-btns">
+                <button type="button" class="task-btn-export action_has has_saved" :disabled="!landRightsExportRows.length" title="Экспорт в PDF" @click="exportLandRightsToPdf">
+                  <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                    <path d="M12 18v-6" />
+                    <path d="M9 15h6" />
+                  </svg>
+                  PDF
+                </button>
+                <button type="button" class="task-btn-export action_has has_saved" :disabled="!landRightsExportRows.length" title="Экспорт в Excel" @click="exportLandRightsToExcel">
+                  <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                    <path d="M8 13h2" />
+                    <path d="M8 17h2" />
+                    <path d="M14 13h2" />
+                    <path d="M14 17h2" />
+                  </svg>
+                  Excel
+                </button>
+              </div>
+              <button type="button" class="lands-btn lands-btn--save lands-btn--add" @click="openRightModal">
+                Добавить
+              </button>
+            </div>
           </div>
           <div v-if="landRights.length" class="lands-list-plain">
             <div v-for="right in landRights" :key="right.id" class="lands-list-plain-item lands-list-plain-item--stack">
@@ -4248,11 +4592,35 @@ onMounted(() => void reloadAll())
         </template>
 
         <template v-else-if="selectedLand && activeTab === 'crop-rotation'">
-          <h2>Севооборот</h2>
-          <div class="lands-actions lands-actions--crop">
-            <button type="button" class="lands-btn lands-btn--save lands-btn--add" @click="openCropRotationModal">
-              Добавить
-            </button>
+          <div class="lands-section-head">
+            <h2>Севооборот</h2>
+            <div class="lands-section-actions">
+              <div class="task-export-btns">
+                <button type="button" class="task-btn-export action_has has_saved" :disabled="!landCropRotationExportRows.length" title="Экспорт в PDF" @click="exportLandCropRotationToPdf">
+                  <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                    <path d="M12 18v-6" />
+                    <path d="M9 15h6" />
+                  </svg>
+                  PDF
+                </button>
+                <button type="button" class="task-btn-export action_has has_saved" :disabled="!landCropRotationExportRows.length" title="Экспорт в Excel" @click="exportLandCropRotationToExcel">
+                  <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                    <path d="M8 13h2" />
+                    <path d="M8 17h2" />
+                    <path d="M14 13h2" />
+                    <path d="M14 17h2" />
+                  </svg>
+                  Excel
+                </button>
+              </div>
+              <button type="button" class="lands-btn lands-btn--save lands-btn--add" @click="openCropRotationModal">
+                Добавить
+              </button>
+            </div>
           </div>
           <div v-if="landCropRotations.length" class="lands-list-plain">
             <div v-for="rotation in landCropRotations" :key="rotation.id" class="lands-list-plain-item lands-list-plain-item--stack">
@@ -4299,11 +4667,35 @@ onMounted(() => void reloadAll())
         </template>
 
         <template v-else-if="selectedLand && activeTab === 'real-estate'">
-          <h2>Объекты недвижимости</h2>
-          <div class="lands-actions lands-actions--crop">
-            <button type="button" class="lands-btn lands-btn--save lands-btn--add" @click="openRealEstateModal">
-              Добавить
-            </button>
+          <div class="lands-section-head">
+            <h2>Объекты недвижимости</h2>
+            <div class="lands-section-actions">
+              <div class="task-export-btns">
+                <button type="button" class="task-btn-export action_has has_saved" :disabled="!landRealEstateExportRows.length" title="Экспорт в PDF" @click="exportLandRealEstateToPdf">
+                  <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                    <path d="M12 18v-6" />
+                    <path d="M9 15h6" />
+                  </svg>
+                  PDF
+                </button>
+                <button type="button" class="task-btn-export action_has has_saved" :disabled="!landRealEstateExportRows.length" title="Экспорт в Excel" @click="exportLandRealEstateToExcel">
+                  <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                    <path d="M8 13h2" />
+                    <path d="M8 17h2" />
+                    <path d="M14 13h2" />
+                    <path d="M14 17h2" />
+                  </svg>
+                  Excel
+                </button>
+              </div>
+              <button type="button" class="lands-btn lands-btn--save lands-btn--add" @click="openRealEstateModal">
+                Добавить
+              </button>
+            </div>
           </div>
           <div v-if="landRealEstateObjects.length" class="lands-list-plain">
             <div v-for="obj in landRealEstateObjects" :key="obj.id" class="lands-list-plain-item lands-list-plain-item--stack">
@@ -5508,6 +5900,9 @@ onMounted(() => void reloadAll())
 .lands-actions--end { justify-content: flex-end; }
 .lands-actions--map { border-top:none; padding-top:0; margin-bottom:8px; justify-content:flex-end; }
 .lands-actions--crop { border-top:none; padding-top:0; margin-bottom:12px; justify-content:flex-end; }
+.lands-section-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+.lands-section-head h2 { margin:0; }
+.lands-section-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
 .lands-melioration-head { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-bottom:10px; }
 .lands-melioration-empty { text-align:center; padding:18px 12px; }
 .lands-form-grid--mel { align-items: end; }
