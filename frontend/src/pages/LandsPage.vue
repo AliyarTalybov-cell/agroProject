@@ -106,6 +106,23 @@ import {
   type LandCropRotationTypeRefRow,
 } from '@/lib/landsSupabase'
 import {
+  loadStorageLocationTypes,
+  loadStorageLocationStatuses,
+  loadStorageFillStatuses,
+  addStorageLocationType,
+  updateStorageLocationType,
+  deleteStorageLocationType,
+  addStorageLocationStatus,
+  updateStorageLocationStatus,
+  deleteStorageLocationStatus,
+  addStorageFillStatus,
+  updateStorageFillStatus,
+  deleteStorageFillStatus,
+  type StorageLocationTypeRow,
+  type StorageLocationStatusRow,
+  type StorageFillStatusRow,
+} from '@/lib/storageRefsSupabase'
+import {
   loadFields,
   updateField,
   loadFieldMunicipalitiesRefs,
@@ -194,7 +211,7 @@ const landEditorOpen = ref(false)
 const landEditorMode = ref<'create' | 'edit'>('create')
 const landInlineEditOpen = ref(false)
 const showDetailsMap = ref(false)
-const landsRootTab = ref<'registry' | 'melioration' | 'land-refs' | 'rights-refs' | 'crops-refs' | 'melioration-refs' | 'equipment-refs' | 'field-refs' | 'crop-rotation-refs'>('registry')
+const landsRootTab = ref<'registry' | 'melioration' | 'land-refs' | 'rights-refs' | 'crops-refs' | 'melioration-refs' | 'equipment-refs' | 'field-refs' | 'crop-rotation-refs' | 'storage-refs'>('registry')
 const landRefsTab = ref<'land-types' | 'land-categories' | 'land-usage'>('land-types')
 const rightsRefsTab = ref<'ownership-forms' | 'right-types' | 'document-types' | 'holder-types' | 'holders'>('ownership-forms')
 const meliorationRefsTab = ref<'types' | 'subtypes' | 'event-types'>('types')
@@ -228,6 +245,14 @@ const equipmentTypeRefs = ref<EquipmentTypeRefRow[]>([])
 const equipmentConditionRefs = ref<EquipmentConditionRefRow[]>([])
 const fieldMunicipalityRefs = ref<FieldMunicipalityRefRow[]>([])
 const cropRotationTypeRefs = ref<LandCropRotationTypeRefRow[]>([])
+const storageRefsTab = ref<'types' | 'statuses' | 'fill-statuses'>('types')
+const storageLocationTypeRefs = ref<StorageLocationTypeRow[]>([])
+const storageLocationStatusRefs = ref<StorageLocationStatusRow[]>([])
+const storageFillStatusRefs = ref<StorageFillStatusRow[]>([])
+const newStorageLocationTypeName = ref('')
+const newStorageLocationStatusName = ref('')
+const newStorageLocationStatusMarksInactive = ref(false)
+const newStorageFillStatusName = ref('')
 const DEFAULT_EQUIPMENT_CONDITION_REFS: EquipmentConditionRefRow[] = [
   { code: 'operational', name: 'Исправна', sort_order: 10, created_at: '' },
   { code: 'repair', name: 'В ремонте', sort_order: 20, created_at: '' },
@@ -286,7 +311,8 @@ const deleteConfirmText = ref('')
 const deleteTarget = ref<{
   type: 'crop-rotation' | 'real-estate' | 'land-type' | 'land-category' | 'land-usage' | 'crop-ref' | 'melioration'
     | 'ownership-form' | 'right-type' | 'right-document-type' | 'holder-type' | 'right-holder'
-    | 'melioration-type' | 'melioration-subtype' | 'melioration-event-type' | 'equipment-type' | 'equipment-condition' | 'field-municipality' | 'crop-rotation-type' | 'land'
+    | 'melioration-type' | 'melioration-subtype' | 'melioration-event-type' | 'equipment-type' | 'equipment-condition' | 'field-municipality' | 'crop-rotation-type'
+    | 'storage-location-type' | 'storage-location-status' | 'storage-fill-status' | 'land'
   id: string
 } | null>(null)
 const successModalOpen = ref(false)
@@ -314,11 +340,11 @@ let landsSearchRequestId = 0
 let addressCandidatesRequestId = 0
 const route = useRoute()
 const router = useRouter()
-const ROOT_TAB_QUERY_MAP = new Set(['registry', 'melioration', 'land-refs', 'land-types', 'land-categories', 'land-usage', 'rights-refs', 'crops-refs', 'melioration-refs', 'equipment-refs', 'field-refs', 'crop-rotation-refs'])
+const ROOT_TAB_QUERY_MAP = new Set(['registry', 'melioration', 'land-refs', 'land-types', 'land-categories', 'land-usage', 'rights-refs', 'crops-refs', 'melioration-refs', 'equipment-refs', 'field-refs', 'crop-rotation-refs', 'storage-refs', 'storage-types', 'storage-statuses', 'storage-fill-statuses'])
 const routeLandId = computed(() => String(route.params.id || ''))
 const isDetailsMode = computed(() => Boolean(routeLandId.value))
 const landsListTitle = computed(() => (
-  landsRootTab.value === 'rights-refs' || landsRootTab.value === 'land-refs' || landsRootTab.value === 'crops-refs' || landsRootTab.value === 'melioration-refs' || landsRootTab.value === 'equipment-refs' || landsRootTab.value === 'field-refs' || landsRootTab.value === 'crop-rotation-refs'
+  landsRootTab.value === 'rights-refs' || landsRootTab.value === 'land-refs' || landsRootTab.value === 'crops-refs' || landsRootTab.value === 'melioration-refs' || landsRootTab.value === 'equipment-refs' || landsRootTab.value === 'field-refs' || landsRootTab.value === 'crop-rotation-refs' || landsRootTab.value === 'storage-refs'
     ? 'Справочники'
     : landsRootTab.value === 'melioration'
       ? 'Мелиорация'
@@ -339,6 +365,8 @@ const landsListSubtitle = computed(() => (
         ? 'Справочники для заполнения данных по полям'
       : landsRootTab.value === 'crop-rotation-refs'
         ? 'Справочники для заполнения севооборота'
+      : landsRootTab.value === 'storage-refs'
+        ? 'Справочники мест хранения (склады, силосы, тока, бурты)'
       : landsRootTab.value === 'melioration'
         ? 'Сведения по мелиорации'
         : 'Реестр, паспорты и справочники земельных участков'
@@ -1648,6 +1676,148 @@ async function removeCropRotationTypeRef(id: string) {
   }
 }
 
+async function addStorageLocationTypeRef() {
+  const name = newStorageLocationTypeName.value.trim()
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    const row = await addStorageLocationType(name)
+    storageLocationTypeRefs.value = [...storageLocationTypeRefs.value, row]
+    newStorageLocationTypeName.value = ''
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось добавить тип места хранения')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function editStorageLocationTypeRef(row: StorageLocationTypeRow) {
+  const next = prompt('Новое название типа места хранения', row.name)?.trim()
+  if (!next || next === row.name || !isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await updateStorageLocationType(row.id, next)
+    storageLocationTypeRefs.value = storageLocationTypeRefs.value.map((x) => (x.id === row.id ? { ...x, name: next } : x))
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось обновить тип места хранения')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function removeStorageLocationTypeRef(id: string) {
+  if (!isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await deleteStorageLocationType(id)
+    storageLocationTypeRefs.value = storageLocationTypeRefs.value.filter((x) => x.id !== id)
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось удалить тип места хранения')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function addStorageLocationStatusRef() {
+  const name = newStorageLocationStatusName.value.trim()
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    const row = await addStorageLocationStatus({
+      name,
+      marks_inactive: newStorageLocationStatusMarksInactive.value,
+    })
+    storageLocationStatusRefs.value = [...storageLocationStatusRefs.value, row]
+    newStorageLocationStatusName.value = ''
+    newStorageLocationStatusMarksInactive.value = false
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось добавить статус места хранения')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function editStorageLocationStatusRef(row: StorageLocationStatusRow) {
+  const next = prompt('Новое название статуса', row.name)?.trim()
+  if (!next || next === row.name || !isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await updateStorageLocationStatus(row.id, { name: next })
+    storageLocationStatusRefs.value = storageLocationStatusRefs.value.map((x) => (x.id === row.id ? { ...x, name: next } : x))
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось обновить статус места хранения')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function removeStorageLocationStatusRef(id: string) {
+  if (!isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await deleteStorageLocationStatus(id)
+    storageLocationStatusRefs.value = storageLocationStatusRefs.value.filter((x) => x.id !== id)
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось удалить статус места хранения')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function addStorageFillStatusRef() {
+  const name = newStorageFillStatusName.value.trim()
+  if (!name) return
+  if (!ensureRefsSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    const row = await addStorageFillStatus(name)
+    storageFillStatusRefs.value = [...storageFillStatusRefs.value, row]
+    newStorageFillStatusName.value = ''
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось добавить статус заполнения')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function editStorageFillStatusRef(row: StorageFillStatusRow) {
+  const next = prompt('Новое название статуса заполнения', row.name)?.trim()
+  if (!next || next === row.name || !isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await updateStorageFillStatus(row.id, next)
+    storageFillStatusRefs.value = storageFillStatusRefs.value.map((x) => (x.id === row.id ? { ...x, name: next } : x))
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось обновить статус заполнения')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
+async function removeStorageFillStatusRef(id: string) {
+  if (!isSupabaseConfigured()) return
+  refsLoading.value = true
+  refsError.value = null
+  try {
+    await deleteStorageFillStatus(id)
+    storageFillStatusRefs.value = storageFillStatusRefs.value.filter((x) => x.id !== id)
+  } catch (e) {
+    refsError.value = extractErrorMessage(e, 'Не удалось удалить статус заполнения')
+  } finally {
+    refsLoading.value = false
+  }
+}
+
 async function addOwnershipForm() {
   const name = newOwnershipFormName.value.trim()
   if (!name) return
@@ -2209,6 +2379,29 @@ async function loadCropRotationTypeRefsSafe() {
   }
 }
 
+async function loadStorageRefsSafe() {
+  if (!isSupabaseConfigured()) {
+    storageLocationTypeRefs.value = []
+    storageLocationStatusRefs.value = []
+    storageFillStatusRefs.value = []
+    return
+  }
+  try {
+    const [types, statuses, fills] = await Promise.all([
+      loadStorageLocationTypes(),
+      loadStorageLocationStatuses(),
+      loadStorageFillStatuses(),
+    ])
+    storageLocationTypeRefs.value = types
+    storageLocationStatusRefs.value = statuses
+    storageFillStatusRefs.value = fills
+  } catch {
+    storageLocationTypeRefs.value = []
+    storageLocationStatusRefs.value = []
+    storageFillStatusRefs.value = []
+  }
+}
+
 async function addFieldMunicipalityReference() {
   const name = newFieldMunicipalityName.value.trim()
   if (!name) return
@@ -2311,6 +2504,9 @@ async function reloadAll() {
       meliorationSubtypesRows,
       meliorationEventTypesRows,
       cropRotationTypeRows,
+      storageLocTypeRows,
+      storageLocStatusRows,
+      storageFillStatusRows,
     ] = await Promise.all([
       loadLands(!isDetailsMode.value && (landsRootTab.value === 'registry' || landsRootTab.value === 'melioration') ? landsSearch.value : ''),
       loadLandTypes(),
@@ -2327,6 +2523,9 @@ async function reloadAll() {
       loadLandMeliorationSubtypes(),
       loadLandMeliorationEventTypes(),
       loadLandCropRotationTypes(),
+      loadStorageLocationTypes(),
+      loadStorageLocationStatuses(),
+      loadStorageFillStatuses(),
     ])
     lands.value = landsRows
     landTypes.value = landTypeRows
@@ -2343,6 +2542,9 @@ async function reloadAll() {
     landMeliorationSubtypes.value = meliorationSubtypesRows
     landMeliorationEventTypes.value = meliorationEventTypesRows
     cropRotationTypeRefs.value = cropRotationTypeRows
+    storageLocationTypeRefs.value = storageLocTypeRows
+    storageLocationStatusRefs.value = storageLocStatusRows
+    storageFillStatusRefs.value = storageFillStatusRows
     await Promise.all([loadEquipmentRefsSafe(), loadFieldMunicipalityRefsSafe()])
     if (!isDetailsMode.value && landsRootTab.value === 'melioration') {
       landMeliorationEntries.value = await loadAllLandMeliorationEntries()
@@ -2927,6 +3129,27 @@ function requestDeleteCropRotationType(id: string) {
   deleteConfirmOpen.value = true
 }
 
+function requestDeleteStorageLocationType(id: string) {
+  deleteTarget.value = { type: 'storage-location-type', id }
+  deleteConfirmTitle.value = 'Удаление типа места хранения'
+  deleteConfirmText.value = 'Тип будет удалён из справочника. Убедитесь, что ни одно место хранения на него не ссылается.'
+  deleteConfirmOpen.value = true
+}
+
+function requestDeleteStorageLocationStatus(id: string) {
+  deleteTarget.value = { type: 'storage-location-status', id }
+  deleteConfirmTitle.value = 'Удаление статуса места хранения'
+  deleteConfirmText.value = 'Статус будет удалён из справочника. Убедитесь, что ни одно место хранения на него не ссылается.'
+  deleteConfirmOpen.value = true
+}
+
+function requestDeleteStorageFillStatus(id: string) {
+  deleteTarget.value = { type: 'storage-fill-status', id }
+  deleteConfirmTitle.value = 'Удаление статуса заполнения'
+  deleteConfirmText.value = 'Статус будет удалён из справочника. Убедитесь, что ни одно место хранения на него не ссылается.'
+  deleteConfirmOpen.value = true
+}
+
 function requestDeleteMelioration(id: string) {
   deleteTarget.value = { type: 'melioration', id }
   deleteConfirmTitle.value = 'Удаление записи мелиорации'
@@ -3300,6 +3523,12 @@ async function confirmDeleteTarget() {
     await removeEquipmentConditionReference(deleteTarget.value.id)
   } else if (deleteTarget.value.type === 'field-municipality') {
     await removeFieldMunicipalityReference(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'storage-location-type') {
+    await removeStorageLocationTypeRef(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'storage-location-status') {
+    await removeStorageLocationStatusRef(deleteTarget.value.id)
+  } else if (deleteTarget.value.type === 'storage-fill-status') {
+    await removeStorageFillStatusRef(deleteTarget.value.id)
   } else if (deleteTarget.value.type === 'crop-rotation-type') {
     await removeCropRotationTypeRef(deleteTarget.value.id)
   } else if (deleteTarget.value.type === 'land') {
@@ -3328,6 +3557,12 @@ watch(() => String(route.query.tab || ''), (tab) => {
     landRefsTab.value = tab
     return
   }
+  if (tab === 'storage-types' || tab === 'storage-statuses' || tab === 'storage-fill-statuses') {
+    landsRootTab.value = 'storage-refs'
+    storageRefsTab.value =
+      tab === 'storage-types' ? 'types' : tab === 'storage-statuses' ? 'statuses' : 'fill-statuses'
+    return
+  }
   landsRootTab.value = tab as typeof landsRootTab.value
   if (tab === 'melioration' && isSupabaseConfigured()) {
     void loadAllLandMeliorationEntries().then((rows) => {
@@ -3348,6 +3583,7 @@ watch(landsRootTab, (tab) => {
   if (tab === 'equipment-refs') void loadEquipmentRefsSafe()
   if (tab === 'field-refs') void loadFieldMunicipalityRefsSafe()
   if (tab === 'crop-rotation-refs') void loadCropRotationTypeRefsSafe()
+  if (tab === 'storage-refs') void loadStorageRefsSafe()
 })
 
 onBeforeUnmount(() => {
@@ -3451,7 +3687,7 @@ onMounted(() => void reloadAll())
     <div v-else class="lands-content">
       <section v-if="!isDetailsMode" class="lands-card page-enter-item">
         <div class="lands-tabs lands-tabs--top">
-          <template v-if="landsRootTab === 'rights-refs' || landsRootTab === 'land-refs' || landsRootTab === 'crops-refs' || landsRootTab === 'melioration-refs' || landsRootTab === 'equipment-refs' || landsRootTab === 'field-refs' || landsRootTab === 'crop-rotation-refs'">
+          <template v-if="landsRootTab === 'rights-refs' || landsRootTab === 'land-refs' || landsRootTab === 'crops-refs' || landsRootTab === 'melioration-refs' || landsRootTab === 'equipment-refs' || landsRootTab === 'field-refs' || landsRootTab === 'crop-rotation-refs' || landsRootTab === 'storage-refs'">
             <button type="button" class="lands-tab-btn" :class="{ 'is-active': landsRootTab === 'rights-refs' }" @click="landsRootTab = 'rights-refs'">
               Справочники прав
             </button>
@@ -3472,6 +3708,9 @@ onMounted(() => void reloadAll())
             </button>
             <button type="button" class="lands-tab-btn" :class="{ 'is-active': landsRootTab === 'crop-rotation-refs' }" @click="landsRootTab = 'crop-rotation-refs'">
               Справочники севооборота
+            </button>
+            <button type="button" class="lands-tab-btn" :class="{ 'is-active': landsRootTab === 'storage-refs' }" @click="landsRootTab = 'storage-refs'">
+              Справочники хранения
             </button>
           </template>
           <template v-else-if="landsRootTab === 'melioration'">
@@ -3953,6 +4192,89 @@ onMounted(() => void reloadAll())
                 </div>
               </div>
               <p v-if="!cropRotationTypeRefs.length" class="lands-muted">Пока нет типов севооборота.</p>
+            </div>
+          </div>
+        </template>
+        <template v-else-if="landsRootTab === 'storage-refs'">
+          <p v-if="refsError" class="lands-error">{{ refsError }}</p>
+          <div class="lands-tabs lands-tabs--sub">
+            <button type="button" class="lands-tab-btn" :class="{ 'is-active': storageRefsTab === 'types' }" @click="storageRefsTab = 'types'">
+              Типы мест хранения
+            </button>
+            <button type="button" class="lands-tab-btn" :class="{ 'is-active': storageRefsTab === 'statuses' }" @click="storageRefsTab = 'statuses'">
+              Статусы мест хранения
+            </button>
+            <button type="button" class="lands-tab-btn" :class="{ 'is-active': storageRefsTab === 'fill-statuses' }" @click="storageRefsTab = 'fill-statuses'">
+              Статус заполнения
+            </button>
+          </div>
+          <div v-if="storageRefsTab === 'types'" class="lands-ref-block">
+            <h2>Типы мест хранения</h2>
+            <div class="lands-ref-add-row">
+              <input v-model="newStorageLocationTypeName" class="lands-search" type="text" placeholder="Например: Элеватор" />
+              <button type="button" class="lands-btn lands-btn--save lands-btn--add" :disabled="refsLoading || !newStorageLocationTypeName.trim()" @click="addStorageLocationTypeRef">
+                Добавить
+              </button>
+            </div>
+            <div class="lands-list-plain">
+              <div v-for="row in storageLocationTypeRefs" :key="row.id" class="lands-list-plain-item">
+                <span>{{ row.name }}</span>
+                <div class="lands-item-actions">
+                  <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editStorageLocationTypeRef(row)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                  </button>
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteStorageLocationType(row.id)" />
+                </div>
+              </div>
+              <p v-if="!storageLocationTypeRefs.length" class="lands-muted">Пока нет типов мест хранения.</p>
+            </div>
+          </div>
+          <div v-else-if="storageRefsTab === 'statuses'" class="lands-ref-block">
+            <h2>Статусы мест хранения</h2>
+            <p class="lands-muted lands-ref-hint">Статус с признаком «не используется» визуально выделяет неактивные места в реестре.</p>
+            <div class="lands-ref-add-row lands-ref-add-row--wrap">
+              <input v-model="newStorageLocationStatusName" class="lands-search" type="text" placeholder="Например: На ремонте" />
+              <label class="lands-checkbox-inline">
+                <input v-model="newStorageLocationStatusMarksInactive" type="checkbox" />
+                <span>Не используется (неактивно)</span>
+              </label>
+              <button type="button" class="lands-btn lands-btn--save lands-btn--add" :disabled="refsLoading || !newStorageLocationStatusName.trim()" @click="addStorageLocationStatusRef">
+                Добавить
+              </button>
+            </div>
+            <div class="lands-list-plain">
+              <div v-for="row in storageLocationStatusRefs" :key="row.id" class="lands-list-plain-item">
+                <span>{{ row.name }}<template v-if="row.marks_inactive"> — не используется</template></span>
+                <div class="lands-item-actions">
+                  <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editStorageLocationStatusRef(row)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                  </button>
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteStorageLocationStatus(row.id)" />
+                </div>
+              </div>
+              <p v-if="!storageLocationStatusRefs.length" class="lands-muted">Пока нет статусов мест хранения.</p>
+            </div>
+          </div>
+          <div v-else class="lands-ref-block">
+            <h2>Статус заполнения</h2>
+            <p class="lands-muted lands-ref-hint">Используется для учёта партии зерна в месте хранения (пусто / наполняется / сформировано). Можно добавить свои варианты.</p>
+            <div class="lands-ref-add-row">
+              <input v-model="newStorageFillStatusName" class="lands-search" type="text" placeholder="Например: На отгрузке" />
+              <button type="button" class="lands-btn lands-btn--save lands-btn--add" :disabled="refsLoading || !newStorageFillStatusName.trim()" @click="addStorageFillStatusRef">
+                Добавить
+              </button>
+            </div>
+            <div class="lands-list-plain">
+              <div v-for="row in storageFillStatusRefs" :key="row.id" class="lands-list-plain-item">
+                <span>{{ row.name }}</span>
+                <div class="lands-item-actions">
+                  <button type="button" class="lands-action-btn lands-action-btn--edit" aria-label="Редактировать" title="Редактировать" @click="editStorageFillStatusRef(row)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                  </button>
+                  <UiDeleteButton size="sm" :disabled="refsLoading" @click="requestDeleteStorageFillStatus(row.id)" />
+                </div>
+              </div>
+              <p v-if="!storageFillStatusRefs.length" class="lands-muted">Пока нет статусов заполнения.</p>
             </div>
           </div>
         </template>
@@ -6035,6 +6357,36 @@ onMounted(() => void reloadAll())
 }
 .lands-ref-add-row .lands-btn {
   min-width: 108px;
+}
+.lands-ref-add-row--wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.lands-ref-add-row--wrap .lands-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin-bottom: 0;
+  height: 38px;
+}
+.lands-ref-hint {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+}
+.lands-checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+.lands-checkbox-inline input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-green);
 }
 .lands-fields-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .lands-list-plain { display:flex; flex-direction:column; gap:8px; }

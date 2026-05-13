@@ -13,6 +13,9 @@
   --bg-overlay: rgba(255, 255, 255, 0.72);
   --topbar-bg: #ffffff;
   --bg-panel-hover: #f9faf9;
+  /* Поля поиска/фильтров в реестрах — как карточки прогноза на странице «Погода» */
+  --toolbar-form-surface: #f8fafc;
+  --toolbar-form-surface-border: #f1f5f9;
   --sidebar-bg: #ffffff;
   --sidebar-border: #e5e7eb;
   --sidebar-text: #6b7280;
@@ -68,6 +71,8 @@
   --bg-overlay: rgba(6, 27, 21, 0.72);
   --topbar-bg: #061b15;
   --bg-panel-hover: #0b241c;
+  --toolbar-form-surface: var(--bg-panel-hover);
+  --toolbar-form-surface-border: color-mix(in srgb, var(--border-color) 60%, #1b3b2b);
   --agri-bg: #061b15;
   --agri-primary: #3d5c40;
   --agri-light: color-mix(in srgb, #3d5c40 20%, transparent);

@@ -16,7 +16,7 @@ const pageTitle = computed(() => {
   if (route.path.startsWith('/lands')) {
     const landsTab = String(route.query.tab || '')
     if (landsTab === 'melioration') return 'Мелиорация'
-    if (landsTab === 'rights-refs' || landsTab === 'land-refs' || landsTab === 'crops-refs' || landsTab === 'melioration-refs' || landsTab === 'equipment-refs' || landsTab === 'field-refs' || landsTab === 'crop-rotation-refs' || landsTab === 'land-types' || landsTab === 'land-categories' || landsTab === 'land-usage') {
+    if (landsTab === 'rights-refs' || landsTab === 'land-refs' || landsTab === 'crops-refs' || landsTab === 'melioration-refs' || landsTab === 'equipment-refs' || landsTab === 'field-refs' || landsTab === 'crop-rotation-refs' || landsTab === 'storage-refs' || landsTab === 'storage-types' || landsTab === 'storage-statuses' || landsTab === 'storage-fill-statuses' || landsTab === 'land-types' || landsTab === 'land-categories' || landsTab === 'land-usage') {
       return 'Справочники'
     }
   }
@@ -33,7 +33,7 @@ const isFieldsReferencesTab = computed(
 const isLandsReferencesTab = computed(() => {
   if (!route.path.startsWith('/lands')) return false
   const tab = String(route.query.tab || '')
-  return tab === 'rights-refs' || tab === 'land-refs' || tab === 'crops-refs' || tab === 'melioration-refs' || tab === 'equipment-refs' || tab === 'field-refs' || tab === 'crop-rotation-refs' || tab === 'land-types' || tab === 'land-categories' || tab === 'land-usage'
+  return tab === 'rights-refs' || tab === 'land-refs' || tab === 'crops-refs' || tab === 'melioration-refs' || tab === 'equipment-refs' || tab === 'field-refs' || tab === 'crop-rotation-refs' || tab === 'storage-refs' || tab === 'storage-types' || tab === 'storage-statuses' || tab === 'storage-fill-statuses' || tab === 'land-types' || tab === 'land-categories' || tab === 'land-usage'
 })
 const isLandsMeliorationTab = computed(
   () => route.path.startsWith('/lands') && String(route.query.tab || '') === 'melioration',
@@ -45,11 +45,20 @@ const fieldsNavActive = computed(
 const meliorationNavActive = computed(
   () => isLandsMeliorationTab.value,
 )
+const storageLocationsNavActive = computed(
+  () => route.path.startsWith('/warehouses/storage-locations'),
+)
+const warehousesNavActive = computed(
+  () => route.path.startsWith('/warehouses') && !route.path.startsWith('/warehouses/storage-locations'),
+)
 const settingsNavExpanded = ref(isFieldsReferencesTab.value || isLandsReferencesTab.value)
 const settingsNavActive = computed(() => false)
 const referencesNavActive = computed(() => isFieldsReferencesTab.value || isLandsReferencesTab.value)
 const landsNavExpanded = ref(
   route.path.startsWith('/fields') || route.path.startsWith('/field-details') || isLandsMeliorationTab.value,
+)
+const warehousesNavExpanded = ref(
+  route.path.startsWith('/warehouses'),
 )
 
 function toggleLandsNavSubmenu() {
@@ -58,6 +67,10 @@ function toggleLandsNavSubmenu() {
 
 function toggleSettingsNavSubmenu() {
   settingsNavExpanded.value = !settingsNavExpanded.value
+}
+
+function toggleWarehousesNavSubmenu() {
+  warehousesNavExpanded.value = !warehousesNavExpanded.value
 }
 
 function goDashboardHome() {
@@ -246,6 +259,42 @@ watch(
                       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M7 21v-7a3 3 0 0 1 3-3h4a3 3 0 0 1 3 3v7"/><path d="M12 11V3"/><path d="m8 7 4-4 4 4"/></svg>
                     </span>
                     Мелиорация
+                  </RouterLink>
+                </li>
+              </ul>
+            </li>
+            <li class="nav-item-group" :class="{ 'nav-item-group--open': warehousesNavExpanded }">
+              <RouterLink class="nav-item" :class="{ 'router-link-active': warehousesNavActive }" active-class="" exact-active-class="" to="/warehouses">
+                <span class="nav-item-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 10.5 12 4l9 6.5" />
+                    <path d="M5 9.5V20h14V9.5" />
+                    <path d="M9 20v-5h6v5" />
+                  </svg>
+                </span>
+                Склады
+              </RouterLink>
+              <button
+                type="button"
+                class="nav-submenu-toggle"
+                :class="{ 'is-open': warehousesNavExpanded }"
+                aria-label="Показать подпункты раздела Склады"
+                :aria-expanded="warehousesNavExpanded"
+                @click.stop="toggleWarehousesNavSubmenu"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <ul class="nav-submenu">
+                <li>
+                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': storageLocationsNavActive }" to="/warehouses/storage-locations">
+                    <span class="nav-item-icon" aria-hidden="true">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 7h18" />
+                        <path d="M5 7v13h14V7" />
+                        <path d="M9 11h6" />
+                      </svg>
+                    </span>
+                    Места хранения
                   </RouterLink>
                 </li>
               </ul>

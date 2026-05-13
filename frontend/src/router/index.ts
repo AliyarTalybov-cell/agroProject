@@ -12,6 +12,9 @@ import MechanicPage from '@/pages/MechanicPage.vue'
 import WeatherPage from '@/pages/WeatherPage.vue'
 import EquipmentPage from '@/pages/EquipmentPage.vue'
 import EquipmentDetailsPage from '@/pages/EquipmentDetailsPage.vue'
+import WarehousesPage from '@/pages/WarehousesPage.vue'
+import WarehouseCellPage from '@/pages/WarehouseCellPage.vue'
+import StorageLocationsPage from '@/pages/StorageLocationsPage.vue'
 import ProfilePage from '@/pages/ProfilePage.vue'
 import EmployeesPage from '@/pages/EmployeesPage.vue'
 import ChatPage from '@/pages/ChatPage.vue'
@@ -33,6 +36,9 @@ export const routes = [
   { path: '/lands/:id', name: 'land-details', component: LandsPage, props: true, meta: { title: 'Земельный участок' } },
   { path: '/fields', name: 'fields', component: FieldsPage, meta: { title: 'Поля и Культуры' } },
   { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true, meta: { title: 'Поле' } },
+  { path: '/warehouses', name: 'warehouses', component: WarehousesPage, meta: { title: 'Склады' } },
+  { path: '/warehouses/storage-locations', name: 'storage-locations', component: StorageLocationsPage, meta: { title: 'Места хранения' } },
+  { path: '/warehouses/:id', name: 'warehouse-cell', component: WarehouseCellPage, props: true, meta: { title: 'Карточка склада' } },
   { path: '/equipment', name: 'equipment', component: EquipmentPage, meta: { title: 'Управление техникой' } },
   { path: '/equipment/:id', name: 'equipment-details', component: EquipmentDetailsPage, props: true, meta: { title: 'Техника' } },
   { path: '/tasks', name: 'tasks', component: TasksPage, meta: { title: 'Календарь' } },
