@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
@@ -810,9 +811,7 @@ watch(storageId, () => {
         <div class="modal warehouse-cell-confirm-modal" @click.stop>
           <div class="modal-header">
             <h2 id="detach-intake-title" class="modal-title">Исключить из партии?</h2>
-            <button type="button" class="modal-close" aria-label="Закрыть" @click="closeDetachIntakeConfirm">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
+            <ModalCloseButton @click="closeDetachIntakeConfirm" />
           </div>
           <div class="modal-body">
             <p class="warehouse-cell-confirm-text">
@@ -842,9 +841,7 @@ watch(storageId, () => {
         <div class="modal warehouse-intake-modal" @click.stop>
           <div class="modal-header">
             <h2 class="modal-title">Паспорт качества · {{ currentBatch.code }}</h2>
-            <button type="button" class="modal-close" aria-label="Закрыть" @click="closePassportModal">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
+            <ModalCloseButton @click="closePassportModal" />
           </div>
           <div class="modal-body">
             <p class="batch-passport-crop">{{ storageBatchCropLabel(currentBatch) }}</p>
@@ -867,9 +864,7 @@ watch(storageId, () => {
         <div class="modal warehouse-intake-modal">
           <div class="modal-header">
             <h2 class="modal-title">Зафиксировать валовой сбор</h2>
-            <button type="button" class="modal-close" aria-label="Закрыть" @click="closeIntakeModal">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
+            <ModalCloseButton @click="closeIntakeModal" />
           </div>
           <div class="modal-body">
             <div class="task-form-row task-form-row--two">
@@ -943,9 +938,7 @@ watch(storageId, () => {
         <div class="modal warehouse-intake-modal">
           <div class="modal-header">
             <h2 class="modal-title">Сформировать партию зерна</h2>
-            <button type="button" class="modal-close" aria-label="Закрыть" @click="closeBatchWizard">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
+            <ModalCloseButton @click="closeBatchWizard" />
           </div>
           <div class="modal-body">
             <div class="warehouse-cell-steps">
@@ -1313,12 +1306,7 @@ watch(storageId, () => {
   border-bottom: 1px solid var(--border-color);
 }
 .modal-title { margin: 0; font-size: 1.7rem; color: var(--text-primary); }
-.modal-close {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
+/* .modal-close styles are in global.css */
 .modal-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
 .task-form-row { display: flex; gap: 12px; }
 .task-form-row--two > .task-form-field { width: 50%; }

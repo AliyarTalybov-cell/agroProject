@@ -22,6 +22,7 @@ import {
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiSuccessModal from '@/components/UiSuccessModal.vue'
 
@@ -2444,12 +2445,7 @@ async function confirmDeleteTask() {
               </p>
             </div>
           </div>
-          <button type="button" class="modal-close modal-close--design" aria-label="Закрыть" @click="closeTaskModal">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" x2="6" y1="6" y2="18" />
-              <line x1="6" x2="18" y1="6" y2="18" />
-            </svg>
-          </button>
+          <ModalCloseButton @click="closeTaskModal" />
         </div>
 
         <form class="modal-form modal-form--design" @submit.prevent="onSubmitTask" :aria-busy="taskSaveLoading">
@@ -5079,26 +5075,7 @@ async function confirmDeleteTask() {
   color: var(--text-secondary);
 }
 
-.modal-close {
-  width: 36px;
-  height: 36px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
-  color: var(--text-secondary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transform-origin: center;
-  transition: color 0.22s ease, background 0.22s ease, transform 0.26s ease;
-}
-
-.modal-close:hover {
-  background: var(--sidebar-hover-bg);
-  color: var(--text-primary);
-  transform: rotate(90deg) scale(1.08);
-}
+/* .modal-close styles are in global.css */
 
 /* Макет: шапка */
 .modal-header--design {
@@ -5132,14 +5109,7 @@ async function confirmDeleteTask() {
   color: var(--text-secondary);
 }
 
-.modal-close--design {
-  color: var(--text-secondary);
-}
-
-.modal-close--design:hover {
-  color: var(--text-primary);
-  background: rgba(0, 0, 0, 0.06);
-}
+/* .modal-close--design overrides removed — global.css handles hover */
 
 /* Макет: поля */
 .modal-field--design {

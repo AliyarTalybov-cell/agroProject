@@ -5,6 +5,7 @@ import { isSupabaseConfigured } from '@/lib/supabase'
 import { formatSupabaseError } from '@/lib/formatSupabaseError'
 import { loadEmployees, searchEmployees, type EmployeeRow } from '@/lib/employeesSupabase'
 import UiTrashIcon from '@/components/UiTrashIcon.vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import {
   type AvatarTone,
   CHAT_MESSAGES_PAGE_SIZE,
@@ -1456,7 +1457,7 @@ onUnmounted(() => {
       <div class="chat-page__modal" @click.stop>
         <div class="chat-page__modal-head">
           <h2 class="chat-page__modal-title">Кому написать</h2>
-          <button type="button" class="chat-page__modal-close" aria-label="Закрыть" @click="dmModalOpen = false">×</button>
+          <ModalCloseButton @click="dmModalOpen = false" />
         </div>
         <input v-model="dmSearch" type="search" class="chat-page__modal-search" placeholder="Поиск по сотрудникам…" autocomplete="off" />
         <div class="chat-page__modal-list">
@@ -1488,7 +1489,7 @@ onUnmounted(() => {
       <div class="chat-page__modal" @click.stop>
         <div class="chat-page__modal-head">
           <h2 class="chat-page__modal-title">Новая команда</h2>
-          <button type="button" class="chat-page__modal-close" aria-label="Закрыть" @click="groupModalOpen = false">×</button>
+          <ModalCloseButton @click="groupModalOpen = false" />
         </div>
         <label class="chat-page__modal-label">Название</label>
         <input v-model="groupTitle" type="text" class="chat-page__modal-input" placeholder="Например: Бригада поля №3" />
@@ -3390,15 +3391,7 @@ a.chat-page__attach-preview {
   color: var(--text-primary);
 }
 
-.chat-page__modal-close {
-  border: none;
-  background: transparent;
-  font-size: 1.5rem;
-  line-height: 1;
-  cursor: pointer;
-  color: var(--text-secondary);
-  padding: 4px 8px;
-}
+/* .chat-page__modal-close styles are in global.css */
 
 .chat-page__modal-search,
 .chat-page__modal-input {

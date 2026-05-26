@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import RefFieldHelp from '@/components/RefFieldHelp.vue'
 import YandexMap from '@/components/YandexMap.vue'
@@ -5065,7 +5066,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal">
           <div class="lands-modal-head">
             <h2>{{ landEditorMode === 'create' ? 'Новая земля' : 'Редактирование земли' }}</h2>
-            <button type="button" class="lands-modal-close" @click="closeLandEditor">×</button>
+            <ModalCloseButton @click="closeLandEditor" />
           </div>
           <div class="lands-modal-body">
             <div class="lands-form-grid">
@@ -5216,7 +5217,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal lands-modal--compact lands-modal--success">
           <div class="lands-modal-head">
             <h2>Добавить запись севооборота</h2>
-            <button type="button" class="lands-modal-close" @click="closeCropRotationModal">×</button>
+            <ModalCloseButton @click="closeCropRotationModal" />
           </div>
           <div class="lands-modal-body">
             <div class="lands-form-grid">
@@ -5314,7 +5315,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal">
           <div class="lands-modal-head">
             <h2>{{ editingRightId ? 'Редактировать право владения' : 'Добавить право владения' }}</h2>
-            <button type="button" class="lands-modal-close" :disabled="saving || rightFileUploading" @click="closeRightModal">×</button>
+            <ModalCloseButton :disabled="saving || rightFileUploading" @click="closeRightModal" />
           </div>
           <div class="lands-modal-body">
             <div class="lands-owner-mode-section">
@@ -5507,7 +5508,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal">
           <div class="lands-modal-head">
             <h2>{{ editingRealEstateId ? 'Редактировать объект недвижимости' : 'Добавить объект недвижимости' }}</h2>
-            <button type="button" class="lands-modal-close" @click="closeRealEstateModal">×</button>
+            <ModalCloseButton @click="closeRealEstateModal" />
           </div>
           <div class="lands-modal-body">
             <div class="lands-form-grid">
@@ -5609,7 +5610,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal">
           <div class="lands-modal-head">
             <h2>{{ editingUserId ? 'Редактировать землепользователя' : 'Добавить землепользователя' }}</h2>
-            <button type="button" class="lands-modal-close" :disabled="saving || userFileUploading" @click="closeUserModal">×</button>
+            <ModalCloseButton :disabled="saving || userFileUploading" @click="closeUserModal" />
           </div>
           <div class="lands-modal-body">
             <label class="lands-field">
@@ -5766,7 +5767,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal lands-modal--compact">
           <div class="lands-modal-head">
             <h2>Удалить файл?</h2>
-            <button type="button" class="lands-modal-close" :disabled="saving || userFileUploading" @click="closeUserFileDeleteConfirm">×</button>
+            <ModalCloseButton :disabled="saving || userFileUploading" @click="closeUserFileDeleteConfirm" />
           </div>
           <div class="lands-modal-body">
             <p class="lands-confirm-text">Ссылка на файл будет удалена из формы землепользователя.</p>
@@ -5784,7 +5785,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal lands-modal--compact">
           <div class="lands-modal-head">
             <h2>Добавить запись мелиорации</h2>
-            <button type="button" class="lands-modal-close" :disabled="saving" @click="closeMeliorationModal">×</button>
+            <ModalCloseButton :disabled="saving" @click="closeMeliorationModal" />
           </div>
           <div class="lands-modal-body">
             <div class="lands-form-grid">
@@ -5925,7 +5926,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal lands-modal--compact">
           <div class="lands-modal-head">
             <h2>{{ deleteConfirmTitle }}</h2>
-            <button type="button" class="lands-modal-close" :disabled="saving || refsLoading" @click="closeDeleteConfirm">×</button>
+            <ModalCloseButton :disabled="saving || refsLoading" @click="closeDeleteConfirm" />
           </div>
           <div class="lands-modal-body">
             <p class="lands-confirm-text">{{ deleteConfirmText }}</p>
@@ -5950,7 +5951,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal lands-modal--compact">
           <div class="lands-modal-head">
             <h2>Удалить файл?</h2>
-            <button type="button" class="lands-modal-close" :disabled="saving || rightFileUploading" @click="closeRightFileDeleteConfirm">×</button>
+            <ModalCloseButton :disabled="saving || rightFileUploading" @click="closeRightFileDeleteConfirm" />
           </div>
           <div class="lands-modal-body">
             <p class="lands-confirm-text">Файл будет удален из списка подтверждающих документов.</p>
@@ -5974,7 +5975,7 @@ onMounted(() => void reloadAll())
         <div class="lands-modal lands-modal--compact">
           <div class="lands-modal-head">
             <h2>Готово</h2>
-            <button type="button" class="lands-modal-close" @click="closeSuccessModal">×</button>
+            <ModalCloseButton @click="closeSuccessModal" />
           </div>
           <div class="lands-modal-body">
             <p class="lands-confirm-text">{{ successModalText }}</p>
@@ -6893,24 +6894,7 @@ onMounted(() => void reloadAll())
 .lands-modal--success { animation: lands-success-pop .24s ease; }
 .lands-modal-head { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--border-color); }
 .lands-modal-head h2 { margin:0; font-size:1.05rem; }
-.lands-modal-close {
-  width: 36px;
-  height: 36px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 1.5rem;
-  line-height: 1;
-  cursor: pointer;
-  border-radius: 8px;
-  transform-origin: center;
-  transition: background 0.22s ease, color 0.22s ease, transform 0.26s ease;
-}
-.lands-modal-close:hover {
-  background: rgba(0, 0, 0, 0.08);
-  color: var(--text-primary);
-  transform: rotate(90deg) scale(1.08);
-}
+/* .lands-modal-close styles are now in global.css */
 .lands-modal-body { padding:12px; overflow:auto; }
 .lands-modal-actions { display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; padding:10px 12px; border-top:1px solid var(--border-color); }
 .lands-confirm-text { margin: 0; color: var(--text-secondary); font-size: .95rem; line-height: 1.45; }
@@ -6957,7 +6941,6 @@ onMounted(() => void reloadAll())
 [data-theme='dark'] .lands-overview-item,
 [data-theme='dark'] .lands-passport-input,
 [data-theme='dark'] .lands-modal,
-[data-theme='dark'] .lands-modal-close,
 [data-theme='dark'] .lands-table th,
 [data-theme='dark'] .lands-map-head,
 [data-theme='dark'] .lands-map-actions,
@@ -6983,16 +6966,6 @@ onMounted(() => void reloadAll())
 [data-theme='dark'] .lands-modal-head,
 [data-theme='dark'] .lands-modal-actions {
   border-color: var(--border-color);
-}
-[data-theme='dark'] .lands-modal-close {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-secondary);
-}
-[data-theme='dark'] .lands-modal-close:hover {
-  background: var(--interactive-hover);
-  color: var(--text-primary);
-  transform: rotate(90deg) scale(1.08);
 }
 [data-theme='dark'] .lands-modal .lands-field input,
 [data-theme='dark'] .lands-modal .lands-field textarea,

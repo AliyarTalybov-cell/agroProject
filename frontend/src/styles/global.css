@@ -250,14 +250,130 @@
   box-shadow: 0 0 0 3px var(--focus-ring) !important;
 }
 
-[data-theme='dark'] :where(
+/* Кнопка закрытия модалок — эталон StorageLocationsPage / modal-close-button.mdc */
+:where(
   .modal-close,
   .modal-close-btn,
-  .task-modal-close,
+  .app-modal-close,
+  .emp-modal-close,
+  .eem-close,
+  .chat-page__modal-close,
   .lands-modal-close,
-  .app-modal-close
-):hover {
-  background: var(--interactive-hover) !important;
+  .task-modal-close
+) {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+:where(
+  .modal-close,
+  .modal-close-btn,
+  .app-modal-close,
+  .emp-modal-close,
+  .eem-close,
+  .chat-page__modal-close,
+  .lands-modal-close,
+  .task-modal-close
+) svg {
+  display: block;
+  transition: transform 0.2s ease;
+}
+
+:where(
+  .modal-close,
+  .modal-close-btn,
+  .app-modal-close,
+  .emp-modal-close,
+  .eem-close,
+  .chat-page__modal-close,
+  .lands-modal-close,
+  .task-modal-close
+):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-green) 16%, transparent);
+  color: var(--accent-green);
+}
+
+:where(
+  .modal-close,
+  .modal-close-btn,
+  .app-modal-close,
+  .emp-modal-close,
+  .eem-close,
+  .chat-page__modal-close,
+  .lands-modal-close,
+  .task-modal-close
+):hover:not(:disabled) svg {
+  transform: rotate(90deg);
+}
+
+:where(
+  .modal-close,
+  .modal-close-btn,
+  .app-modal-close,
+  .emp-modal-close,
+  .eem-close,
+  .chat-page__modal-close,
+  .lands-modal-close,
+  .task-modal-close
+):disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.modal-close--absolute {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(
+    .modal-close,
+    .modal-close-btn,
+    .app-modal-close,
+    .emp-modal-close,
+    .eem-close,
+    .chat-page__modal-close,
+    .lands-modal-close,
+    .task-modal-close
+  ),
+  :where(
+    .modal-close,
+    .modal-close-btn,
+    .app-modal-close,
+    .emp-modal-close,
+    .eem-close,
+    .chat-page__modal-close,
+    .lands-modal-close,
+    .task-modal-close
+  ) svg {
+    transition: none;
+  }
+
+  :where(
+    .modal-close,
+    .modal-close-btn,
+    .app-modal-close,
+    .emp-modal-close,
+    .eem-close,
+    .chat-page__modal-close,
+    .lands-modal-close,
+    .task-modal-close
+  ):hover:not(:disabled) svg {
+    transform: none;
+  }
 }
 
 /* Единая плавная анимация открытия модалок и подложек */

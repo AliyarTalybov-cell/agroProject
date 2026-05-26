@@ -8,7 +8,7 @@ alwaysApply: true
 ## 0) Обязательный preflight перед версткой и API
 
 - Перед любой задачей по верстке, API, Supabase, edge-functions и данным ОБЯЗАТЕЛЬНО перечитать все правила из `.cursor/rules/` (включая новые и недавно добавленные).
-- Минимальный обязательный список для каждого запуска: `.cursor/rules/architecture-and-compatibility.mdc`, `.cursor/rules/pr-safety-checklist.mdc`, `.cursor/rules/ui-navigation-consistency.mdc`, `.cursor/rules/new-pages-ui-ux.mdc` (при работе с `frontend/src/pages/**/*.vue`), `.cursor/rules/table-row-hover-animation.mdc` (при кликабельных строках реестров), `.cursor/rules/context7-required.mdc`, `.cursor/rules/critical-errors-security-analyzer.mdc`, `.cursor/rules/vue-vite-supabase-critical-audit.mdc`.
+- Минимальный обязательный список для каждого запуска: `.cursor/rules/architecture-and-compatibility.mdc`, `.cursor/rules/pr-safety-checklist.mdc`, `.cursor/rules/ui-navigation-consistency.mdc`, `.cursor/rules/modal-close-button.mdc` (модалки и крестик закрытия), `.cursor/rules/new-pages-ui-ux.mdc` (при работе с `frontend/src/pages/**/*.vue`), `.cursor/rules/table-row-hover-animation.mdc` (при кликабельных строках реестров), `.cursor/rules/context7-required.mdc`, `.cursor/rules/critical-errors-security-analyzer.mdc`, `.cursor/rules/vue-vite-supabase-critical-audit.mdc`.
 - До начала изменений по UI зафиксировать короткий план переиспользования существующих паттернов (что именно будет взято из текущего проекта).
 - Если подходящего компонента/паттерна в проекте нет, сначала проверить соседние модули и только потом предлагать новый компонент.
 - Любое отклонение от правил допустимо только при явном запросе пользователя в текущем диалоге.

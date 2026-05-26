@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import type { EmployeeRole, EmployeeRow, PositionRow } from '@/lib/employeesSupabase'
 import { deleteEmployee, updateEmployee } from '@/lib/employeesSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
@@ -146,9 +147,7 @@ watch(
   <teleport to="body">
     <div v-if="open && employee" class="eem-backdrop" role="dialog" aria-modal="true" aria-label="Редактирование сотрудника" @click.self="close">
       <div class="eem-modal">
-        <button type="button" class="eem-close" aria-label="Закрыть" @click="close">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
-        </button>
+        <ModalCloseButton :absolute="true" @click="close" />
 
         <div class="eem-body">
           <div v-if="message" class="eem-msg" :class="message.type === 'success' ? 'eem-msg--success' : 'eem-msg--error'">
@@ -290,26 +289,7 @@ watch(
   background: var(--bg-elevated);
   border-color: var(--border-color);
 }
-.eem-close {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 2;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: none;
-  background: var(--interactive-hover);
-  color: var(--text-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.eem-close:hover {
-  background: var(--interactive-active);
-  color: var(--text-primary);
-}
+/* .eem-close positioning/sizing — absolute positioning now via .modal-close--absolute */
 .eem-body {
   padding: 28px 24px 20px;
   overflow: auto;

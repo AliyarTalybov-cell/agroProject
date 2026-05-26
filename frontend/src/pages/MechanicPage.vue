@@ -27,6 +27,7 @@ import { loadEquipment, type EquipmentRow } from '@/lib/equipmentSupabase'
 import { loadEmployees, loadPositions, searchEmployees, type EmployeeRow, type PositionRow } from '@/lib/employeesSupabase'
 import { getOrCreateDmThread, sendChatMessage, sendChatMessageWithFile } from '@/lib/chatSupabase'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import UiSuccessModal from '@/components/UiSuccessModal.vue'
 
 const DEFAULT_REASONS: Array<{ label: string; description: string; category: DowntimeCategory }> = [
@@ -1997,14 +1998,7 @@ function addField() {
           <div class="modal-title">
             {{ finishNotesType === 'downtime' ? 'Завершить простой' : 'Остановить операцию' }}
           </div>
-          <button
-            type="button"
-            class="modal-close-btn"
-            aria-label="Закрыть без завершения"
-            @click="closeFinishNotesModal"
-          >
-            ×
-          </button>
+          <ModalCloseButton aria-label="Закрыть без завершения" @click="closeFinishNotesModal" />
         </div>
         <p class="modal-text modal-text-muted">
           По желанию укажите список дел, которые были выполнены. Заметки сохранятся и будут видны в журнале работ и аналитике.
@@ -4286,20 +4280,7 @@ function addField() {
   margin-bottom: 8px;
 }
 
-.modal-close-btn {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 1.1rem;
-  line-height: 1;
-  padding: 4px 6px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.modal-close-btn:hover {
-  background: var(--chip-bg);
-}
+/* .modal-close-btn styles are in global.css */
 
 .modal-text {
   font-size: 0.9rem;

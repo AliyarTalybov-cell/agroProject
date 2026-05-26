@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import { createEmployee, type EmployeeRole, type PositionRow } from '@/lib/employeesSupabase'
 
 const props = defineProps<{
@@ -90,12 +91,7 @@ watch(
   <teleport to="body">
     <div v-if="open" class="emp-modal-backdrop" role="dialog" aria-modal="true" aria-label="Новый сотрудник" @click.self="close">
       <div class="emp-modal">
-        <button type="button" class="emp-modal-close" aria-label="Закрыть" @click="close">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 6 6 18" />
-            <path d="M6 6l12 12" />
-          </svg>
-        </button>
+        <ModalCloseButton :absolute="true" @click="close" />
 
         <div class="emp-modal-body">
           <div v-if="message" class="emp-modal-message" :class="message.type === 'success' ? 'emp-modal-message--success' : 'emp-modal-message--error'">
@@ -203,26 +199,7 @@ watch(
   border-color: var(--border-color);
 }
 
-.emp-modal-close {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 2;
-  border: none;
-  background: var(--interactive-hover);
-  color: var(--text-secondary);
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-.emp-modal-close:hover {
-  background: var(--interactive-active);
-  color: var(--text-primary);
-}
+/* .emp-modal-close positioning/sizing — absolute positioning now via .modal-close--absolute */
 
 .emp-modal-body {
   padding: 28px 24px 20px;

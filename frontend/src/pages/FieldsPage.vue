@@ -35,6 +35,7 @@ import {
 } from '@/lib/fieldsSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiSuccessModal from '@/components/UiSuccessModal.vue'
 import RefFieldHelp from '@/components/RefFieldHelp.vue'
@@ -2010,9 +2011,7 @@ onMounted(async () => {
                   <path d="M21 15v6h-6" />
                 </svg>
               </button>
-              <button type="button" class="modal-close" aria-label="Закрыть" @click="closeFieldModal">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-              </button>
+              <ModalCloseButton @click="closeFieldModal" />
             </div>
           </header>
           <div v-if="fieldFormError" class="modal-error">{{ fieldFormError }}</div>
@@ -3681,30 +3680,7 @@ onMounted(async () => {
   letter-spacing: -0.02em;
   color: var(--text-primary);
 }
-.modal-close {
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transform-origin: center;
-  transition: color 0.22s ease, background 0.22s ease, transform 0.26s ease;
-}
-.modal-close:hover {
-  color: var(--text-primary);
-  background: var(--sidebar-hover-bg);
-  transform: rotate(90deg) scale(1.08);
-}
-.modal-close svg {
-  width: 20px;
-  height: 20px;
-}
+/* .modal-close styles are in global.css */
 .modal-error {
   margin-bottom: var(--space-md);
   padding: 10px 12px;
@@ -4320,9 +4296,7 @@ onMounted(async () => {
   background: color-mix(in srgb, var(--accent-green) 24%, transparent);
   color: var(--accent-green);
 }
-[data-theme='dark'] .modal.modal-fields--add .modal-close:hover {
-  background: var(--interactive-hover);
-}
+/* dark-theme .modal-close:hover handled by global.css */
 
 .field-map-picker-wrap {
   border: 1px solid var(--border-color);

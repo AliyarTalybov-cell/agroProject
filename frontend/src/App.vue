@@ -6,6 +6,7 @@ import { useAuth } from '@/stores/auth'
 import { useBackendHealth } from '@/stores/backendHealth'
 import AppBackendBanner from '@/components/AppBackendBanner.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import { chatTotalUnread, refreshChatTotalUnread } from '@/lib/chatSupabase'
 import { countMyUnreadNotifications } from '@/lib/notificationsSupabase'
 import { startActivityHeartbeat, stopActivityHeartbeat } from '@/lib/activityHeartbeat'
@@ -476,9 +477,7 @@ watch(
         <div class="app-modal" @click.stop>
           <div class="app-modal-header">
             <div class="app-modal-title">Выйти из аккаунта?</div>
-            <button type="button" class="app-modal-close" aria-label="Закрыть" :disabled="logoutBusy" @click="closeLogoutConfirm">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
-            </button>
+            <ModalCloseButton :disabled="logoutBusy" @click="closeLogoutConfirm" />
           </div>
           <div class="app-modal-body">
             <div class="app-modal-text">Вы действительно хотите выйти? Несохранённые изменения могут быть потеряны.</div>
@@ -638,22 +637,6 @@ watch(
   font-size: 1.05rem;
 }
 
-.app-modal-close {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: none;
-  background: var(--interactive-hover);
-  color: var(--text-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.app-modal-close:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
 .app-modal-body {
   padding: 18px 20px;
 }

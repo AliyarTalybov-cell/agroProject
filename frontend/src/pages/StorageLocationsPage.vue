@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import RefFieldHelp from '@/components/RefFieldHelp.vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import {
   addStorageLocation,
@@ -462,9 +463,7 @@ function onPageSizeChange() {
         <div class="modal modal-fields modal-fields--add storage-modal" role="dialog" aria-modal="true">
           <div class="modal-header">
             <h2 class="modal-title">{{ editingId ? 'Редактирование места хранения' : 'Новое место хранения' }}</h2>
-            <button type="button" class="modal-close" aria-label="Закрыть" @click="closeModal">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
+            <ModalCloseButton @click="closeModal" />
           </div>
           <div class="modal-body">
             <div class="task-form-row task-form-row--design">
@@ -561,9 +560,7 @@ function onPageSizeChange() {
         <div class="modal modal-fields storage-modal storage-modal--confirm">
           <div class="modal-header">
             <h2 class="modal-title">Удалить место хранения?</h2>
-            <button type="button" class="modal-close" :disabled="saving" aria-label="Закрыть" @click="closeDeleteConfirm">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
+            <ModalCloseButton :disabled="saving" @click="closeDeleteConfirm" />
           </div>
           <div class="modal-body">
             <p class="storage-confirm-text">Это действие нельзя отменить.</p>
@@ -1152,33 +1149,6 @@ function onPageSizeChange() {
   color: var(--text-primary);
 }
 
-.modal-close {
-  width: 40px;
-  height: 40px;
-  border: none;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color .2s ease, color .2s ease, transform .2s ease;
-}
-
-.modal-close svg {
-  transition: transform .2s ease;
-}
-
-.modal-close:hover {
-  background: color-mix(in srgb, var(--accent-green) 16%, transparent);
-  color: var(--accent-green);
-}
-
-.modal-close:hover svg {
-  transform: rotate(90deg);
-}
-
 .modal-body {
   padding: 12px 16px 14px;
   display: flex;
@@ -1274,8 +1244,7 @@ function onPageSizeChange() {
 }
 
 .task-form-cancel:disabled,
-.task-form-submit:disabled,
-.modal-close:disabled {
+.task-form-submit:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

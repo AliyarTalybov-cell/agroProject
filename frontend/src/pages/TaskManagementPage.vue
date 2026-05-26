@@ -32,6 +32,7 @@ import { loadWorkOperations, type WorkOperationRow } from '@/lib/reasonsAndOpera
 import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow, TaskFileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiSuccessModal from '@/components/UiSuccessModal.vue'
 
@@ -1432,12 +1433,7 @@ function statusClass(s: Status) {
                   </p>
                 </div>
               </div>
-              <button type="button" class="modal-close modal-close--design" aria-label="Закрыть" @click="closeCreate">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="18" x2="6" y1="6" y2="18" />
-                  <line x1="6" x2="18" y1="6" y2="18" />
-                </svg>
-              </button>
+              <ModalCloseButton @click="closeCreate" />
             </div>
             <fieldset class="modal-form-fieldset">
               <div class="modal-body">
@@ -1650,12 +1646,7 @@ function statusClass(s: Status) {
                 <p class="modal-task-id modal-task-id--design">№ {{ getTaskNumber(selectedTask.id) }}</p>
               </div>
             </div>
-            <button type="button" class="modal-close modal-close--design" aria-label="Закрыть" @click="closeTask">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" x2="6" y1="6" y2="18" />
-                <line x1="6" x2="18" y1="6" y2="18" />
-              </svg>
-            </button>
+            <ModalCloseButton @click="closeTask" />
           </div>
           <div class="task-detail-layout">
             <div v-if="isMetaInitialLoading" class="task-detail-loading-overlay" aria-hidden="true">
@@ -2834,27 +2825,7 @@ function statusClass(s: Status) {
   letter-spacing: 0.08em;
 }
 
-.modal-close {
-  width: 36px;
-  height: 36px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
-  color: var(--text-secondary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transform-origin: center;
-  transition: color 0.22s ease, background 0.22s ease, transform 0.26s ease;
-}
-
-.modal-close:hover {
-  background: var(--sidebar-hover-bg);
-  color: var(--text-primary);
-  transform: rotate(90deg) scale(1.08);
-}
+/* .modal-close styles are in global.css */
 
 .modal-field {
   display: flex;
@@ -4422,10 +4393,7 @@ function statusClass(s: Status) {
   color: var(--text-primary);
 }
 
-[data-theme='dark'] .modal-close:hover {
-  background: var(--interactive-hover);
-  color: var(--text-primary);
-}
+/* dark .modal-close:hover handled by global.css */
 
 [data-theme='dark'] .task-detail-card {
   background: color-mix(in srgb, var(--bg-elevated) 88%, black);
