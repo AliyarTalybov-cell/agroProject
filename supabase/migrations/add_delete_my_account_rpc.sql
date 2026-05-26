@@ -33,8 +33,9 @@ begin
   set created_by = null
   where created_by = v_uid;
 
-  -- Задачи, назначенные на пользователя: удаляем (в схеме assignee_id not null).
-  delete from public.tasks
+  -- Задачи, назначенные на пользователя: оставляем, снимаем исполнителя.
+  update public.tasks
+  set assignee_id = null
   where assignee_id = v_uid;
 
   -- Финальное удаление пользователя из auth.users.

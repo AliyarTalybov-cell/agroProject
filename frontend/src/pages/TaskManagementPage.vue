@@ -22,7 +22,11 @@ import {
   uploadTaskFile,
   deleteTaskFile,
   getTaskFilePublicUrl,
+  loadTaskParticipantsMap,
+  syncTaskParticipants,
+  TASK_ASSIGNEE_FILTER_UNASSIGNED,
 } from '@/lib/tasksSupabase'
+import { canDeleteTask } from '@/lib/deletePermissions'
 import { loadFields as loadFieldsApi } from '@/lib/fieldsSupabase'
 import { loadWorkOperations, type WorkOperationRow } from '@/lib/reasonsAndOperations'
 import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow, TaskFileRow } from '@/lib/tasksSupabase'
@@ -31,7 +35,6 @@ import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiSuccessModal from '@/components/UiSuccessModal.vue'
 
-type ViewMode = 'kanban' | 'list'
 type FilterKey = 'all' | 'mine'
 type Priority = 'high' | 'medium' | 'low'
 type Status = 'todo' | 'in_progress' | 'review' | 'done'
@@ -55,8 +58,6 @@ type Task = TaskType
 const auth = useAuth()
 const route = useRoute()
 const router = useRouter()
-const viewMode = ref<ViewMode>('kanban')
-
 const activeFilter = ref<FilterKey>('all')
 const filterEmployeeId = ref<string>('')
 const filterStatus = ref<Status | ''>('')
@@ -74,10 +75,6 @@ const showCreateModal = ref(false)
 const editingTaskId = ref<string | null>(null)
 const successModalOpen = ref(false)
 const selectedTaskId = ref<string | null>(null)
-const dragTaskId = ref<string | null>(null)
-const dragOverColumn = ref<Status | null>(null)
-let clickAfterDragGuard = false
-
 const tasksLoading = ref(true)
 const tasks = ref<Task[]>([])
 const serverTotal = ref(0)
@@ -93,11 +90,12 @@ const createFileInputRef = ref<HTMLInputElement | null>(null)
 const detailFileInputRef = ref<HTMLInputElement | null>(null)
 const pendingCreateFiles = ref<PendingTaskFile[]>([])
 const newCommentMessage = ref('')
-const isEditingDetail = ref(false)
-const isSavingDetail = ref(false)
+const isSavingTask = ref(false)
 const isTaskChatExpanded = ref(false)
 const isSendingComment = ref(false)
 const isMetaInitialLoading = ref(false)
+const participantPickerOpen = ref(false)
+const participantSearch = ref('')
 const assignees = computed<AssigneeOption[]>(() => {
   if (!auth.user.value) return []
   const list = profiles.value.map((p) => ({
@@ -128,6 +126,62 @@ const currentUserAssignee = computed<AssigneeOption | null>(() => {
 const isManager = computed(() => auth.userRole.value === 'manager')
 
 const profilesMap = computed(() => new Map(profiles.value.map((p) => [p.id, p])))
+
+function profileLabel(p: ProfileRow): string {
+  return (p.display_name?.trim() || p.email || '').trim()
+}
+
+function profileById(uid: string): ProfileRow | undefined {
+  return profilesMap.value.get(uid)
+}
+
+function participantInitials(p: ProfileRow): string {
+  const name = profileLabel(p)
+  if (!name) return '?'
+  const parts = name.split(/\s+/)
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase().slice(0, 2)
+  return name.slice(0, 2).toUpperCase()
+}
+
+const participantSearchLower = computed(() => participantSearch.value.trim().toLowerCase())
+
+const participantsAvailable = computed(() => {
+  const assigneeId = form.value.assigneeId.trim()
+  return profiles.value.filter(
+    (p) => !form.value.participantIds.includes(p.id) && p.id !== assigneeId,
+  )
+})
+
+const participantOptions = computed(() => {
+  const q = participantSearchLower.value
+  const base = participantsAvailable.value
+  if (!q) return base
+  return base.filter((p) => {
+    const label = profileLabel(p).toLowerCase()
+    return label.includes(q) || p.email.toLowerCase().includes(q)
+  })
+})
+
+function closeParticipantPicker() {
+  participantPickerOpen.value = false
+  participantSearch.value = ''
+}
+
+function toggleParticipantPicker() {
+  participantPickerOpen.value = !participantPickerOpen.value
+  if (!participantPickerOpen.value) participantSearch.value = ''
+}
+
+function addParticipant(uid: string) {
+  if (!form.value.participantIds.includes(uid)) {
+    form.value.participantIds = [...form.value.participantIds, uid]
+  }
+  closeParticipantPicker()
+}
+
+function removeParticipant(uid: string) {
+  form.value.participantIds = form.value.participantIds.filter((id) => id !== uid)
+}
 
 function profileName(userId: string | null | undefined): string {
   if (!userId) return 'Система'
@@ -182,26 +236,27 @@ async function loadData() {
     profiles.value = profileList
     fields.value = fieldRows.map((f) => f.name).sort((a, b) => a.localeCompare(b, 'ru-RU'))
     workTypes.value = workOps.map((op: WorkOperationRow) => op.name)
-    const onlyMine = auth.userRole.value === 'worker'
     const hasClientOnlyFilters = Boolean(searchTaskNumber.value.trim() || filterDateFrom.value || filterDateTo.value)
 
     if (!hasClientOnlyFilters) {
       serverPagingMode.value = true
-      const page = await loadTasksFilteredPage(onlyMine, user.id, {
+      const page = await loadTasksFilteredPage(false, user.id, {
         status: filterStatus.value || undefined,
         assigneeId: filterEmployeeId.value || undefined,
         page: currentPage.value,
         pageSize: pageSize.value,
       })
-      tasks.value = tasksWithAssignees(page.rows, profileList)
+      const participantsMap = await loadTaskParticipantsMap(page.rows.map((r) => r.id))
+      tasks.value = tasksWithAssignees(page.rows, profileList, participantsMap)
       serverTotal.value = page.total
     } else {
       serverPagingMode.value = false
-      const rows = await loadTasksFiltered(onlyMine, user.id, {
+      const rows = await loadTasksFiltered(false, user.id, {
         status: filterStatus.value || undefined,
         assigneeId: filterEmployeeId.value || undefined,
       })
-      tasks.value = tasksWithAssignees(rows, profileList)
+      const participantsMap = await loadTaskParticipantsMap(rows.map((r) => r.id))
+      tasks.value = tasksWithAssignees(rows, profileList, participantsMap)
       serverTotal.value = 0
     }
   } catch {
@@ -279,6 +334,7 @@ watch(
 const form = ref({
   title: '',
   assigneeId: '',
+  participantIds: [] as string[],
   field: '',
   priority: 'medium' as Priority,
   dueDate: '',
@@ -288,11 +344,42 @@ const form = ref({
 
 const TASK_TITLE_MAX = 60
 const TASK_DESCRIPTION_MAX = 500
+/** Превью описания под названием в списке (отдельная строка) */
+const TASK_LIST_DESC_PREVIEW_MAX = 160
 
 function truncateTaskTitle(value: string | null | undefined): string {
   const text = String(value ?? '').trim()
   if (!text) return ''
   return text.length > TASK_TITLE_MAX ? `${text.slice(0, TASK_TITLE_MAX).trimEnd()}...` : text
+}
+
+/** Поле и тип работ — первая серая строка */
+function taskListContextLine(task: Task): string {
+  const parts: string[] = []
+  const field = task.field?.trim()
+  if (field) parts.push(field)
+  const workType = task.workType?.trim()
+  if (workType) parts.push(workType)
+  return parts.join(' • ')
+}
+
+function taskListDescriptionFull(task: Task): string {
+  const desc = task.description?.trim()
+  if (!desc || desc === 'Просрочено') return ''
+  return desc
+}
+
+function taskListDescriptionPreview(task: Task): string {
+  const desc = taskListDescriptionFull(task)
+  if (!desc) return ''
+  if (desc.length > TASK_LIST_DESC_PREVIEW_MAX) {
+    return `${desc.slice(0, TASK_LIST_DESC_PREVIEW_MAX).trimEnd()}…`
+  }
+  return desc
+}
+
+function taskListSubtitleTitle(task: Task): string {
+  return taskListContextLine(task)
 }
 
 function isImageFile(fileName: string): boolean {
@@ -386,10 +473,17 @@ const filteredTasks = computed(() => {
   let list = tasks.value
   if (activeFilter.value === 'mine' && auth.user.value) {
     const myId = auth.user.value.id
-    list = list.filter((t) => (t.assignee as { id?: string }).id === myId)
+    list = list.filter(
+      (t) =>
+        t.assignee.id === myId
+        || t.participantIds.includes(myId)
+        || t.createdBy?.id === myId,
+    )
   }
-  if (filterEmployeeId.value) {
-    list = list.filter((t) => (t.assignee as { id?: string }).id === filterEmployeeId.value)
+  if (filterEmployeeId.value === TASK_ASSIGNEE_FILTER_UNASSIGNED) {
+    list = list.filter((t) => !t.assignee.id)
+  } else if (filterEmployeeId.value) {
+    list = list.filter((t) => t.assignee.id === filterEmployeeId.value)
   }
   if (filterStatus.value) {
     list = list.filter((t) => t.status === filterStatus.value)
@@ -494,17 +588,6 @@ const paginatedTasks = computed(() => {
   return list.slice(start, start + pageSize.value)
 })
 
-const tasksByStatus = computed(() => {
-  const byStatus: Record<Status, Task[]> = {
-    todo: [],
-    in_progress: [],
-    review: [],
-    done: [],
-  }
-  paginatedTasks.value.forEach((t) => byStatus[t.status].push(t))
-  return byStatus
-})
-
 /* Номер задачи приходит с бэкенда (поле number в таблице tasks) */
 function getTaskNumber(taskId: string): number {
   const task = tasks.value.find((t) => t.id === taskId) ?? filteredTasks.value.find((t) => t.id === taskId)
@@ -556,16 +639,21 @@ async function searchTaskByNumber() {
   tasksLoading.value = true
   try {
     const profileList = await loadProfiles()
-    const onlyMine = auth.userRole.value === 'worker'
-    const rows = await loadTasksFiltered(onlyMine, auth.user.value.id, {
+    const rows = await loadTasksFiltered(false, auth.user.value.id, {
       assigneeId: filterEmployeeId.value || undefined,
       status: filterStatus.value || undefined,
       limit: 500,
     })
-    let list = tasksWithAssignees(rows, profileList)
+    const participantsMap = await loadTaskParticipantsMap(rows.map((r) => r.id))
+    let list = tasksWithAssignees(rows, profileList, participantsMap)
     if (activeFilter.value === 'mine' && auth.user.value) {
       const myId = auth.user.value.id
-      list = list.filter((t) => (t.assignee as { id?: string }).id === myId)
+      list = list.filter(
+        (t) =>
+          t.assignee.id === myId
+          || t.participantIds.includes(myId)
+          || t.createdBy?.id === myId,
+      )
     }
     const from = filterDateFrom.value ? new Date(filterDateFrom.value) : null
     const to = filterDateTo.value ? new Date(filterDateTo.value) : null
@@ -616,13 +704,17 @@ watch(searchTaskNumber, (val) => {
   searchByNumberTimeout = setTimeout(() => searchTaskByNumber(), 400)
 })
 
-const countByStatus = (status: Status) => tasksByStatus.value[status].length
-
 const selectedTask = computed(() =>
   selectedTaskId.value
     ? (tasks.value.find((t) => t.id === selectedTaskId.value) ?? null)
     : null
 )
+
+const canDeleteSelectedTask = computed(() => {
+  const task = selectedTask.value
+  if (!task) return false
+  return canDeleteTask(task.createdBy?.id ?? null)
+})
 
 const selectedTaskCreatorName = computed(() => (selectedTask.value?.createdBy?.name ?? '—'))
 const selectedTaskCreatedAt = computed(() => formatDateTime(selectedTask.value?.createdAt))
@@ -663,170 +755,164 @@ function openCreate() {
   const d = new Date()
   const defaultAssigneeId = !isManager.value && currentUserAssignee.value
     ? currentUserAssignee.value.id
-    : (assignees.value[0]?.id ?? '')
+    : ''
   form.value = {
     title: '',
     assigneeId: defaultAssigneeId,
+    participantIds: [],
     field: fields.value[0] || '',
     priority: 'medium',
     dueDate: d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.'),
     workType: workTypes.value[0] || '',
     description: '',
   }
+  closeParticipantPicker()
   showCreateModal.value = true
 }
 
 function openEdit() {
   const task = selectedTask.value
   if (!task) return
-  const assigneeId = (task.assignee as { id?: string }).id ?? assignees.value[0]?.id ?? ''
+  const assigneeId = task.assignee.id ?? ''
   form.value = {
     title: task.title,
     assigneeId,
+    participantIds: [...task.participantIds],
     field: task.field,
     priority: task.priority,
     dueDate: task.dueDate === '—' ? '' : task.dueDate,
     workType: task.workType ?? (workTypes.value[0] || ''),
     description: task.description ?? '',
   }
+  closeParticipantPicker()
   editingTaskId.value = task.id
-  isEditingDetail.value = true
+  selectedTaskId.value = null
+  showCreateModal.value = true
 }
 
 function closeCreate() {
   showCreateModal.value = false
   editingTaskId.value = null
+  closeParticipantPicker()
   clearPendingCreateFiles()
 }
 
 async function createTask() {
   const title = form.value.title.trim()
-  if (!title) return
-  const assignee = assignees.value.find((a) => a.id === form.value.assigneeId) ?? assignees.value[0]
-  if (!assignee) return
-  if (!editingTaskId.value) {
-    if (!isSupabaseConfigured() || !auth.user.value) return
+  if (!title || isSavingTask.value) return
+  let assigneeId: string | null = null
+  if (isManager.value) {
+    assigneeId = form.value.assigneeId.trim() || null
+  } else {
+    assigneeId = currentUserAssignee.value?.id ?? null
+    if (!assigneeId && !editingTaskId.value) return
+  }
+
+  if (editingTaskId.value) {
+    const taskId = editingTaskId.value
+    const existing = tasks.value.find((x) => x.id === taskId)
+    const prevField = existing?.field ?? form.value.field
+    const prevWorkType = existing?.workType ?? ''
+    const assigneeFromList = assigneeId ? assignees.value.find((a) => a.id === assigneeId) : null
+    isSavingTask.value = true
     try {
-      const createdTask = await createTaskApi(
-        {
+      if (isSupabaseConfigured()) {
+        const payload: Parameters<typeof updateTaskApi>[1] = {
           title,
           priority: form.value.priority,
           field: form.value.field,
           due_date: form.value.dueDate || '—',
-          status: 'todo',
           work_type: form.value.workType,
           description: form.value.description.trim() || undefined,
-        },
-        assignee.id,
-        auth.user.value.id,
-      )
-      await uploadPendingFiles(createdTask.id)
-      await loadData()
-      successModalOpen.value = true
-    } catch {
-      // skip if no Supabase
+        }
+        if (isManager.value) payload.assignee_id = assigneeId
+        await updateTaskApi(taskId, payload)
+        if (isManager.value) {
+          await syncTaskParticipants(taskId, form.value.participantIds)
+        }
+        await loadData()
+      } else {
+        const t = tasks.value.find((x) => x.id === taskId)
+        if (t) {
+          t.title = title
+          if (isManager.value) {
+            t.assignee = assigneeFromList
+              ? { id: assigneeFromList.id, name: assigneeFromList.name, initials: assigneeFromList.initials }
+              : { id: null, name: 'Без исполнителя', initials: '—' }
+            t.participantIds = [...form.value.participantIds]
+          }
+          t.priority = form.value.priority
+          t.field = form.value.field
+          t.dueDate = form.value.dueDate || '—'
+          t.workType = form.value.workType || undefined
+          t.description = form.value.description.trim() || undefined
+        }
+      }
+      const userId = auth.user.value?.id ?? null
+      if (form.value.field !== prevField) {
+        addTaskEvent({
+          taskId,
+          userId,
+          eventType: 'field_changed',
+          payload: { from: prevField, to: form.value.field },
+        })
+      }
+      if ((form.value.workType || '') !== prevWorkType) {
+        addTaskEvent({
+          taskId,
+          userId,
+          eventType: 'work_type_changed',
+          payload: { from: prevWorkType || null, to: form.value.workType || null },
+        })
+      }
+      closeCreate()
+      selectedTaskId.value = taskId
+      await loadMetaForTask(taskId)
+    } finally {
+      isSavingTask.value = false
     }
+    return
+  }
+
+  if (!isSupabaseConfigured() || !auth.user.value) return
+  isSavingTask.value = true
+  try {
+    const createdTask = await createTaskApi(
+      {
+        title,
+        priority: form.value.priority,
+        field: form.value.field,
+        due_date: form.value.dueDate || '—',
+        status: 'todo',
+        work_type: form.value.workType,
+        description: form.value.description.trim() || undefined,
+      },
+      assigneeId,
+      auth.user.value.id,
+    )
+    await uploadPendingFiles(createdTask.id)
+    if (isManager.value && form.value.participantIds.length) {
+      await syncTaskParticipants(createdTask.id, form.value.participantIds)
+    }
+    await loadData()
+    successModalOpen.value = true
+  } catch {
+    // skip if no Supabase
+  } finally {
+    isSavingTask.value = false
   }
   closeCreate()
 }
 
-async function saveDetailEdit() {
-  const task = selectedTask.value
-  if (!task || !editingTaskId.value) return
-  if (isSavingDetail.value) return
-  const prevField = task.field
-  const prevWorkType = task.workType ?? ''
-  const title = form.value.title.trim()
-  if (!title) return
-  const assignee = assignees.value.find((a) => a.id === form.value.assigneeId) ?? assignees.value[0]
-  if (!assignee) return
-  isSavingDetail.value = true
-  if (!isSupabaseConfigured()) {
-    // локальное обновление без Supabase
-    const t = tasks.value.find((x) => x.id === editingTaskId.value)
-    if (t) {
-      t.title = title
-      t.assignee = { id: assignee.id, name: assignee.name, initials: assignee.initials }
-      t.priority = form.value.priority
-      t.field = form.value.field
-      t.dueDate = form.value.dueDate || '—'
-      t.workType = form.value.workType || undefined
-      t.description = form.value.description.trim() || undefined
-    }
-    isEditingDetail.value = false
-    isSavingDetail.value = false
-    return
-  }
-  try {
-    const payload: Parameters<typeof updateTaskApi>[1] = {
-      title,
-      priority: form.value.priority,
-      field: form.value.field,
-      due_date: form.value.dueDate || '—',
-      work_type: form.value.workType,
-      description: form.value.description.trim() || undefined,
-    }
-    if (isManager.value && assignee.id) payload.assignee_id = assignee.id
-    await updateTaskApi(editingTaskId.value, payload)
-    await loadData()
-  } catch {
-    const t = tasks.value.find((x) => x.id === editingTaskId.value)
-    if (t) {
-      t.title = title
-      t.assignee = { id: assignee.id, name: assignee.name, initials: assignee.initials }
-      t.priority = form.value.priority
-      t.field = form.value.field
-      t.dueDate = form.value.dueDate || '—'
-      t.workType = form.value.workType || undefined
-      t.description = form.value.description.trim() || undefined
-    }
-  } finally {
-    // события истории по изменению типа работ и локации
-    const newField = form.value.field
-    const newWorkType = form.value.workType || ''
-    const userId = auth.user.value?.id ?? null
-    if (newField !== prevField) {
-      addTaskEvent({
-        taskId: editingTaskId.value,
-        userId,
-        eventType: 'field_changed',
-        payload: { from: prevField, to: newField },
-      })
-    }
-    if (newWorkType !== prevWorkType) {
-      addTaskEvent({
-        taskId: editingTaskId.value,
-        userId,
-        eventType: 'work_type_changed',
-        payload: { from: prevWorkType || null, to: newWorkType || null },
-      })
-    }
-    isEditingDetail.value = false
-    isSavingDetail.value = false
-  }
-}
-
-function cancelDetailEdit() {
-  const task = selectedTask.value
-  if (!task) {
-    isEditingDetail.value = false
-    return
-  }
-  const assigneeId = (task.assignee as { id?: string }).id ?? assignees.value[0]?.id ?? ''
-  form.value = {
-    title: task.title,
-    assigneeId,
-    field: task.field,
-    priority: task.priority,
-    dueDate: task.dueDate === '—' ? '' : task.dueDate,
-    workType: task.workType ?? (workTypes.value[0] || ''),
-    description: task.description ?? '',
-  }
-  isEditingDetail.value = false
-}
+watch(
+  () => form.value.assigneeId,
+  (assigneeId) => {
+    if (!assigneeId || !form.value.participantIds.includes(assigneeId)) return
+    form.value.participantIds = form.value.participantIds.filter((id) => id !== assigneeId)
+  },
+)
 
 async function openTask(id: string) {
-  if (clickAfterDragGuard) return
   selectedTaskId.value = id
   isTaskChatExpanded.value = false
   await loadMetaForTask(id)
@@ -838,7 +924,6 @@ function closeTask() {
   taskFiles.value = []
   newCommentMessage.value = ''
   isTaskChatExpanded.value = false
-  isEditingDetail.value = false
   if (route.query.openTaskId) {
     const rest = { ...route.query }
     delete rest.openTaskId
@@ -921,11 +1006,12 @@ async function submitComment() {
 }
 
 async function deleteTask() {
-  if (!selectedTaskId.value) return
+  if (!selectedTaskId.value || !selectedTask.value) return
+  if (!canDeleteSelectedTask.value) return
   if (!confirm('Удалить эту задачу?')) return
   if (isSupabaseConfigured()) {
     try {
-      await deleteTaskApi(selectedTaskId.value)
+      await deleteTaskApi(selectedTaskId.value, selectedTask.value.createdBy?.id ?? null)
       await loadData()
     } catch {
       tasks.value = tasks.value.filter((t) => t.id !== selectedTaskId.value)
@@ -934,34 +1020,6 @@ async function deleteTask() {
     tasks.value = tasks.value.filter((t) => t.id !== selectedTaskId.value)
   }
   closeTask()
-}
-
-function onDragStart(e: DragEvent, taskId: string) {
-  dragTaskId.value = taskId
-  e.dataTransfer!.effectAllowed = 'move'
-  e.dataTransfer!.setData('text/plain', taskId)
-  if (e.target instanceof HTMLElement) e.target.classList.add('task-card--dragging')
-}
-function onDragEnd(e: DragEvent) {
-  dragTaskId.value = null
-  dragOverColumn.value = null
-  clickAfterDragGuard = true
-  setTimeout(() => { clickAfterDragGuard = false }, 150)
-  if (e.target instanceof HTMLElement) e.target.classList.remove('task-card--dragging')
-}
-function onDragOver(e: DragEvent, status: Status) {
-  e.preventDefault()
-  e.dataTransfer!.dropEffect = 'move'
-  dragOverColumn.value = status
-}
-function onDragLeave() {
-  dragOverColumn.value = null
-}
-async function onDrop(e: DragEvent, newStatus: Status) {
-  e.preventDefault()
-  dragOverColumn.value = null
-  const taskId = e.dataTransfer?.getData('text/plain')
-  if (taskId) await updateTaskStatus(taskId, newStatus)
 }
 
 function statusTitle(s: Status): string {
@@ -1109,6 +1167,7 @@ function statusClass(s: Status) {
             :disabled="!assignees.length"
           >
             <option value="">Все сотрудники</option>
+            <option :value="TASK_ASSIGNEE_FILTER_UNASSIGNED">Без исполнителя</option>
             <option
               v-for="a in assignees"
               :key="a.id"
@@ -1140,40 +1199,6 @@ function statusClass(s: Status) {
               Применить
             </button>
           </div>
-        </div>
-        <div class="task-view-toggle">
-          <button
-            type="button"
-            class="task-view-btn"
-            :class="{ 'task-view-btn--active': viewMode === 'kanban' }"
-            aria-label="Канбан"
-            @click="viewMode = 'kanban'"
-          >
-            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect width="7" height="7" x="3" y="3" rx="1"/>
-              <rect width="7" height="7" x="14" y="3" rx="1"/>
-              <rect width="7" height="7" x="14" y="14" rx="1"/>
-              <rect width="7" height="7" x="3" y="14" rx="1"/>
-            </svg>
-            Канбан
-          </button>
-          <button
-            type="button"
-            class="task-view-btn"
-            :class="{ 'task-view-btn--active': viewMode === 'list' }"
-            aria-label="Список"
-            @click="viewMode = 'list'"
-          >
-            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="8" x2="21" y1="6" y2="6"/>
-              <line x1="8" x2="21" y1="12" y2="12"/>
-              <line x1="8" x2="21" y1="18" y2="18"/>
-              <line x1="3" x2="3.01" y1="6" y2="6"/>
-              <line x1="3" x2="3.01" y1="12" y2="12"/>
-              <line x1="3" x2="3.01" y1="18" y2="18"/>
-            </svg>
-            Список
-          </button>
         </div>
       </div>
       <div class="task-header-actions">
@@ -1233,66 +1258,7 @@ function statusClass(s: Status) {
     <div v-if="tasksLoading" class="task-loading" role="status" aria-live="polite">
       <UiLoadingBar />
     </div>
-    <!-- Kanban -->
-    <div v-show="viewMode === 'kanban' && !tasksLoading" class="task-kanban">
-      <div
-        v-for="col in statusColumns"
-        :key="col.key"
-        class="task-kanban-column"
-        :class="{ 'task-kanban-column--drag-over': dragOverColumn === col.key }"
-        @dragover="(e) => onDragOver(e, col.key)"
-        @dragleave="onDragLeave"
-        @drop="(e) => onDrop(e, col.key)"
-      >
-        <h3 class="task-column-title">
-          {{ col.title }} {{ countByStatus(col.key) }}
-        </h3>
-        <div class="task-column-underline" aria-hidden="true"></div>
-        <div class="task-column-cards">
-          <article
-            v-for="task in tasksByStatus[col.key]"
-            :key="task.id"
-            class="task-card"
-            draggable="true"
-            tabindex="0"
-            @click="openTask(task.id)"
-            @keydown.enter="openTask(task.id)"
-            @dragstart="(e) => onDragStart(e, task.id)"
-            @dragend="onDragEnd"
-          >
-            <div class="task-card-head">
-              <span class="task-card-num">{{ getTaskNumber(task.id) }}</span>
-              <span class="task-card-title">{{ truncateTaskTitle(task.title) }}</span>
-              <span class="task-card-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
-            </div>
-            <div class="task-card-due">
-              <span class="task-card-due-date">
-                <template v-if="task.description === 'Просрочено'">
-                  <span class="task-overdue">Просрочено</span>
-                </template>
-                <template v-else>
-                  до {{ task.dueDate }}
-                </template>
-              </span>
-              <span class="task-pill task-pill-priority-compact" :class="priorityClass(task.priority)">
-                {{ task.priority === 'high' ? 'Высокий' : task.priority === 'medium' ? 'Средний' : 'Низкий' }}
-              </span>
-            </div>
-          </article>
-          <div v-if="!tasksByStatus[col.key].length" class="task-column-empty">
-            <div class="task-empty-icon" aria-hidden="true">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/></svg>
-            </div>
-            <p class="task-empty-title">Задач пока нет</p>
-            <p class="task-empty-desc">В этой колонке сейчас пусто. Самое время запланировать новые работы.</p>
-            <button type="button" class="task-empty-btn" @click="openCreate">Создать первую задачу</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- List -->
-    <div v-show="viewMode === 'list' && !tasksLoading" class="task-list-wrap">
+    <div v-show="!tasksLoading" class="task-list-wrap">
       <div class="task-list-table-wrapper">
         <table class="task-list-table">
           <thead>
@@ -1309,6 +1275,7 @@ function statusClass(s: Status) {
                   <span class="task-list-sort-indicator">{{ sortIndicator('title') === 'asc' ? '↑' : sortIndicator('title') === 'desc' ? '↓' : '↕' }}</span>
                 </button>
               </th>
+              <th class="task-list-cell-desc-header">Описание</th>
               <th>
                 <button type="button" class="task-list-sort-btn" @click="setListSort('assignee')">
                   Исполнитель
@@ -1343,10 +1310,29 @@ function statusClass(s: Status) {
               @click="openTask(task.id)"
             >
               <td class="task-list-cell-num" data-label="№">{{ getTaskNumber(task.id) }}</td>
-              <td class="task-list-cell-title" data-label="Название задачи">{{ truncateTaskTitle(task.title) }}</td>
+              <td class="task-list-cell-title" data-label="Название задачи">
+                <div class="task-list-title-cell" :title="taskListSubtitleTitle(task) || task.title">
+                  <span class="task-list-title-main">{{ task.title }}</span>
+                  <span v-if="taskListContextLine(task)" class="task-list-title-meta">
+                    {{ taskListContextLine(task) }}
+                  </span>
+                </div>
+              </td>
+              <td
+                class="task-list-cell-desc"
+                data-label="Описание"
+                :title="taskListDescriptionFull(task)"
+              >
+                <span v-if="taskListDescriptionPreview(task)" class="task-list-desc">
+                  {{ taskListDescriptionPreview(task) }}
+                </span>
+                <span v-else class="task-list-desc-empty">—</span>
+              </td>
               <td class="task-list-cell-assignee" data-label="Исполнитель">
-                <span class="task-list-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
-                <span class="task-list-assignee-name">{{ task.assignee.name }}</span>
+                <div class="task-list-assignee-inner">
+                  <span class="task-list-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
+                  <span class="task-list-assignee-name">{{ task.assignee.name }}</span>
+                </div>
               </td>
               <td class="task-list-cell-priority" data-label="Приоритет">
                 <span class="task-pill" :class="priorityClass(task.priority)">
@@ -1373,7 +1359,7 @@ function statusClass(s: Status) {
         </table>
       </div>
     </div>
-    <div v-show="viewMode === 'list' && !tasksLoading && totalFiltered > 0" class="task-pagination">
+    <div v-show="!tasksLoading && totalFiltered > 0" class="task-pagination">
       <span class="task-pagination-info">
         Показано {{ paginationStart }}–{{ paginationEnd }} из {{ totalFiltered }}
       </span>
@@ -1422,189 +1408,224 @@ function statusClass(s: Status) {
       </div>
     </div>
 
-    <!-- Pagination for Kanban (same block, show when kanban visible) -->
-    <div v-show="viewMode === 'kanban' && !tasksLoading && totalFiltered > 0" class="task-pagination task-pagination--kanban">
-      <span class="task-pagination-info">
-        Показано {{ paginationStart }}–{{ paginationEnd }} из {{ totalFiltered }}
-      </span>
-      <div class="task-pagination-right">
-        <div class="task-pagination-nav">
-          <button
-            type="button"
-            class="task-pagination-arrow"
-            :disabled="currentPage <= 1"
-            aria-label="Предыдущая страница"
-            @click="currentPage = currentPage - 1"
-          >
-            &lt;
-          </button>
-          <template v-for="(p, i) in pageNumbers" :key="p === 'ellipsis' ? `e-${i}` : p">
-            <button
-              v-if="p !== 'ellipsis'"
-              type="button"
-              class="task-pagination-num"
-              :class="{ 'task-pagination-num--active': p === currentPage }"
-              @click="goToPage(p)"
-            >
-              {{ p }}
-            </button>
-            <span v-else class="task-pagination-ellipsis">…</span>
-          </template>
-          <button
-            type="button"
-            class="task-pagination-arrow"
-            :disabled="currentPage >= totalPages"
-            aria-label="Следующая страница"
-            @click="currentPage = currentPage + 1"
-          >
-            &gt;
-          </button>
-        </div>
-        <label class="task-pagination-size">
-          <span class="task-filter-select-label">На странице</span>
-          <select v-model.number="pageSize" class="task-filter-select task-pagination-select">
-            <option :value="5">5</option>
-            <option :value="10">10</option>
-            <option :value="20">20</option>
-            <option :value="50">50</option>
-          </select>
-        </label>
-      </div>
-    </div>
-
-    <!-- Modal: New Task -->
+    <!-- Modal: New Task (оформление как модалка календаря) -->
     <Teleport to="body">
-      <div v-if="showCreateModal" class="task-modal-backdrop" @click.self="closeCreate">
-        <div class="task-modal task-modal--create" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
-          <form class="task-form task-form--create-design" @submit.prevent="createTask">
-            <div class="task-modal-header task-modal-header--create">
-              <div class="task-create-header-main">
-                <div class="task-create-header-copy">
-                  <h2 id="task-modal-title" class="task-modal-title">
+      <div v-if="showCreateModal" class="task-modal-backdrop tm-modal-backdrop" @click.self="closeCreate">
+        <div class="modal modal-tm-form" role="dialog" aria-modal="true" aria-labelledby="task-modal-title" @click.stop>
+          <form class="modal-form modal-form--design" @submit.prevent="createTask">
+            <div class="modal-header modal-header--design">
+              <div class="modal-header-main">
+                <div class="modal-icon modal-icon--design" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                    <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+                    <path d="M9 12h6" />
+                    <path d="M9 16h6" />
+                  </svg>
+                </div>
+                <div class="modal-header-text">
+                  <h2 id="task-modal-title" class="modal-title modal-title--design">
                     {{ editingTaskId ? 'Редактирование задачи' : 'Новая задача' }}
                   </h2>
+                  <p v-if="editingTaskId" class="modal-task-id modal-task-id--design">
+                    № {{ getTaskNumber(editingTaskId) }}
+                  </p>
                 </div>
               </div>
-              <button type="button" class="task-modal-close" aria-label="Закрыть" @click="closeCreate">
-                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <button type="button" class="modal-close modal-close--design" aria-label="Закрыть" @click="closeCreate">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <line x1="18" x2="6" y1="6" y2="18" />
                   <line x1="6" x2="18" y1="6" y2="18" />
                 </svg>
               </button>
             </div>
-            <div class="task-modal-body task-modal-body--create">
-              <div class="task-form-row task-form-row--design">
-                <label class="task-form-label">Название задачи</label>
-                <input
-                  v-model="form.title"
-                  type="text"
-                  class="task-form-input task-form-input--title"
-                  placeholder="Введите название..."
-                  :maxlength="TASK_TITLE_MAX"
-                />
-                <div class="task-form-counter">{{ form.title.length }}/{{ TASK_TITLE_MAX }}</div>
-              </div>
-              <div class="task-form-row task-form-row--two task-form-row--design">
-                <div class="task-form-field">
-                  <label class="task-form-label">Исполнитель</label>
-                  <div v-if="isManager" class="task-form-select-wrap">
-                    <span
-                      class="task-form-avatar"
-                      :style="avatarStyleByUserId((assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.id)"
-                    >{{ (assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}</span>
-                    <select v-model="form.assigneeId" class="task-form-select">
-                      <option v-for="a in assignees" :key="a.id" :value="a.id">{{ a.name }}</option>
+            <fieldset class="modal-form-fieldset">
+              <div class="modal-body">
+                <label class="modal-field modal-field--design">
+                  <span class="modal-label modal-label--design">Название задачи</span>
+                  <input
+                    v-model="form.title"
+                    type="text"
+                    class="modal-input modal-input--design modal-input--title task-form-input"
+                    placeholder="Введите название..."
+                    :maxlength="TASK_TITLE_MAX"
+                  />
+                  <div class="task-form-counter">{{ form.title.length }}/{{ TASK_TITLE_MAX }}</div>
+                </label>
+                <div class="modal-grid-2">
+                  <label class="modal-field modal-field--design">
+                    <span class="modal-label modal-label--design">Исполнитель</span>
+                    <div v-if="isManager" class="task-form-select-wrap">
+                      <span
+                        class="task-form-avatar"
+                        :style="avatarStyleByUserId(form.assigneeId || null)"
+                      >{{ form.assigneeId ? (assignees.find((a) => a.id === form.assigneeId)?.initials ?? '?') : '—' }}</span>
+                      <select v-model="form.assigneeId" class="modal-input modal-input--design modal-select modal-select--design task-form-select">
+                        <option value="">Без исполнителя</option>
+                        <option v-for="a in assignees" :key="a.id" :value="a.id">{{ a.name }}</option>
+                      </select>
+                    </div>
+                    <div v-else class="task-form-static-assignee modal-input modal-input--design">Назначить себе</div>
+                  </label>
+                  <label class="modal-field modal-field--design">
+                    <span class="modal-label modal-label--design">Объект / поле</span>
+                    <select v-model="form.field" class="modal-input modal-input--design modal-select modal-select--design task-form-select">
+                      <option value="">Не выбрано</option>
+                      <option v-for="f in fields" :key="f" :value="f">{{ f }}</option>
                     </select>
+                  </label>
+                </div>
+                <div v-if="isManager" class="modal-field modal-field--design">
+                  <div class="modal-label-row modal-label-row--design">
+                    <span class="modal-label modal-label--design">Участники задачи</span>
+                    <div class="modal-assignee-picker">
+                      <button
+                        type="button"
+                        class="modal-add-assignee-btn modal-add-assignee-btn--design"
+                        @click="toggleParticipantPicker"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="12" x2="12" y1="8" y2="16" />
+                          <line x1="8" x2="16" y1="12" y2="12" />
+                        </svg>
+                        Добавить
+                      </button>
+                      <div v-if="participantPickerOpen" class="modal-assignee-dropdown">
+                        <div class="modal-assignee-search">
+                          <svg class="modal-assignee-search-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="7" />
+                            <line x1="16.65" y1="16.65" x2="21" y2="21" />
+                          </svg>
+                          <input
+                            v-model="participantSearch"
+                            type="text"
+                            class="modal-assignee-search-input"
+                            placeholder="Поиск по имени или email"
+                          />
+                        </div>
+                        <button
+                          v-for="p in participantOptions"
+                          :key="p.id"
+                          type="button"
+                          class="modal-assignee-option"
+                          @click="addParticipant(p.id)"
+                        >
+                          <span class="modal-assignee-option-avatar" :style="avatarStyleByUserId(p.id)">{{ participantInitials(p) }}</span>
+                          <span class="modal-assignee-option-label">{{ profileLabel(p) }}{{ p.id === auth.user.value?.id ? ' (Вы)' : '' }}</span>
+                        </button>
+                        <p v-if="participantOptions.length === 0" class="modal-assignee-empty">
+                          {{ participantsAvailable.length === 0 ? 'Все добавлены' : 'Ничего не найдено' }}
+                        </p>
+                      </div>
+                    </div>
                   </div>
-                  <div v-else class="task-form-static-assignee">Назначить себе</div>
+                  <div class="modal-chips modal-chips--design">
+                    <div
+                      v-for="uid in form.participantIds"
+                      :key="uid"
+                      class="modal-chip modal-chip--design"
+                    >
+                      <span
+                        class="modal-chip-avatar modal-chip-avatar--design"
+                        :style="profileById(uid) ? avatarStyleByUserId(uid) : undefined"
+                      >{{ profileById(uid) ? participantInitials(profileById(uid)!) : '?' }}</span>
+                      <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
+                      <button type="button" class="modal-chip-remove" aria-label="Убрать" @click="removeParticipant(uid)">×</button>
+                    </div>
+                  </div>
                 </div>
-                <div class="task-form-field">
-                  <label class="task-form-label">Объект / поле</label>
-                  <select v-model="form.field" class="task-form-select">
-                    <option value="">Не выбрано</option>
-                    <option v-for="f in fields" :key="f" :value="f">{{ f }}</option>
-                  </select>
-                </div>
-              </div>
-              <div class="task-form-row task-form-row--design task-form-row--priority">
-                <div class="task-form-field task-form-field--priority">
-                  <label class="task-form-label">Приоритет</label>
-                  <select v-model="form.priority" class="task-form-select">
+                <label class="modal-field modal-field--design tm-form-field--half">
+                  <span class="modal-label modal-label--design">Приоритет</span>
+                  <select v-model="form.priority" class="modal-input modal-input--design modal-select modal-select--design task-form-select">
                     <option value="high">Высокий</option>
                     <option value="medium">Средний</option>
                     <option value="low">Низкий</option>
                   </select>
+                </label>
+                <div class="modal-grid-2">
+                  <label class="modal-field modal-field--design">
+                    <span class="modal-label modal-label--design">Срок выполнения</span>
+                    <input
+                      v-model="form.dueDate"
+                      type="text"
+                      class="modal-input modal-input--design task-form-input task-form-input--date"
+                      placeholder="ДД.ММ.ГГГГ"
+                    />
+                  </label>
+                  <label class="modal-field modal-field--design">
+                    <span class="modal-label modal-label--design">Тип работ</span>
+                    <select v-model="form.workType" class="modal-input modal-input--design modal-select modal-select--design task-form-select">
+                      <option value="">Не указано</option>
+                      <option v-for="w in workTypes" :key="w" :value="w">{{ w }}</option>
+                    </select>
+                  </label>
                 </div>
-              </div>
-              <div class="task-form-row task-form-row--two task-form-row--design">
-                <div class="task-form-field">
-                  <label class="task-form-label">Срок выполнения</label>
-                  <input v-model="form.dueDate" type="text" class="task-form-input task-form-input--date" placeholder="ДД.ММ.ГГГГ" />
-                </div>
-                <div class="task-form-field">
-                  <label class="task-form-label">Тип работ</label>
-                  <select v-model="form.workType" class="task-form-select">
-                    <option value="">Не указано</option>
-                    <option v-for="w in workTypes" :key="w" :value="w">{{ w }}</option>
-                  </select>
-                </div>
-              </div>
-              <div class="task-form-row task-form-row--design">
-                <label class="task-form-label">Описание и инструкции</label>
-                <textarea
-                  v-model="form.description"
-                  class="task-form-textarea"
-                  placeholder="Добавьте подробности для исполнителя..."
-                  rows="4"
-                  :maxlength="TASK_DESCRIPTION_MAX"
-                ></textarea>
-                <div class="task-form-counter">{{ form.description.length }}/{{ TASK_DESCRIPTION_MAX }}</div>
-              </div>
-              <div class="task-form-row task-form-row--design">
-                <div class="task-file-section">
-                  <div class="task-file-section-head">
-                    <span class="task-form-label">Прикрепленные файлы</span>
-                    <button type="button" class="task-file-add-btn" :disabled="fileUploading" @click="triggerCreateFileInput">
-                      {{ fileUploading ? 'Загрузка...' : 'Добавить файлы' }}
+                <label class="modal-field modal-field--design">
+                  <span class="modal-label modal-label--design">Описание и инструкции</span>
+                  <textarea
+                    v-model="form.description"
+                    class="modal-textarea modal-textarea--design task-form-textarea"
+                    placeholder="Добавьте подробности для исполнителя..."
+                    rows="4"
+                    :maxlength="TASK_DESCRIPTION_MAX"
+                  ></textarea>
+                  <div class="task-form-counter">{{ form.description.length }}/{{ TASK_DESCRIPTION_MAX }}</div>
+                </label>
+                <div class="modal-field modal-field--design">
+                  <div class="task-file-section">
+                    <div class="task-file-section-head">
+                      <span class="modal-label modal-label--design">Прикрепленные файлы</span>
+                      <button type="button" class="task-file-add-btn" :disabled="fileUploading" @click="triggerCreateFileInput">
+                        {{ fileUploading ? 'Загрузка...' : 'Добавить файлы' }}
+                      </button>
+                    </div>
+                    <div v-if="pendingCreateFiles.length" class="task-files-grid">
+                      <div v-for="file in pendingCreateFiles" :key="file.id" class="task-file-card">
+                        <div class="task-file-icon-box">
+                          <img v-if="file.previewUrl" class="task-file-thumb" :src="file.previewUrl" :alt="file.file.name" />
+                          <svg v-else-if="isPdfFile(file.file.name)" class="task-file-icon-pdf" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <path d="M14 2v6h6" />
+                            <path d="M9 13h6" />
+                            <path d="M9 17h6" />
+                          </svg>
+                          <svg v-else class="task-file-icon-doc" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <path d="M14 2v6h6" />
+                          </svg>
+                        </div>
+                        <div class="task-file-info">
+                          <span class="task-file-name">{{ file.file.name }}</span>
+                          <span class="task-file-size">{{ formatFileSize(file.file.size) }}</span>
+                        </div>
+                        <UiDeleteButton size="xs" @click="removePendingCreateFile(file.id)" />
+                      </div>
+                    </div>
+                    <button
+                      v-else
+                      type="button"
+                      class="modal-attach-placeholder modal-attach-placeholder--design task-file-dropzone"
+                      :disabled="fileUploading"
+                      @click="triggerCreateFileInput"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                      </svg>
+                      <span>Добавьте фото, PDF или документы к задаче</span>
                     </button>
                   </div>
-                  <div v-if="pendingCreateFiles.length" class="task-files-grid">
-                    <div v-for="file in pendingCreateFiles" :key="file.id" class="task-file-card">
-                      <div class="task-file-icon-box">
-                        <img v-if="file.previewUrl" class="task-file-thumb" :src="file.previewUrl" :alt="file.file.name" />
-                        <svg v-else-if="isPdfFile(file.file.name)" class="task-file-icon-pdf" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                          <path d="M14 2v6h6" />
-                          <path d="M9 13h6" />
-                          <path d="M9 17h6" />
-                        </svg>
-                        <svg v-else class="task-file-icon-doc" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                          <path d="M14 2v6h6" />
-                        </svg>
-                      </div>
-                      <div class="task-file-info">
-                        <span class="task-file-name">{{ file.file.name }}</span>
-                        <span class="task-file-size">{{ formatFileSize(file.file.size) }}</span>
-                      </div>
-                      <UiDeleteButton size="xs" @click="removePendingCreateFile(file.id)" />
-                    </div>
-                  </div>
-                  <button v-else type="button" class="task-file-dropzone" :disabled="fileUploading" @click="triggerCreateFileInput">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                    </svg>
-                    <span>Добавьте фото, PDF или документы к задаче</span>
+                </div>
+              </div>
+              <div class="modal-actions modal-actions--design">
+                <div class="modal-actions-right">
+                  <button type="button" class="modal-btn-ghost modal-btn-ghost--design" @click="closeCreate">Отмена</button>
+                  <button type="submit" class="modal-btn modal-btn--design" :disabled="!form.title.trim() || isSavingTask">
+                    {{ isSavingTask ? 'Сохранение...' : (editingTaskId ? 'Сохранить изменения' : 'Создать задачу') }}
                   </button>
                 </div>
               </div>
-            </div>
-            <div class="task-form-actions task-form-actions--create">
-              <button type="button" class="task-form-cancel" @click="closeCreate">Отмена</button>
-              <button type="submit" class="task-form-submit" :disabled="!form.title.trim()">
-                {{ editingTaskId ? 'Сохранить изменения' : 'Создать задачу' }}
-              </button>
-            </div>
+            </fieldset>
           </form>
         </div>
       </div>
@@ -1612,14 +1633,30 @@ function statusClass(s: Status) {
 
     <!-- Modal: Task detail -->
     <Teleport to="body">
-      <div v-if="selectedTask" class="task-modal-backdrop" @click.self="closeTask">
-        <div class="task-modal task-modal--detail" role="dialog" aria-labelledby="task-detail-title">
-          <button type="button" class="task-modal-close task-modal-close--detail" aria-label="Закрыть" @click="closeTask">
-            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" x2="6" y1="6" y2="18" />
-              <line x1="6" x2="18" y1="6" y2="18" />
-            </svg>
-          </button>
+      <div v-if="selectedTask" class="task-modal-backdrop tm-modal-backdrop" @click.self="closeTask">
+        <div class="modal modal-tm-detail task-modal--detail" role="dialog" aria-labelledby="task-detail-title" @click.stop>
+          <div class="modal-header modal-header--design">
+            <div class="modal-header-main">
+              <div class="modal-icon modal-icon--design" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                  <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+                  <path d="M9 12h6" />
+                  <path d="M9 16h6" />
+                </svg>
+              </div>
+              <div class="modal-header-text">
+                <h2 id="task-detail-header-title" class="modal-title modal-title--design">Задача</h2>
+                <p class="modal-task-id modal-task-id--design">№ {{ getTaskNumber(selectedTask.id) }}</p>
+              </div>
+            </div>
+            <button type="button" class="modal-close modal-close--design" aria-label="Закрыть" @click="closeTask">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" x2="6" y1="6" y2="18" />
+                <line x1="6" x2="18" y1="6" y2="18" />
+              </svg>
+            </button>
+          </div>
           <div class="task-detail-layout">
             <div v-if="isMetaInitialLoading" class="task-detail-loading-overlay" aria-hidden="true">
               <UiLoadingBar size="md" />
@@ -1637,18 +1674,7 @@ function statusClass(s: Status) {
                 </span>
               </div>
               <h2 id="task-detail-title" class="task-detail-title">
-                <template v-if="isEditingDetail">
-                  <input
-                    v-model="form.title"
-                    type="text"
-                    class="task-detail-title-input"
-                    placeholder="Название задачи"
-                    :maxlength="TASK_TITLE_MAX"
-                  />
-                </template>
-                <template v-else>
-                  {{ truncateTaskTitle(selectedTask.title) }}
-                </template>
+                {{ truncateTaskTitle(selectedTask.title) }}
               </h2>
               <dl class="task-detail-list">
                 <div class="task-detail-item">
@@ -1658,25 +1684,8 @@ function statusClass(s: Status) {
                 <div class="task-detail-item">
                   <dt class="task-detail-label">Исполнитель</dt>
                   <dd class="task-detail-value">
-                    <template v-if="isEditingDetail">
-                      <div class="task-form-select-wrap task-detail-select-wrap">
-                        <span
-                          class="task-detail-avatar"
-                          :style="avatarStyleByUserId((assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.id)"
-                        >
-                          {{ (assignees.find((a) => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}
-                        </span>
-                        <select v-model="form.assigneeId" class="task-form-select">
-                          <option v-for="a in assignees" :key="a.id" :value="a.id">
-                            {{ a.name }}
-                          </option>
-                        </select>
-                      </div>
-                    </template>
-                    <template v-else>
-                      <span class="task-detail-avatar" :style="avatarStyleByUserId(selectedTask.assignee.id)">{{ selectedTask.assignee.initials }}</span>
-                      {{ selectedTask.assignee.name }}
-                    </template>
+                    <span class="task-detail-avatar" :style="avatarStyleByUserId(selectedTask.assignee.id)">{{ selectedTask.assignee.initials }}</span>
+                    {{ selectedTask.assignee.name }}
                   </dd>
                 </div>
                 <div class="task-detail-item">
@@ -1696,68 +1705,47 @@ function statusClass(s: Status) {
                 <div class="task-detail-item">
                   <dt class="task-detail-label">Срок выполнения</dt>
                   <dd class="task-detail-value" :class="{ 'task-detail-overdue': selectedTask.description === 'Просрочено' }">
-                    <template v-if="isEditingDetail">
-                      <input
-                        v-model="form.dueDate"
-                        type="text"
-                        class="task-form-input task-form-input--date task-detail-input-inline"
-                        placeholder="ДД.ММ.ГГГГ"
-                      />
-                    </template>
-                    <template v-else>
-                      до {{ selectedTask.dueDate }}
-                      <span v-if="selectedTask.description === 'Просрочено'" class="task-overdue"> (Просрочено)</span>
-                    </template>
+                    до {{ selectedTask.dueDate }}
+                    <span v-if="selectedTask.description === 'Просрочено'" class="task-overdue"> (Просрочено)</span>
                   </dd>
                 </div>
                 <div class="task-detail-item">
                   <dt class="task-detail-label">Тип работ</dt>
                   <dd class="task-detail-value">
-                    <template v-if="isEditingDetail">
-                      <select v-model="form.workType" class="task-form-select task-detail-input-inline">
-                        <option value="">Не указано</option>
-                        <option v-for="w in workTypes" :key="w" :value="w">
-                          {{ w }}
-                        </option>
-                      </select>
-                    </template>
-                    <template v-else>
-                      {{ selectedTask.workType || 'Не указано' }}
-                    </template>
+                    {{ selectedTask.workType || 'Не указано' }}
                   </dd>
                 </div>
                 <div class="task-detail-item">
                   <dt class="task-detail-label">Локация</dt>
                   <dd class="task-detail-value">
-                    <template v-if="isEditingDetail">
-                      <select v-model="form.field" class="task-form-select task-detail-input-inline">
-                        <option value="">Не выбрано</option>
-                        <option v-for="f in fields" :key="f" :value="f">
-                          {{ f }}
-                        </option>
-                      </select>
-                    </template>
-                    <template v-else>
-                      <span class="task-detail-field-value">{{ selectedTask.field || 'Не выбрано' }}</span>
-                    </template>
+                    <span class="task-detail-field-value">{{ selectedTask.field || 'Не выбрано' }}</span>
                   </dd>
                 </div>
               </dl>
+              <div
+                v-if="selectedTask.participantIds.length"
+                class="task-detail-participants-section"
+              >
+                <span class="modal-label modal-label--design">Участники задачи</span>
+                <div class="modal-chips modal-chips--design">
+                  <div
+                    v-for="uid in selectedTask.participantIds"
+                    :key="uid"
+                    class="modal-chip modal-chip--design modal-chip--readonly"
+                  >
+                    <span
+                      class="modal-chip-avatar modal-chip-avatar--design"
+                      :style="profileById(uid) ? avatarStyleByUserId(uid) : undefined"
+                    >{{ profileById(uid) ? participantInitials(profileById(uid)!) : '?' }}</span>
+                    <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
+                  </div>
+                </div>
+              </div>
               <div class="task-detail-desc-wrap">
                 <span class="task-detail-label">Описание задачи</span>
-                <template v-if="isEditingDetail">
-                  <textarea
-                    v-model="form.description"
-                    class="task-form-textarea"
-                    rows="3"
-                    placeholder="Добавьте подробности для исполнителя..."
-                  ></textarea>
-                </template>
-                <template v-else>
-                  <div class="task-detail-desc">
-                    {{ selectedTask.description || 'Описание не указано' }}
-                  </div>
-                </template>
+                <div class="task-detail-desc">
+                  {{ selectedTask.description || 'Описание не указано' }}
+                </div>
               </div>
               <div class="task-detail-desc-wrap">
                 <div class="task-file-section-head">
@@ -1918,36 +1906,18 @@ function statusClass(s: Status) {
               </button>
             </form>
           </section>
-          <div class="task-detail-actions">
-            <template v-if="isEditingDetail">
-              <button type="button" class="task-detail-btn task-detail-btn--edit" @click="cancelDetailEdit">
-                Отмена
-              </button>
-              <div class="task-detail-del-wrap">
-                <UiDeleteButton size="md" @click="deleteTask" />
-              </div>
-              <button
-                type="button"
-                class="task-detail-btn task-detail-btn--close task-detail-btn--saving"
-                :class="{ 'task-detail-btn--saving-active': isSavingDetail }"
-                @click="saveDetailEdit"
-                :disabled="isSavingDetail"
-              >
-                <span v-if="!isSavingDetail">Сохранить</span>
-                <UiLoadingBar v-else size="compact" class="task-detail-save-loader" />
-              </button>
-            </template>
-            <template v-else>
-              <button type="button" class="task-detail-btn task-detail-btn--edit" @click="openEdit">
+          <div class="modal-actions modal-actions--design task-detail-actions">
+            <div v-if="canDeleteSelectedTask" class="task-detail-del-wrap">
+              <UiDeleteButton size="md" @click="deleteTask" />
+            </div>
+            <div class="modal-actions-right">
+              <button type="button" class="modal-btn-ghost modal-btn-ghost--design" @click="openEdit">
                 Редактировать
               </button>
-              <div class="task-detail-del-wrap">
-                <UiDeleteButton size="md" @click="deleteTask" />
-              </div>
-              <button type="button" class="task-detail-btn task-detail-btn--close" @click="closeTask">
+              <button type="button" class="modal-btn modal-btn--design" @click="closeTask">
                 Закрыть
               </button>
-            </template>
+            </div>
           </div>
         </div>
       </div>
@@ -1976,6 +1946,7 @@ function statusClass(s: Status) {
       multiple
       @change="onDetailFilesSelected"
     />
+
   </section>
 </template>
 
@@ -2185,44 +2156,6 @@ function statusClass(s: Status) {
   color: #fff;
 }
 
-.task-view-toggle {
-  display: flex;
-  height: var(--task-control-h);
-  border-radius: var(--task-control-radius);
-  overflow: hidden;
-  border: 1px solid var(--border-color);
-  background: var(--bg-panel);
-}
-
-.task-view-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 14px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--task-control-fs);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease;
-}
-
-.task-view-btn:first-child {
-  border-right: 1px solid var(--border-color);
-}
-
-.task-view-btn--active {
-  background: var(--accent-green);
-  border-color: var(--accent-green);
-  color: #fff;
-}
-
-[data-theme='dark'] .task-view-btn--active {
-  background: var(--accent-green);
-  color: #fff;
-}
-
 .task-btn-create {
   height: var(--task-control-h);
   display: inline-flex;
@@ -2345,10 +2278,6 @@ function statusClass(s: Status) {
   min-height: 40px;
 }
 
-.task-pagination--kanban {
-  margin-top: var(--space-md);
-}
-
 .task-pagination-info {
   font-size: 0.875rem;
   color: var(--text-secondary);
@@ -2460,133 +2389,6 @@ function statusClass(s: Status) {
   font-weight: 500;
 }
 
-/* Kanban */
-.task-kanban {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-lg);
-  min-height: 400px;
-}
-
-.task-kanban-column {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  min-width: 0;
-}
-
-.task-column-title {
-  margin: 0;
-  font-size: 0.875rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--text-primary);
-}
-
-.task-column-underline {
-  height: 2px;
-  background: var(--agri-primary);
-  opacity: 0.6;
-  border-radius: 1px;
-  margin-bottom: 4px;
-}
-
-.task-column-cards {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-  flex: 1;
-  min-height: 120px;
-}
-
-.task-card {
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 8px 10px;
-  cursor: pointer;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease;
-  text-align: left;
-  display: flex;
-  flex-direction: column;
-  min-height: 84px;
-}
-
-.task-card:hover {
-  box-shadow: var(--shadow-card);
-  border-color: var(--agri-primary);
-}
-
-.task-card--dragging {
-  opacity: 0.6;
-  cursor: grabbing;
-}
-
-.task-kanban-column--drag-over .task-column-cards {
-  background: var(--agri-light);
-  border-radius: 12px;
-  outline: 2px dashed var(--accent-green);
-  outline-offset: 2px;
-}
-
-.task-card-head {
-  display: flex;
-  justify-content: flex-start;
-  align-items: flex-start;
-  gap: 2px;
-  margin-bottom: 2px;
-}
-
-.task-card-num {
-  flex-shrink: 0;
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  line-height: 1.18;
-  margin-right: 2px;
-}
-
-.task-card-title {
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  flex: 1;
-  min-width: 0;
-  max-width: 100%;
-  line-height: 1.18;
-  min-height: calc(1.18em * 2);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.task-card-avatar {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--chip-bg);
-  color: #fff;
-  font-size: 0.58rem;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.task-card-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-
 .task-pill {
   padding: 4px 10px;
   border-radius: 999px;
@@ -2638,98 +2440,9 @@ function statusClass(s: Status) {
   color: #fff;
 }
 
-.task-card-type {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
-
-.task-card-due {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 0.66rem;
-  color: var(--text-secondary);
-  margin-top: auto;
-}
-
-.task-card-due-date {
-  min-width: 0;
-}
-
-.task-pill-priority-compact {
-  flex-shrink: 0;
-  font-size: 0.5rem;
-  padding: 2px 6px;
-  letter-spacing: 0.03em;
-}
-
 .task-overdue {
   color: #b85450;
   font-weight: 600;
-}
-
-.task-column-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-xl);
-  border: 2px dashed var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-panel-hover);
-  min-height: 200px;
-}
-
-.task-empty-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: var(--chip-bg);
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: var(--space-md);
-}
-
-.task-empty-icon svg {
-  width: 24px;
-  height: 24px;
-}
-
-.task-empty-title {
-  margin: 0 0 4px;
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.task-empty-desc {
-  margin: 0 0 var(--space-md);
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  text-align: center;
-  max-width: 220px;
-}
-
-.task-empty-btn {
-  padding: 8px 16px;
-  border-radius: 10px;
-  border: 1px solid var(--accent-green);
-  background: var(--bg-panel);
-  color: var(--accent-green);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease;
-}
-
-.task-empty-btn:hover {
-  background: var(--agri-light);
-  color: var(--accent-green-hover);
 }
 
 /* List */
@@ -2749,7 +2462,7 @@ function statusClass(s: Status) {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.84rem;
-  min-width: 980px;
+  min-width: 1120px;
 }
 
 .task-list-table th {
@@ -2784,21 +2497,61 @@ function statusClass(s: Status) {
 }
 
 .task-list-table td {
-  padding: 10px 16px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-primary);
   overflow-wrap: anywhere;
   word-break: break-word;
-  line-height: 1.25;
+  line-height: 1.3;
+  vertical-align: middle;
+  background-color: transparent;
+}
+
+.task-list-table tbody tr:nth-child(odd) {
+  background-color: var(--bg-panel);
+}
+
+.task-list-table tbody tr:nth-child(even) {
+  background-color: color-mix(in srgb, var(--border-color) 22%, var(--bg-panel));
 }
 
 .task-list-row {
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition:
+    background-color 0.22s ease,
+    box-shadow 0.22s ease,
+    transform 0.22s ease;
 }
 
-.task-list-row:hover td {
-  background: var(--row-hover-bg);
+.task-list-table tbody tr.task-list-row:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 9%, var(--bg-panel));
+  box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+.task-list-table tbody tr.task-list-row:hover .task-list-title-main {
+  color: var(--accent-green);
+  transition: color 0.22s ease;
+}
+
+.task-list-table tbody tr.task-list-row:hover .task-list-cell-num {
+  color: var(--accent-green);
+  transition: color 0.22s ease;
+}
+
+.task-list-title-main,
+.task-list-cell-num {
+  transition: color 0.22s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-list-row {
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .task-list-table tbody tr.task-list-row:hover .task-list-title-main,
+  .task-list-table tbody tr.task-list-row:hover .task-list-cell-num {
+    transition: none;
+  }
 }
 
 .task-list-cell-num {
@@ -2813,19 +2566,76 @@ function statusClass(s: Status) {
   overflow-wrap: normal;
 }
 .task-list-cell-title {
-  font-weight: 500;
-  min-width: 240px;
-  line-height: 1.35;
-  white-space: normal;
+  min-width: 220px;
+  max-width: 340px;
+}
+
+.task-list-cell-desc-header,
+.task-list-cell-desc {
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.task-list-title-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-list-title-main {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
+.task-list-title-meta {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.task-list-desc {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.task-list-desc-empty {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
 .task-list-cell-assignee {
+  min-width: 220px;
+}
+
+.task-list-assignee-inner {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 220px;
+  min-width: 0;
 }
 
 .task-list-assignee-name {
@@ -2887,17 +2697,589 @@ function statusClass(s: Status) {
 .status-review { background: #b87a50; }
 .status-done { background: #5a7c5e; }
 
-/* Modals */
-.task-modal-backdrop {
+/* Modals (оформление по образцу TasksPage / modal-calendar) */
+.tm-modal-backdrop,
+.modal.modal-tm-form,
+.modal.modal-tm-detail {
+  --agro: var(--accent-green);
+  --agro-dark: var(--accent-green-hover);
+  --agro-light: color-mix(in srgb, var(--accent-green) 24%, transparent);
+}
+
+.task-modal-backdrop,
+.tm-modal-backdrop {
   position: fixed;
   inset: 0;
   background: var(--modal-backdrop);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  padding: 24px;
+  padding: var(--space-md);
   animation: taskFadeIn 0.2s ease;
+}
+
+.modal.modal-tm-form,
+.modal.modal-tm-detail {
+  width: 100%;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  animation: taskModalIn 0.25s ease;
+}
+
+.modal.modal-tm-form {
+  max-width: 672px;
+}
+
+.modal.modal-tm-detail {
+  max-width: 940px;
+}
+
+.modal-tm-form .modal-form--design {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.modal-tm-form .modal-form-fieldset {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+.modal-tm-form .modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.modal-header-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-width: 0;
+}
+
+.modal-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.modal-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: rgba(61, 92, 64, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--agro);
+  flex-shrink: 0;
+}
+
+.modal-icon--design {
+  background: rgba(61, 92, 64, 0.08);
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-title--design {
+  font-weight: 700;
+}
+
+.modal-task-id {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.modal-close {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transform-origin: center;
+  transition: color 0.22s ease, background 0.22s ease, transform 0.26s ease;
+}
+
+.modal-close:hover {
+  background: var(--sidebar-hover-bg);
+  color: var(--text-primary);
+  transform: rotate(90deg) scale(1.08);
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.modal-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+  color: var(--text-secondary);
+}
+
+.modal-grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-md);
+  align-items: start;
+}
+
+.modal-grid-2 .modal-field--design {
+  min-width: 0;
+}
+
+.tm-form-field--half {
+  width: min(100%, calc((100% - var(--space-md)) / 2));
+}
+
+.modal-tm-form .modal-input.modal-input--design,
+.modal-tm-form .modal-select.modal-select--design,
+.modal-tm-form .modal-textarea.modal-textarea--design,
+.modal-tm-detail .task-form-input,
+.modal-tm-detail .task-form-select,
+.modal-tm-detail .task-form-textarea,
+.modal-tm-detail .task-detail-status-select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  font-family: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.modal-tm-form .modal-input.modal-input--design,
+.modal-tm-form .modal-select.modal-select--design,
+.modal-tm-detail .task-form-input,
+.modal-tm-detail .task-form-select,
+.modal-tm-detail .task-detail-status-select {
+  height: 44px;
+}
+
+.modal-tm-form .modal-input--title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.modal-tm-form .modal-textarea.modal-textarea--design,
+.modal-tm-detail .task-form-textarea {
+  min-height: 100px;
+  height: auto;
+  resize: vertical;
+}
+
+.modal-tm-form .modal-input:focus,
+.modal-tm-form .modal-select:focus,
+.modal-tm-form .modal-textarea:focus,
+.modal-tm-detail .task-form-input:focus,
+.modal-tm-detail .task-form-select:focus,
+.modal-tm-detail .task-form-textarea:focus,
+.modal-tm-detail .task-detail-status-select:focus {
+  outline: none;
+  border-color: var(--agro);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--agro) 20%, transparent);
+}
+
+.modal-tm-form .modal-select.modal-select--design,
+.modal-tm-detail .task-form-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 40px;
+}
+
+.modal-tm-form .task-form-select-wrap {
+  min-height: 44px;
+  height: 44px;
+}
+
+.modal-tm-form .task-form-static-assignee {
+  display: flex;
+  align-items: center;
+}
+
+.modal-tm-form .modal-attach-placeholder--design,
+.modal-tm-form .task-file-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.modal-tm-form .task-file-dropzone:hover:not(:disabled),
+.modal-tm-form .modal-attach-placeholder--design:hover:not(:disabled) {
+  border-color: var(--agro);
+  color: var(--agro);
+  background: color-mix(in srgb, var(--agro) 6%, var(--bg-panel));
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.modal-actions--design {
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-panel-hover);
+  border-top: 1px solid var(--border-color);
+  border-radius: 0 0 12px 12px;
+}
+
+.modal-actions-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.modal-btn-ghost.modal-btn-ghost--design {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.modal-btn-ghost.modal-btn-ghost--design:hover {
+  background: var(--sidebar-hover-bg);
+  color: var(--text-primary);
+}
+
+.modal-btn.modal-btn--design {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--accent-green);
+  color: #fff;
+  -webkit-text-fill-color: #fff;
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 120px;
+  appearance: none;
+  box-shadow: none;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.modal-btn.modal-btn--design:hover:not(:disabled) {
+  background: var(--accent-green-hover);
+  border-color: var(--accent-green-hover);
+}
+
+.modal-btn.modal-btn--design:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.modal-tm-form .modal-actions :deep(.ui-delete-btn),
+.modal-tm-detail .modal-actions :deep(.ui-delete-btn) {
+  border-radius: 8px;
+}
+
+/* Участники задачи — как в календаре (TasksPage) */
+.modal-tm-form .modal-label-row,
+.modal-tm-detail .modal-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modal-tm-form .modal-field--design .modal-label-row--design .modal-label,
+.modal-tm-detail .task-detail-participants-edit .modal-label-row--design .modal-label {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.modal-tm-form .modal-field--design .modal-label-row--design .modal-assignee-picker,
+.modal-tm-detail .task-detail-participants-edit .modal-assignee-picker {
+  flex-shrink: 0;
+}
+
+.modal-tm-form .modal-assignee-picker,
+.modal-tm-detail .modal-assignee-picker {
+  position: relative;
+}
+
+.modal-tm-form .modal-add-assignee-btn,
+.modal-tm-detail .modal-add-assignee-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.modal-tm-form .modal-add-assignee-btn:hover,
+.modal-tm-detail .modal-add-assignee-btn:hover {
+  text-decoration: underline;
+}
+
+.modal-tm-form .modal-assignee-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 220px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--shadow-card);
+  z-index: 30;
+  padding: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.modal-tm-form .modal-assignee-search,
+.modal-tm-detail .modal-assignee-search {
+  position: relative;
+  margin-bottom: 4px;
+}
+
+.modal-tm-form .modal-assignee-search-icon,
+.modal-tm-detail .modal-assignee-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+}
+
+.modal-tm-form .modal-assignee-search-input,
+.modal-tm-detail .modal-assignee-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px 6px 30px;
+  border-radius: 6px;
+  border: 1px solid var(--toolbar-form-surface-border, var(--border-color));
+  background: var(--toolbar-form-surface, var(--bg-base));
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+.modal-tm-form .modal-assignee-search-input:focus,
+.modal-tm-detail .modal-assignee-search-input:focus {
+  outline: none;
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-green) 18%, transparent);
+}
+
+.modal-tm-form .modal-assignee-option,
+.modal-tm-detail .modal-assignee-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 0.85rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.modal-tm-form .modal-assignee-option:hover,
+.modal-tm-detail .modal-assignee-option:hover {
+  background: var(--bg-base);
+}
+
+.modal-tm-form .modal-assignee-option-avatar,
+.modal-tm-detail .modal-assignee-option-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 0.75rem;
+  flex: 0 0 auto;
+}
+
+.modal-tm-form .modal-assignee-option-label,
+.modal-tm-detail .modal-assignee-option-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modal-tm-form .modal-assignee-empty,
+.modal-tm-detail .modal-assignee-empty {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.modal-tm-form .modal-chips,
+.modal-tm-detail .modal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modal-tm-form .modal-chips.modal-chips--design,
+.modal-tm-detail .modal-chips.modal-chips--design {
+  margin-top: 8px;
+}
+
+.modal-tm-form .modal-chip.modal-chip--design,
+.modal-tm-detail .modal-chip.modal-chip--design {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 9999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  font-size: 0.85rem;
+}
+
+.modal-tm-form .modal-chip-avatar.modal-chip-avatar--design,
+.modal-tm-detail .modal-chip-avatar.modal-chip-avatar--design {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  font-weight: 600;
+}
+
+.modal-tm-form .modal-chip-label,
+.modal-tm-detail .modal-chip-label {
+  color: var(--text-primary);
+}
+
+.modal-tm-form .modal-chip-remove,
+.modal-tm-detail .modal-chip-remove {
+  padding: 0 2px;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.modal-tm-form .modal-chip-remove:hover,
+.modal-tm-detail .modal-chip-remove:hover {
+  color: #dc2626;
+}
+
+/* Участники в карточке — отдельный блок с чипами, как в календаре */
+.task-detail-participants-section {
+  margin: 2px 0 14px;
+}
+
+.task-detail-participants-section .modal-label--design {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.task-detail-participants-section .modal-chips.modal-chips--design {
+  margin-top: 0;
+  gap: 8px;
 }
 
 @keyframes taskFadeIn {
@@ -2905,56 +3287,8 @@ function statusClass(s: Status) {
   to { opacity: 1; }
 }
 
-.task-modal {
-  background: #ffffff;
-  border-radius: 16px;
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.2);
-  max-width: 520px;
-  width: 100%;
-  max-height: 90vh;
-  overflow-y: auto;
-  position: relative;
-  padding: var(--space-lg);
-  border: 1px solid var(--border-color);
-  animation: taskModalIn 0.25s ease;
-}
-
-.task-modal-header--create {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-md);
-  padding: var(--space-md) var(--space-lg);
-  border-bottom: 1px solid var(--border-color);
-}
-
-.task-create-header-main {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.task-create-header-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.task-modal-body--create {
-  padding: 12px 16px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
 .task-modal--detail {
-  width: min(calc(100vw - 48px), 940px);
-  max-width: 940px;
   padding: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 
 @keyframes taskModalIn {
@@ -2966,33 +3300,6 @@ function statusClass(s: Status) {
     opacity: 1;
     transform: scale(1) translateY(0);
   }
-}
-
-.task-modal-close {
-  width: 36px;
-  height: 36px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 1.5rem;
-  line-height: 1;
-  cursor: pointer;
-  border-radius: 8px;
-  transform-origin: center;
-  transition: background 0.22s ease, color 0.22s ease, transform 0.26s ease;
-}
-
-.task-modal-close:hover {
-  background: rgba(0, 0, 0, 0.08);
-  color: var(--text-primary);
-  transform: rotate(90deg) scale(1.08);
-}
-
-.task-modal-title {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--text-primary);
 }
 
 .task-form--compact .task-form-label {
@@ -3185,65 +3492,14 @@ function statusClass(s: Status) {
   min-height: 38px;
 }
 
-.task-modal--create {
-  width: min(calc(100vw - 48px), 620px);
-  max-width: 620px;
-  padding: 0;
-  background: #fff;
-  border-color: var(--border-color);
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.task-modal--create .task-form-input,
-.task-modal--create .task-form-select,
-.task-modal--create .task-form-textarea,
-.task-modal--create .task-form-static-assignee {
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  box-shadow: none;
-}
-
-.task-modal--create .task-form-input::placeholder,
-.task-modal--create .task-form-textarea::placeholder {
-  color: var(--text-secondary);
-}
-
-.task-modal--create .task-form-input:focus,
-.task-modal--create .task-form-select:focus,
-.task-modal--create .task-form-textarea:focus {
-  outline: none;
-  border-color: var(--agro);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--agro) 20%, transparent);
-}
-
-.task-modal--create .task-form-select-wrap {
-  align-items: center;
-  min-height: 38px;
-}
-
 .task-form-select {
   min-height: 38px;
   height: 38px;
 }
 
-.task-modal--create .task-form-input,
-.task-modal--create .task-form-select,
-.task-modal--create .task-form-textarea {
-  min-height: 38px;
-  padding: 8px 10px;
-  border-radius: 8px;
-}
-
 .task-form-input--title {
   font-size: 0.95rem;
   font-weight: 600;
-}
-
-.task-modal--create .task-form-textarea {
-  min-height: 84px;
 }
 
 .task-form-textarea {
@@ -3453,131 +3709,26 @@ function statusClass(s: Status) {
   border-top: 1px solid var(--border-color);
 }
 
-.task-form-actions--create {
-  padding: 12px 16px;
-  background: var(--bg-panel-hover);
-  border-top: 1px solid var(--border-color);
-  border-radius: 0 0 12px 12px;
+.task-detail-actions {
   margin-top: 0;
+  flex-shrink: 0;
 }
 
-.task-form--create-design {
+.modal-tm-detail.task-modal--detail {
   display: flex;
   flex-direction: column;
+  max-height: min(90vh, 920px);
+}
+
+.modal-tm-detail .task-detail-layout {
+  flex: 1;
   min-height: 0;
-}
-
-.task-form-cancel {
-  height: 36px;
-  padding: 0 14px;
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-panel);
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color 0.2s ease, background 0.2s ease;
-}
-
-.task-form-cancel:hover {
-  background: var(--sidebar-hover-bg);
-  color: var(--text-primary);
-}
-
-.task-form-submit {
-  height: 36px;
-  padding: 0 16px;
-  min-width: 152px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: var(--accent-green);
-  color: #ffffff;
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-  box-shadow: none;
-  -webkit-text-fill-color: #ffffff;
-  appearance: none;
-}
-
-.task-form-submit:hover {
-  background: var(--accent-green-hover);
-}
-
-.task-form-submit:disabled {
-  background: #b9c7bb;
-  border-color: #a7b8aa;
-  color: #ffffff;
-  cursor: not-allowed;
-  opacity: 1;
-}
-
-.task-form-actions--detail {
-  justify-content: flex-start;
-  gap: var(--space-sm);
-}
-
-.task-form-actions--detail .task-form-submit {
-  margin-left: auto;
-}
-
-.task-detail-actions {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 10px;
-  margin-top: 12px;
-  padding: 14px 18px 18px;
-  border-top: 1px solid var(--border-color);
-  background: var(--bg-panel);
-  border-radius: 0 0 16px 16px;
-}
-
-.task-detail-btn {
-  padding: 0 16px;
-  border-radius: 10px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease;
-  min-height: 40px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-}
-
-.task-detail-btn--edit {
-  border: 1px solid var(--border-color);
-  background: var(--bg-panel);
-  color: var(--text-primary);
-}
-
-.task-detail-btn--edit:hover {
-  background: var(--bg-panel-hover);
+  max-height: none;
 }
 
 .task-detail-del-wrap {
   display: flex;
   align-items: center;
-  margin-left: auto;
-}
-
-.task-detail-btn--close {
-  border: none;
-  background: var(--accent-green);
-  color: #fff;
-  margin-left: 0;
-}
-
-.task-detail-btn--close:hover {
-  background: var(--accent-green-hover);
 }
 
 .task-detail-btn--saving {
@@ -3608,9 +3759,10 @@ function statusClass(s: Status) {
   grid-template-columns: minmax(0, 1.62fr) minmax(260px, 0.88fr);
   gap: 18px;
   position: relative;
-  padding: 18px 20px 12px;
+  padding: var(--space-lg) 20px 12px;
   overflow-y: auto;
-  max-height: 90vh;
+  flex: 1;
+  min-height: 0;
   align-items: start;
 }
 
@@ -3778,6 +3930,16 @@ function statusClass(s: Status) {
   margin-top: 2px;
 }
 
+.modal-tm-detail .task-chat {
+  flex-shrink: 0;
+  margin-top: 8px;
+  padding: 18px 20px 20px;
+  border: none;
+  border-top: 1px solid var(--border-color);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--bg-panel-hover) 55%, var(--bg-panel));
+}
+
 .task-chat {
   margin-top: 6px;
   padding: 14px 20px 0;
@@ -3917,8 +4079,14 @@ function statusClass(s: Status) {
 .task-chat-input-row {
   display: flex;
   flex-direction: row;
-  gap: 10px;
+  gap: 12px;
   align-items: flex-end;
+  margin-top: 4px;
+  padding-top: 2px;
+}
+
+.modal-tm-detail .task-chat-input-row {
+  margin-top: 8px;
 }
 
 .task-chat-input {
@@ -3936,15 +4104,23 @@ function statusClass(s: Status) {
 
 .task-chat-send {
   padding: 0 18px;
-  border-radius: 10px;
-  border: none;
+  border-radius: 8px;
+  border: 1px solid transparent;
   background: var(--accent-green);
   color: #fff;
-  font-size: 0.85rem;
-  font-weight: 600;
+  -webkit-text-fill-color: #fff;
+  font-size: 0.875rem;
+  font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
   min-height: 44px;
+  appearance: none;
+  flex-shrink: 0;
+  transition: background 0.2s ease;
+}
+
+.task-chat-send:hover:not(:disabled) {
+  background: var(--accent-green-hover);
 }
 
 .task-chat-send:disabled {
@@ -4015,12 +4191,13 @@ function statusClass(s: Status) {
 
 .task-detail-label {
   display: block;
-  font-size: 0.56rem;
-  font-weight: 700;
+  font-size: 0.7rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   color: var(--text-secondary);
   margin-bottom: 4px;
+  line-height: 1.3;
 }
 
 .task-detail-value {
@@ -4090,16 +4267,6 @@ function statusClass(s: Status) {
   word-break: break-word;
 }
 
-.task-modal-close--detail {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  z-index: 3;
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid var(--border-color);
-  backdrop-filter: blur(8px);
-}
-
 .task-file-section-head {
   flex-wrap: wrap;
   margin-bottom: 8px;
@@ -4130,12 +4297,59 @@ function statusClass(s: Status) {
   --task-placeholder: var(--text-muted);
 }
 
-[data-theme='dark'] .task-modal {
+[data-theme='dark'] .modal.modal-tm-form,
+[data-theme='dark'] .modal.modal-tm-detail {
   background: var(--bg-elevated);
   border-color: var(--border-color);
   box-shadow: var(--shadow-card);
 }
 
+[data-theme='dark'] .modal-tm-form .modal-body {
+  background: var(--bg-elevated);
+}
+
+[data-theme='dark'] .modal-actions--design {
+  background: color-mix(in srgb, var(--bg-elevated) 92%, black);
+  border-top-color: var(--border-color);
+}
+
+[data-theme='dark'] .modal-btn-ghost.modal-btn-ghost--design {
+  background: color-mix(in srgb, var(--bg-elevated) 88%, black);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+[data-theme='dark'] .modal-btn-ghost.modal-btn-ghost--design:hover {
+  background: var(--interactive-hover);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .modal-icon--design {
+  background: color-mix(in srgb, var(--accent-green) 18%, transparent);
+  color: color-mix(in srgb, #fff 82%, var(--accent-green));
+}
+
+[data-theme='dark'] .modal-tm-detail .task-chat {
+  background: color-mix(in srgb, var(--bg-elevated) 92%, black);
+}
+
+[data-theme='dark'] .modal-btn.modal-btn--design {
+  background: var(--accent-green);
+  color: #fff;
+  -webkit-text-fill-color: #fff;
+}
+
+[data-theme='dark'] .modal-btn.modal-btn--design:hover:not(:disabled) {
+  background: var(--accent-green-hover);
+}
+
+[data-theme='dark'] .modal-tm-form .modal-chip.modal-chip--design,
+[data-theme='dark'] .modal-tm-detail .modal-chip.modal-chip--design {
+  background: color-mix(in srgb, var(--bg-elevated) 88%, black);
+  border-color: var(--border-color);
+}
+
+[data-theme='dark'] .modal-tm-form .modal-assignee-dropdown,
 [data-theme='dark'] .task-form-input,
 [data-theme='dark'] .task-form-select,
 [data-theme='dark'] .task-form-textarea,
@@ -4175,53 +4389,32 @@ function statusClass(s: Status) {
   border-color: var(--border-color);
 }
 
-[data-theme='dark'] .task-view-toggle {
-  background: color-mix(in srgb, var(--bg-elevated) 68%, black);
-  border-color: var(--border-color);
-}
-
-[data-theme='dark'] .task-view-btn {
-  color: var(--text-muted);
-}
-
-[data-theme='dark'] .task-view-btn--active {
-  background: var(--accent-green);
-  color: #fff;
-}
-
-[data-theme='dark'] .task-card {
-  background: color-mix(in srgb, var(--bg-elevated) 86%, black);
-  border-color: var(--border-color);
-}
-
-[data-theme='dark'] .task-card:hover {
-  border-color: var(--accent-green);
-}
-
-[data-theme='dark'] .task-card-avatar {
-  background: color-mix(in srgb, var(--accent-green) 26%, transparent);
-  color: var(--text-primary);
-}
-
-[data-theme='dark'] .task-column-empty {
-  background: color-mix(in srgb, var(--bg-elevated) 68%, black);
-  border-color: var(--border-color);
-}
-
-[data-theme='dark'] .task-empty-btn {
-  background: transparent;
-  border-color: var(--accent-green);
-  color: var(--accent-green);
-}
-
-[data-theme='dark'] .task-empty-btn:hover {
-  background: color-mix(in srgb, var(--accent-green) 20%, transparent);
-  color: var(--accent-green-hover);
-}
-
 [data-theme='dark'] .task-list-wrap {
   background: color-mix(in srgb, var(--bg-elevated) 82%, black);
   border-color: var(--border-color);
+}
+
+[data-theme='dark'] .task-list-table tbody tr:nth-child(odd) {
+  background-color: var(--bg-elevated);
+}
+
+[data-theme='dark'] .task-list-table tbody tr:nth-child(even) {
+  background-color: color-mix(in srgb, #ffffff 11%, var(--bg-elevated));
+}
+
+[data-theme='dark'] .task-list-table tbody tr.task-list-row:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 16%, var(--bg-elevated));
+  box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+[data-theme='dark'] .task-list-table tbody tr.task-list-row:hover .task-list-title-main,
+[data-theme='dark'] .task-list-table tbody tr.task-list-row:hover .task-list-cell-num {
+  color: color-mix(in srgb, #fff 75%, var(--accent-green));
+}
+
+[data-theme='dark'] .task-list-title-meta,
+[data-theme='dark'] .task-list-desc {
+  color: var(--text-muted);
 }
 
 [data-theme='dark'] .task-list-avatar {
@@ -4229,28 +4422,9 @@ function statusClass(s: Status) {
   color: var(--text-primary);
 }
 
-[data-theme='dark'] .task-kanban-column--drag-over .task-column-cards {
-  background: color-mix(in srgb, var(--accent-green) 16%, transparent);
-  outline-color: var(--accent-green);
-}
-
-[data-theme='dark'] .task-modal-close:hover {
+[data-theme='dark'] .modal-close:hover {
   background: var(--interactive-hover);
   color: var(--text-primary);
-}
-
-[data-theme='dark'] .task-form-cancel:hover {
-  color: var(--text-primary);
-}
-
-[data-theme='dark'] .task-detail-btn--edit {
-  background: color-mix(in srgb, var(--bg-elevated) 76%, black);
-  border-color: var(--border-color);
-  color: var(--text-primary);
-}
-
-[data-theme='dark'] .task-detail-btn--edit:hover {
-  background: var(--interactive-hover);
 }
 
 [data-theme='dark'] .task-detail-card {
@@ -4263,15 +4437,9 @@ function statusClass(s: Status) {
   border-color: var(--border-color);
 }
 
-@media (max-width: 1200px) {
-  .task-kanban {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
 @media (max-width: 1024px) {
   .task-list-table {
-    min-width: 900px;
+    min-width: 1040px;
   }
 
   .task-list-wrap {
@@ -4325,12 +4493,6 @@ function statusClass(s: Status) {
     padding-bottom: env(safe-area-inset-bottom, 0);
   }
 
-  .task-kanban {
-    grid-template-columns: 1fr;
-    gap: var(--space-md);
-    min-height: 320px;
-  }
-
   .task-form-row--two {
     grid-template-columns: 1fr;
   }
@@ -4368,16 +4530,6 @@ function statusClass(s: Status) {
     min-width: 0;
     width: 100%;
     flex: 1;
-  }
-
-  .task-view-toggle {
-    width: 100%;
-    justify-content: stretch;
-  }
-
-  .task-view-btn {
-    flex: 1;
-    justify-content: center;
   }
 
   .task-header-actions {
@@ -4508,10 +4660,22 @@ function statusClass(s: Status) {
     background: var(--bg-panel);
     margin-bottom: var(--space-sm);
     padding: 6px 0;
+    box-shadow: 0 1px 2px rgba(15, 23, 18, 0.04);
   }
 
-  .task-list-row:hover td {
-    background: transparent;
+  .task-list-table tbody tr.task-list-row:hover {
+    background-color: color-mix(in srgb, var(--accent-green) 8%, var(--bg-panel));
+    border-color: color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+    box-shadow:
+      inset 3px 0 0 var(--accent-green),
+      0 8px 20px rgba(45, 90, 61, 0.12);
+    transform: translateY(-2px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .task-list-table tbody tr.task-list-row:hover {
+      transform: none;
+    }
   }
 
   .task-list-table td {
@@ -4544,14 +4708,32 @@ function statusClass(s: Status) {
   }
 
   .task-list-cell-title {
-    font-size: 0.88rem;
-    line-height: 1.35;
+    max-width: none;
   }
 
-  .task-list-cell-assignee {
-    display: flex;
-    align-items: flex-start;
+  .task-list-title-main {
+    font-size: 0.88rem;
+    -webkit-line-clamp: 3;
+  }
+
+  .task-list-title-meta {
+    font-size: 0.72rem;
+    white-space: normal;
+  }
+
+  .task-list-cell-desc {
+    max-width: none;
+  }
+
+  .task-list-desc {
+    font-size: 0.78rem;
+    -webkit-line-clamp: 4;
+    white-space: normal;
+  }
+
+  .task-list-assignee-inner {
     flex-wrap: wrap;
+    align-items: flex-start;
     gap: 10px;
   }
 
@@ -4581,27 +4763,28 @@ function statusClass(s: Status) {
     text-align: center;
   }
 
-  .task-card {
-    min-height: 44px;
-    padding: var(--space-md);
-  }
-
-  .task-modal {
+  .modal.modal-tm-form,
+  .modal.modal-tm-detail {
     max-width: 100%;
-    margin: var(--space-md);
     max-height: calc(100vh - 2 * var(--space-md));
-    overflow-y: auto;
   }
 
-  .task-modal--create .task-form-input,
-  .task-modal--create .task-form-select,
-  .task-modal--create .task-form-textarea {
-    max-width: 100%;
+  .modal-grid-2 {
+    grid-template-columns: 1fr;
   }
 
-  .task-modal--detail,
-  .task-modal--create {
-    max-height: calc(100vh - 2 * var(--space-md));
+  .tm-form-field--half {
+    width: 100%;
+  }
+
+  .modal-actions-right {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .modal-actions-right .modal-btn-ghost,
+  .modal-actions-right .modal-btn {
+    flex: 1 1 auto;
   }
 }
 
@@ -4620,11 +4803,8 @@ function statusClass(s: Status) {
     margin-bottom: 4px;
   }
 
-  .task-list-cell-title {
+  .task-list-title-main {
     font-size: 0.9rem;
-    line-height: 1.3;
-    overflow-wrap: anywhere;
-    word-break: break-word;
   }
 
   .task-list-cell-assignee {
@@ -4644,21 +4824,8 @@ function statusClass(s: Status) {
     padding: var(--space-lg);
   }
 
-  .task-column-title {
-    font-size: 0.8125rem;
-  }
-
-  .task-card-title {
-    font-size: 0.875rem;
-  }
-
-  .task-modal {
-    margin: var(--space-sm);
-    max-height: calc(100vh - 2 * var(--space-sm));
-  }
-
-  .task-modal--detail,
-  .task-modal--create {
+  .modal.modal-tm-form,
+  .modal.modal-tm-detail {
     max-height: calc(100vh - 2 * var(--space-sm));
   }
 
@@ -4676,26 +4843,19 @@ function statusClass(s: Status) {
     padding: 6px 7px;
   }
 
-  .task-form-actions {
-    flex-direction: column;
-  }
-
-  .task-form-actions .task-form-cancel,
-  .task-form-actions .task-form-submit {
-    width: 100%;
-  }
-
   .task-detail-actions {
     flex-direction: column;
-  }
-
-  .task-detail-actions .task-detail-btn {
-    width: 100%;
+    align-items: stretch;
   }
 
   .task-detail-actions .task-detail-del-wrap {
     width: 100%;
-    justify-content: center;
+    justify-content: flex-start;
+  }
+
+  .task-detail-actions .modal-actions-right {
+    flex-direction: column;
+    width: 100%;
   }
 }
 </style>

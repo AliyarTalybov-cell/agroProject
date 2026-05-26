@@ -3,6 +3,9 @@ import type { User } from '@supabase/supabase-js'
 import type { ProfileRow } from '@/lib/tasksSupabase'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 
+/** Максимальное ожидание getSession при старте — чтобы UI не зависал при недоступной БД */
+export const AUTH_INIT_TIMEOUT_MS = 5000
+
 const user = ref<User | null>(null)
 const loading = ref(true)
 /** Кэш профиля текущего пользователя (ФИО, телефон, должность и т.д.), чтобы не сбрасывать форму при переходах */
@@ -23,14 +26,23 @@ export function useAuth() {
       return
     }
     try {
-      const { data: { session } } = await supabase!.auth.getSession()
-      const nextUser = session?.user ?? null
-      if (nextUser && !isUserActive(nextUser)) {
-        await supabase!.auth.signOut()
-        user.value = null
-      } else {
-        user.value = nextUser
-      }
+      await Promise.race([
+        (async () => {
+          const { data: { session } } = await supabase!.auth.getSession()
+          const nextUser = session?.user ?? null
+          if (nextUser && !isUserActive(nextUser)) {
+            await supabase!.auth.signOut()
+            user.value = null
+          } else {
+            user.value = nextUser
+          }
+        })(),
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, AUTH_INIT_TIMEOUT_MS)
+        }),
+      ])
+    } catch {
+      /* сеть/БД недоступны — оставляем user=null, UI всё равно откроется */
     } finally {
       loading.value = false
     }

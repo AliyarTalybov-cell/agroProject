@@ -1719,10 +1719,10 @@ onMounted(async () => {
               <tr
                 v-for="f in paginatedFields"
                 :key="f.id"
-                class="fields-tr"
+                class="fields-tr fields-list-row"
                 @click="goToFieldDetails(f.id)"
               >
-                <td class="fields-td-name">{{ f.name || '—' }}</td>
+                <td class="fields-td-name fields-list-title-main">{{ f.name || '—' }}</td>
                 <td class="fields-td-cadastral">{{ f.cadastralNumber || '—' }}</td>
                 <td class="fields-td-efis">{{ f.efisZsnNumber || '—' }}</td>
                 <td class="fields-td-area">{{ f.area }}</td>
@@ -2761,15 +2761,49 @@ onMounted(async () => {
   overflow: visible;
   vertical-align: middle;
 }
-.fields-table tbody tr {
-  transition: background 0.15s ease;
-}
-.fields-table tbody tr:hover {
-  background: var(--row-hover-bg);
-}
 .fields-table tbody tr:last-child td {
   border-bottom: none;
 }
+
+.fields-list-row {
+  cursor: pointer;
+  transition:
+    background-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.fields-table tbody tr.fields-list-row:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 9%, var(--bg-panel));
+  box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+.fields-table tbody tr.fields-list-row:hover .fields-list-title-main {
+  color: var(--accent-green);
+}
+
+.fields-list-title-main {
+  transition: color 0.22s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fields-list-row {
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .fields-table tbody tr.fields-list-row:hover .fields-list-title-main {
+    transition: none;
+  }
+}
+
+[data-theme='dark'] .fields-table tbody tr.fields-list-row:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 16%, var(--bg-elevated));
+  box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+[data-theme='dark'] .fields-table tbody tr.fields-list-row:hover .fields-list-title-main {
+  color: color-mix(in srgb, #fff 75%, var(--accent-green));
+}
+
 .fields-tr {
   cursor: pointer;
 }

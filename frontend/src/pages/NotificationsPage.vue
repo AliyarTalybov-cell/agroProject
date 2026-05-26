@@ -88,6 +88,7 @@ function dayGroupLabel(iso: string): string {
 
 function titleForType(type: NotificationRow['type']): string {
   if (type === 'task_assigned') return 'На вас поставлена новая задача'
+  if (type === 'task_participant_added') return 'Вас добавили участником задачи'
   if (type === 'task_comment_added') return 'Новый комментарий в задаче'
   if (type === 'calendar_invited') return 'Вас добавили участником события'
   return 'Изменение в задаче'
@@ -98,7 +99,7 @@ function actorLabel(row: NotificationRow): string {
 }
 
 function isTaskDirectLinkType(type: NotificationRow['type']): boolean {
-  return type === 'task_assigned' || type === 'task_comment_added'
+  return type === 'task_assigned' || type === 'task_participant_added' || type === 'task_comment_added'
 }
 
 function bodyForRow(row: NotificationRow): string {
@@ -114,6 +115,9 @@ function bodyForRow(row: NotificationRow): string {
   }
   if (row.type === 'task_comment_added') {
     return `В задаче ${numberPart} ${titlePart} добавлен комментарий. Автор: ${actor}.`
+  }
+  if (row.type === 'task_participant_added') {
+    return `Вы участник задачи ${numberPart} ${titlePart}. Инициатор: ${actor}.`
   }
   return `Задача ${numberPart} ${titlePart}. Автор: ${actor}.`
 }
@@ -494,6 +498,7 @@ onMounted(() => {
 }
 
 .notification-item-icon--task_assigned,
+.notification-item-icon--task_participant_added,
 .notification-item-icon--task_status_changed {
   color: #5b8fd8;
   background: color-mix(in srgb, #5b8fd8 14%, transparent);

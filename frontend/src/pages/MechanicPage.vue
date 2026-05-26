@@ -266,7 +266,7 @@ onMounted(async () => {
         calendarTasksLoading.value = true
         try {
           const [taskRows, calendarRows] = await Promise.all([
-            loadTasksFiltered(true, uid, { limit: 200 }),
+            loadTasksFiltered(false, uid, { limit: 200, involvedUserId: uid }),
             loadCalendarTasks(uid),
           ])
           userTasks.value = taskRows

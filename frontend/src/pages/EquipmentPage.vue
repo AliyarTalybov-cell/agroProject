@@ -883,13 +883,13 @@ async function exportToPdf() {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in paginatedList" :key="row.id">
+            <tr v-for="row in paginatedList" :key="row.id" class="equipment-list-row">
               <td>
                 <RouterLink
                   :to="{ name: 'equipment-details', params: { id: row.id } }"
                   class="equipment-details-link"
                 >
-                  <div class="equipment-cell-brand">{{ row.brand }}</div>
+                  <div class="equipment-cell-brand equipment-list-title-main">{{ row.brand }}</div>
                 </RouterLink>
                 <div class="equipment-cell-detail">
                   {{ row.model && row.year ? `${row.model} • ${row.year} г.в.` : row.model || (row.year ? `${row.year} г.в.` : '') }}
@@ -1621,8 +1621,43 @@ async function exportToPdf() {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.equipment-table tbody tr:hover {
-  background: var(--row-hover-bg);
+.equipment-list-row {
+  cursor: pointer;
+  transition:
+    background-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.equipment-table tbody tr.equipment-list-row:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 9%, var(--bg-panel));
+  box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+.equipment-table tbody tr.equipment-list-row:hover .equipment-list-title-main {
+  color: var(--accent-green);
+}
+
+.equipment-list-title-main {
+  transition: color 0.22s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .equipment-list-row {
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .equipment-table tbody tr.equipment-list-row:hover .equipment-list-title-main {
+    transition: none;
+  }
+}
+
+[data-theme='dark'] .equipment-table tbody tr.equipment-list-row:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 16%, var(--bg-elevated));
+  box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+[data-theme='dark'] .equipment-table tbody tr.equipment-list-row:hover .equipment-list-title-main {
+  color: color-mix(in srgb, #fff 75%, var(--accent-green));
 }
 
 .equipment-cell-brand {
@@ -1637,7 +1672,6 @@ async function exportToPdf() {
 }
 
 .equipment-details-link:hover .equipment-cell-brand {
-  color: var(--accent-green);
   text-decoration: underline;
   text-underline-offset: 4px;
 }

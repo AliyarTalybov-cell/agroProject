@@ -117,7 +117,7 @@ create table if not exists public.profiles (
 -- Задачи (исполнитель = assignee_id; руководитель видит все, работник — только свои)
 create table if not exists public.tasks (
   id uuid primary key default gen_random_uuid(),
-  assignee_id uuid not null references auth.users(id) on delete cascade,
+  assignee_id uuid references auth.users(id) on delete set null,
   created_by uuid references auth.users(id) on delete set null,
   title text not null,
   priority text not null check (priority in ('high', 'medium', 'low')),
@@ -137,6 +137,21 @@ create policy "Allow all for profiles" on public.profiles
   for all using (true) with check (true);
 
 create policy "Allow all for tasks" on public.tasks
+  for all using (true) with check (true);
+
+-- Участники задач (много участников; исполнитель — assignee_id)
+create table if not exists public.task_participants (
+  task_id uuid not null references public.tasks(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (task_id, user_id)
+);
+
+create index if not exists idx_task_participants_user_id on public.task_participants(user_id);
+
+alter table public.task_participants enable row level security;
+
+create policy "Allow all for task_participants" on public.task_participants
   for all using (true) with check (true);
 
 -- Техника (справочник единиц техники)

@@ -3780,10 +3780,11 @@ onMounted(() => void reloadAll())
                 <tr
                   v-for="land in lands"
                   :key="land.id"
+                  class="lands-list-row"
                   :class="{ 'is-active': land.id === selectedLandId }"
                   @click="openLandPage(land.id)"
                 >
-                  <td>{{ land.cadastral_number || '—' }}</td>
+                  <td class="lands-list-title-main">{{ land.cadastral_number || '—' }}</td>
                   <td>{{ landEfisNumberDisplay(land) }}</td>
                   <td>{{ land.address || '—' }}</td>
                   <td>{{ land.land_category || '—' }}</td>
@@ -4736,9 +4737,9 @@ onMounted(() => void reloadAll())
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="field in assignedFields" :key="field.id" @click="goToFieldDetails(field.id)">
+                <tr v-for="field in assignedFields" :key="field.id" class="lands-list-row" @click="goToFieldDetails(field.id)">
                   <td>
-                    <div class="lands-field-cell-title">Поле №{{ field.number }} {{ field.name }}</div>
+                    <div class="lands-field-cell-title lands-list-title-main">Поле №{{ field.number }} {{ field.name }}</div>
                     <div class="lands-field-cell-subtitle">{{ field.cadastral_number ? `Кад. №: ${field.cadastral_number}` : 'Нет кад. номера' }}</div>
                   </td>
                   <td>{{ (field as any).efis_zsn_number || '—' }}</td>
@@ -6090,9 +6091,62 @@ onMounted(() => void reloadAll())
 .lands-table thead { background: rgba(0, 0, 0, 0.02); }
 .lands-table th, .lands-table td { padding:14px 16px; border-bottom:1px solid var(--border-color); text-align:left; font-size:.88rem; }
 .lands-table th { color:var(--text-secondary); font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
-.lands-table tbody tr { cursor:pointer; transition:background .15s ease; }
-.lands-table tbody tr:hover { background:var(--row-hover-bg); }
-.lands-table tbody tr.is-active { background:color-mix(in srgb, var(--accent-green) 10%, #fff); }
+.lands-list-row {
+  cursor: pointer;
+  transition:
+    background-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.lands-table tbody tr.lands-list-row:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 9%, var(--bg-panel));
+  box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+.lands-table tbody tr.lands-list-row:hover .lands-list-title-main {
+  color: var(--accent-green);
+}
+
+.lands-list-title-main {
+  transition: color 0.22s ease;
+}
+
+.lands-table tbody tr.lands-list-row.is-active {
+  background: color-mix(in srgb, var(--accent-green) 10%, var(--bg-panel));
+}
+
+.lands-table tbody tr.lands-list-row.is-active:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 14%, var(--bg-panel));
+  box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lands-list-row {
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .lands-table tbody tr.lands-list-row:hover .lands-list-title-main {
+    transition: none;
+  }
+}
+
+[data-theme='dark'] .lands-table tbody tr.lands-list-row:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 16%, var(--bg-elevated));
+  box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+[data-theme='dark'] .lands-table tbody tr.lands-list-row.is-active {
+  background: color-mix(in srgb, var(--accent-green) 12%, var(--bg-elevated));
+}
+
+[data-theme='dark'] .lands-table tbody tr.lands-list-row.is-active:hover {
+  background-color: color-mix(in srgb, var(--accent-green) 18%, var(--bg-elevated));
+}
+
+[data-theme='dark'] .lands-table tbody tr.lands-list-row:hover .lands-list-title-main,
+[data-theme='dark'] .lands-table tbody tr.lands-list-row.is-active:hover .lands-list-title-main {
+  color: color-mix(in srgb, #fff 75%, var(--accent-green));
+}
 .lands-search {
   width:100%;
   height:36px;

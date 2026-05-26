@@ -1,5 +1,8 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
-import { assertCanDelete } from '@/lib/deletePermissions'
+import { assertCanDelete, assertCanDeleteTask } from '@/lib/deletePermissions'
+
+export const TASK_ASSIGNEE_FILTER_UNASSIGNED = '__unassigned__' as const
+export const TASK_UNASSIGNED_LABEL = 'Без исполнителя'
 
 export type TaskPriority = 'high' | 'medium' | 'low'
 export type TaskStatus = 'todo' | 'in_progress' | 'review' | 'done'
@@ -21,7 +24,7 @@ export type ProfileRow = {
 export type TaskRow = {
   id: string
   number: number
-  assignee_id: string
+  assignee_id: string | null
   created_by: string | null
   title: string
   priority: TaskPriority
@@ -38,7 +41,8 @@ export type Task = {
   id: string
   number: number
   title: string
-  assignee: { id: string; name: string; initials: string }
+  assignee: { id: string | null; name: string; initials: string }
+  participantIds: string[]
   priority: TaskPriority
   field: string
   dueDate: string
@@ -47,6 +51,11 @@ export type Task = {
   description?: string
   createdAt: string
   createdBy?: { id: string; name: string } | null
+}
+
+export type TaskParticipantRow = {
+  task_id: string
+  user_id: string
 }
 
 export type TaskCommentRow = {
@@ -238,21 +247,45 @@ export async function loadTasksFromSupabase(
   onlyMine: boolean,
   userId: string,
 ): Promise<TaskRow[]> {
-  if (!supabase) return []
-  let q = supabase
-    .from('tasks')
-    .select('id, number, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at')
-    .order('created_at', { ascending: false })
-  if (onlyMine) q = q.eq('assignee_id', userId)
-  const { data, error } = await q
+  return loadTasksFiltered(onlyMine, userId, {
+    limit: 500,
+    involvedUserId: onlyMine ? userId : undefined,
+  })
+}
+
+function applyAssigneeFilter<T extends { eq: (col: string, val: string) => T; is: (col: string, val: null) => T }>(
+  q: T,
+  assigneeId?: string,
+): T {
+  if (!assigneeId) return q
+  if (assigneeId === TASK_ASSIGNEE_FILTER_UNASSIGNED) return q.is('assignee_id', null)
+  return q.eq('assignee_id', assigneeId)
+}
+
+async function loadParticipantTaskIds(userId: string): Promise<string[]> {
+  if (!supabase || !userId) return []
+  const { data, error } = await supabase
+    .from('task_participants')
+    .select('task_id')
+    .eq('user_id', userId)
   if (error) throw error
-  return (data ?? []) as TaskRow[]
+  return [...new Set((data ?? []).map((r) => r.task_id as string))]
+}
+
+function involvedUserOrFilter(userId: string, participantTaskIds: string[]): string {
+  const parts = [`assignee_id.eq.${userId}`, `created_by.eq.${userId}`]
+  if (participantTaskIds.length > 0) {
+    parts.push(`id.in.(${participantTaskIds.join(',')})`)
+  }
+  return parts.join(',')
 }
 
 export type LoadTasksFilterOpts = {
   assigneeId?: string
   status?: TaskStatus
   limit?: number
+  /** Задачи, где пользователь исполнитель, автор или участник */
+  involvedUserId?: string
 }
 
 export type LoadTasksPageOpts = {
@@ -278,8 +311,13 @@ export async function loadTasksFiltered(
     .from('tasks')
     .select('id, number, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at')
     .order('created_at', { ascending: false })
-  if (onlyMine) q = q.eq('assignee_id', userId)
-  if (opts.assigneeId) q = q.eq('assignee_id', opts.assigneeId)
+  if (opts.involvedUserId) {
+    const participantTaskIds = await loadParticipantTaskIds(opts.involvedUserId)
+    q = q.or(involvedUserOrFilter(opts.involvedUserId, participantTaskIds))
+  } else if (onlyMine) {
+    q = q.eq('assignee_id', userId)
+  }
+  q = applyAssigneeFilter(q, opts.assigneeId)
   if (opts.status) q = q.eq('status', opts.status)
   const limit = Math.min(Math.max(opts.limit ?? 500, 1), 500)
   const { data, error } = await q.limit(limit)
@@ -307,8 +345,14 @@ export async function loadTasksFilteredPage(
     .order('created_at', { ascending: false })
     .range(from, to)
 
-  if (onlyMine) q = q.eq('assignee_id', userId)
-  if (opts.assigneeId) q = q.eq('assignee_id', opts.assigneeId)
+  const pageOpts = opts as LoadTasksFilterOpts
+  if (pageOpts.involvedUserId) {
+    const participantTaskIds = await loadParticipantTaskIds(pageOpts.involvedUserId)
+    q = q.or(involvedUserOrFilter(pageOpts.involvedUserId, participantTaskIds))
+  } else if (onlyMine) {
+    q = q.eq('assignee_id', userId)
+  }
+  q = applyAssigneeFilter(q, opts.assigneeId)
   if (opts.status) q = q.eq('status', opts.status)
 
   const { data, count, error } = await q
@@ -316,19 +360,30 @@ export async function loadTasksFilteredPage(
   return { rows: (data ?? []) as TaskRow[], total: Number(count ?? 0) }
 }
 
-export function tasksWithAssignees(rows: TaskRow[], profiles: ProfileRow[]): Task[] {
+export function tasksWithAssignees(
+  rows: TaskRow[],
+  profiles: ProfileRow[],
+  participantsByTaskId: Record<string, string[]> = {},
+): Task[] {
   const profileMap = new Map(profiles.map((p) => [p.id, p]))
   return rows.map((r) => {
-    const p = profileMap.get(r.assignee_id)
-    const name = p ? (p.display_name || p.email) : 'Неизвестный'
-    const initials = p ? initialsFromName(p.display_name || '', p.email) : '?'
+    let assignee: Task['assignee']
+    if (!r.assignee_id) {
+      assignee = { id: null, name: TASK_UNASSIGNED_LABEL, initials: '—' }
+    } else {
+      const p = profileMap.get(r.assignee_id)
+      const name = p ? (p.display_name || p.email) : 'Неизвестный'
+      const initials = p ? initialsFromName(p.display_name || '', p.email) : '?'
+      assignee = { id: r.assignee_id, name, initials }
+    }
     const creatorProfile = r.created_by ? profileMap.get(r.created_by) : undefined
     const creatorName = creatorProfile ? (creatorProfile.display_name || creatorProfile.email) : null
     return {
       id: r.id,
       number: r.number,
       title: r.title,
-      assignee: { id: r.assignee_id, name, initials },
+      assignee,
+      participantIds: participantsByTaskId[r.id] ?? [],
       priority: r.priority,
       field: r.field,
       dueDate: r.due_date || '—',
@@ -351,14 +406,14 @@ export async function createTask(
     work_type?: string
     description?: string
   },
-  assigneeId: string,
+  assigneeId: string | null,
   createdBy: string | null,
 ): Promise<TaskRow> {
   if (!supabase) throw new Error('Supabase не настроен')
   const { data, error } = await supabase
     .from('tasks')
     .insert({
-      assignee_id: assigneeId,
+      assignee_id: assigneeId || null,
       created_by: createdBy,
       title: payload.title,
       priority: payload.priority,
@@ -384,7 +439,7 @@ export async function updateTask(
     status: TaskStatus
     work_type: string
     description: string
-    assignee_id: string
+    assignee_id: string | null
   }>,
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
@@ -514,11 +569,64 @@ export function getTaskFilePublicUrl(filePath: string): string {
   return data.publicUrl
 }
 
-export async function deleteTask(id: string): Promise<void> {
+export async function deleteTask(id: string, createdBy: string | null | undefined): Promise<void> {
   if (!supabase) throw new Error('Supabase не настроен')
-  assertCanDelete()
+  assertCanDeleteTask(createdBy)
   const { error } = await supabase.from('tasks').delete().eq('id', id)
   if (error) throw error
+}
+
+export async function loadTaskParticipantIds(taskId: string): Promise<string[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('task_participants')
+    .select('user_id')
+    .eq('task_id', taskId)
+  if (error) throw error
+  return (data ?? []).map((r) => r.user_id as string)
+}
+
+export async function loadTaskParticipantsMap(taskIds: string[]): Promise<Record<string, string[]>> {
+  if (!supabase || taskIds.length === 0) return {}
+  const { data, error } = await supabase
+    .from('task_participants')
+    .select('task_id, user_id')
+    .in('task_id', taskIds)
+  if (error) throw error
+  const map: Record<string, string[]> = {}
+  for (const row of data ?? []) {
+    const taskId = row.task_id as string
+    const userId = row.user_id as string
+    if (!map[taskId]) map[taskId] = []
+    map[taskId].push(userId)
+  }
+  return map
+}
+
+/** Добавляет только новых участников (триггер уведомлений — на insert). */
+export async function syncTaskParticipants(taskId: string, userIds: string[]): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const unique = [...new Set(userIds.filter(Boolean))]
+  const current = await loadTaskParticipantIds(taskId)
+  const currentSet = new Set(current)
+  const toAdd = unique.filter((id) => !currentSet.has(id))
+  const toRemove = current.filter((id) => !unique.includes(id))
+
+  if (toRemove.length > 0) {
+    const { error: delError } = await supabase
+      .from('task_participants')
+      .delete()
+      .eq('task_id', taskId)
+      .in('user_id', toRemove)
+    if (delError) throw delError
+  }
+
+  if (toAdd.length > 0) {
+    const { error: insError } = await supabase.from('task_participants').insert(
+      toAdd.map((user_id) => ({ task_id: taskId, user_id })),
+    )
+    if (insError) throw insError
+  }
 }
 
 export { isSupabaseConfigured }

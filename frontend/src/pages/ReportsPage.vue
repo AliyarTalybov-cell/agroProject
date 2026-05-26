@@ -123,6 +123,7 @@ const profilesForLiveBoard = computed(() => {
     if (isRecent(p)) byId.set(p.id, p)
   }
   for (const t of tasks.value) {
+    if (!t.assignee_id) continue
     const p = profileById.value.get(t.assignee_id)
     if (p && isRecent(p)) byId.set(p.id, p)
   }
@@ -411,6 +412,7 @@ const taskEmployeeBarChart = computed(() => {
 
   const activeByAssignee = new Map<string, number>()
   for (const t of tasks.value) {
+    if (!t.assignee_id) continue
     if (selectedEmployeeId.value && t.assignee_id !== selectedEmployeeId.value) continue
     if (t.status === 'done') continue
     const u = new Date(t.updated_at).getTime()
@@ -421,6 +423,7 @@ const taskEmployeeBarChart = computed(() => {
 
   const doneMap = new Map<string, { id: string; label: string; count: number }>()
   for (const t of tasks.value) {
+    if (!t.assignee_id) continue
     if (t.status !== 'done') continue
     if (selectedEmployeeId.value && t.assignee_id !== selectedEmployeeId.value) continue
     const u = new Date(t.updated_at).getTime()

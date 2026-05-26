@@ -13,7 +13,8 @@ document.documentElement.style.colorScheme = theme
 
 const auth = useAuth()
 auth.startAuthListener()
-auth.init().then(() => {
-  createApp(App).use(router).mount('#app')
-})
 
+// Монтируем сразу: при недоступной БД getSession() может долго висеть
+const app = createApp(App).use(router)
+app.mount('#app')
+void auth.init()

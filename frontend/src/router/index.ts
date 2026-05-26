@@ -23,7 +23,7 @@ import NotificationsPage from '@/pages/NotificationsPage.vue'
 import NewsPage from '@/pages/NewsPage.vue'
 import NewsDetailsPage from '@/pages/NewsDetailsPage.vue'
 import NewsEditorPage from '@/pages/NewsEditorPage.vue'
-import { getAuthUser, isAuthLoading } from '@/stores/auth'
+import { AUTH_INIT_TIMEOUT_MS, getAuthUser, isAuthLoading } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
 export const routes = [
@@ -64,7 +64,8 @@ export const router = createRouter({
 router.beforeEach(async (to) => {
   if (!isSupabaseConfigured()) return true
   let waited = 0
-  while (isAuthLoading() && waited < 3000) {
+  const authWaitLimit = AUTH_INIT_TIMEOUT_MS + 500
+  while (isAuthLoading() && waited < authWaitLimit) {
     await new Promise((r) => setTimeout(r, 50))
     waited += 50
   }

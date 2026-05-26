@@ -3,6 +3,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import { useAuth } from '@/stores/auth'
+import { useBackendHealth } from '@/stores/backendHealth'
+import AppBackendBanner from '@/components/AppBackendBanner.vue'
+import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import { chatTotalUnread, refreshChatTotalUnread } from '@/lib/chatSupabase'
 import { countMyUnreadNotifications } from '@/lib/notificationsSupabase'
 import { startActivityHeartbeat, stopActivityHeartbeat } from '@/lib/activityHeartbeat'
@@ -10,7 +13,15 @@ import { startActivityHeartbeat, stopActivityHeartbeat } from '@/lib/activityHea
 const route = useRoute()
 const router = useRouter()
 const auth = useAuth()
+const backendHealth = useBackendHealth()
 const isAuthLayout = computed(() => route.meta?.public === true)
+const showAuthBootstrapLoading = computed(
+  () => !isAuthLayout.value && auth.loading.value && auth.isAuthConfigured(),
+)
+const showBackendBanner = computed(
+  () => backendHealth.isUnavailable.value && backendHealth.errorMessage.value,
+)
+const backendBannerMessage = computed(() => backendHealth.errorMessage.value ?? '')
 const pageTitle = computed(() => {
   if (route.name === 'dashboard' && route.query.tab === 'about') return 'О сервисе'
   if (route.path.startsWith('/lands')) {
@@ -146,6 +157,7 @@ watch(mobileMenuOpen, (open) => {
 
 let unreadPoll: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
+  void backendHealth.check()
   void refreshHeaderUnreadCounters()
   unreadPoll = setInterval(() => void refreshHeaderUnreadCounters(), 45_000)
 })
@@ -169,7 +181,14 @@ watch(
 </script>
 
 <template>
-  <div v-if="isAuthLayout">
+  <div v-if="isAuthLayout" class="app-auth-shell">
+    <AppBackendBanner
+      v-if="showBackendBanner"
+      class="app-auth-shell__banner"
+      :message="backendBannerMessage"
+      :checking="backendHealth.isChecking.value"
+      @retry="void backendHealth.check(true)"
+    />
     <RouterView />
   </div>
 
@@ -525,17 +544,59 @@ watch(
         </div>
       </header>
       <div class="main-content-inner main-content-inner--animated">
-        <RouterView v-slot="{ Component }">
-          <Transition name="page" mode="out-in">
-            <component v-if="Component" :is="Component" :key="$route.fullPath" />
-          </Transition>
-        </RouterView>
+        <div v-if="showAuthBootstrapLoading" class="app-content-bootstrap" role="status" aria-live="polite">
+          <UiLoadingBar label="ПОДКЛЮЧЕНИЕ" />
+          <p class="app-content-bootstrap__text">Проверяем сессию и связь с сервером…</p>
+        </div>
+        <template v-else>
+          <AppBackendBanner
+            v-if="showBackendBanner"
+            :message="backendBannerMessage"
+            :checking="backendHealth.isChecking.value"
+            @retry="void backendHealth.check(true)"
+          />
+          <RouterView v-slot="{ Component }">
+            <Transition name="page" mode="out-in">
+              <component v-if="Component" :is="Component" :key="$route.fullPath" />
+            </Transition>
+          </RouterView>
+        </template>
       </div>
     </main>
   </div>
 </template>
 
 <style scoped>
+.app-auth-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-auth-shell__banner {
+  margin: var(--space-md) var(--space-lg) 0;
+  max-width: 520px;
+  width: calc(100% - 2 * var(--space-lg));
+  align-self: center;
+}
+
+.app-content-bootstrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  min-height: min(420px, 50vh);
+  padding: var(--space-xl) var(--space-lg);
+}
+
+.app-content-bootstrap__text {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
 .app-modal-backdrop {
   position: fixed;
   inset: 0;

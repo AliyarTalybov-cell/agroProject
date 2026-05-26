@@ -1,6 +1,11 @@
 import { supabase } from '@/lib/supabase'
 
-export type NotificationType = 'task_assigned' | 'calendar_invited' | 'task_status_changed' | 'task_comment_added'
+export type NotificationType =
+  | 'task_assigned'
+  | 'calendar_invited'
+  | 'task_status_changed'
+  | 'task_comment_added'
+  | 'task_participant_added'
 export type NotificationFilter = 'all' | 'read' | 'unread'
 
 export type NotificationRow = {
