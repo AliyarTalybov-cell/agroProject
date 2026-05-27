@@ -33,6 +33,7 @@ import {
   storageBatchCropLabel,
   type StorageBatchRow,
 } from '@/lib/storageBatchesSupabase'
+import { loadStorageWriteoffsForLocation, storageWriteoffTypeLabel } from '@/lib/storageWriteoffsSupabase'
 
 const route = useRoute()
 const router = useRouter()
@@ -49,8 +50,21 @@ const fields = ref<FieldRow[]>([])
 const crops = ref<CropRow[]>([])
 const intakes = ref<StorageIntakeRow[]>([])
 const batches = ref<StorageBatchRow[]>([])
+const writeoffs = ref<Array<{
+  id: string
+  batch_id: string
+  writeoff_type: 'sale' | 'processing' | 'spoilage' | 'feed'
+  mass_tons: number
+  operation_date: string
+  counterparty: string | null
+  comment: string | null
+  created_at: string
+  actorName: string
+  batches?: { id: string; code: string } | null
+  crops?: { key: string; label: string } | null
+}>>([])
 
-const activeTab = ref<'intakes' | 'batch' | 'history'>('intakes')
+const activeTab = ref<'intakes' | 'batch' | 'history' | 'writeoffs'>('intakes')
 const selectedIntakeIds = ref<string[]>([])
 const intakeModalOpen = ref(false)
 const batchWizardOpen = ref(false)
@@ -158,6 +172,10 @@ const isCurrentBatchCompleted = computed(() => {
   if (!b) return false
   return b.completed_at != null && String(b.completed_at).length > 0
 })
+
+const isCurrentBatchClosed = computed(
+  () => !!currentBatch.value && isCurrentBatchCompleted.value && Number(currentBatch.value?.total_net_tons || 0) <= 0.0001,
+)
 
 const hasActiveOpenBatch = computed(() => !!currentBatch.value && !isCurrentBatchCompleted.value)
 
@@ -441,12 +459,13 @@ async function loadStorageCell() {
   loading.value = true
   error.value = null
   try {
-    const [intakeRows, fieldRows, cropRows, locations, batchRows] = await Promise.all([
+    const [intakeRows, fieldRows, cropRows, locations, batchRows, writeoffRows] = await Promise.all([
       loadStorageIntakes(storageId.value),
       loadFields(),
       loadCrops(),
       loadStorageLocations(),
       loadStorageBatches(storageId.value),
+      loadStorageWriteoffsForLocation(storageId.value),
     ])
     await syncStorageLocationFillStatusFromIntakes(storageId.value, intakeRows)
     const row = await getStorageLocationById(storageId.value)
@@ -456,6 +475,7 @@ async function loadStorageCell() {
     crops.value = cropRows
     storageOptions.value = locations
     batches.value = batchRows
+    writeoffs.value = writeoffRows
     selectedIntakeIds.value = []
     if (!row) error.value = 'Место хранения не найдено'
   } catch (e) {
@@ -519,7 +539,9 @@ async function finishBatchFormation() {
 }
 
 onMounted(() => {
-  void loadStorageCell()
+  void loadStorageCell().then(() => {
+    if (route.query.intake === '1') openIntakeModal()
+  })
 })
 
 watch(storageId, () => {
@@ -575,6 +597,7 @@ watch(storageId, () => {
         <button type="button" class="warehouse-cell-tab" :class="{ 'is-active': activeTab === 'intakes' }" @click="activeTab = 'intakes'">Поступления</button>
         <button type="button" class="warehouse-cell-tab" :class="{ 'is-active': activeTab === 'batch' }" @click="activeTab = 'batch'">Текущая партия</button>
         <button type="button" class="warehouse-cell-tab" :class="{ 'is-active': activeTab === 'history' }" @click="activeTab = 'history'">История операций</button>
+        <button type="button" class="warehouse-cell-tab" :class="{ 'is-active': activeTab === 'writeoffs' }" @click="activeTab = 'writeoffs'">Списания</button>
       </div>
 
       <section v-if="activeTab === 'intakes'" class="warehouse-cell-tab-panel">
@@ -644,11 +667,14 @@ watch(storageId, () => {
                   class="batch-detail-badge"
                   :class="isCurrentBatchCompleted ? 'batch-detail-badge--done' : 'batch-detail-badge--forming'"
                 >
-                  {{ isCurrentBatchCompleted ? 'ЗАВЕРШЕНА' : 'ФОРМИРУЕТСЯ' }}
+                  {{ isCurrentBatchClosed ? 'ЗАКРЫТА' : (isCurrentBatchCompleted ? 'ЗАВЕРШЕНА' : 'ФОРМИРУЕТСЯ') }}
                 </span>
               </div>
               <p class="batch-detail-meta">
                 Создана {{ formatDateOnlyRu(currentBatch.created_at) }} · {{ storageBatchCropLabel(currentBatch) }}
+              </p>
+              <p v-if="isCurrentBatchClosed" class="batch-detail-meta batch-detail-meta--muted">
+                Закрыта, остаток 0 т
               </p>
               <p class="batch-detail-meta batch-detail-meta--muted">
                 Назначение: {{ batchPurposeLabel(currentBatch.purpose) }} · Цель: {{ batchUseGoalLabel(currentBatch.use_goal) }}
@@ -754,7 +780,7 @@ watch(storageId, () => {
         </div>
       </section>
 
-      <section v-else class="warehouse-cell-tab-panel">
+      <section v-else-if="activeTab === 'history'" class="warehouse-cell-tab-panel">
         <div v-if="batches.length" class="warehouse-cell-table-wrap">
           <table class="warehouse-cell-table">
             <thead>
@@ -764,6 +790,7 @@ watch(storageId, () => {
                 <th>Культура</th>
                 <th>Масса (т)</th>
                 <th>Назначение</th>
+                <th>Статус</th>
               </tr>
             </thead>
             <tbody>
@@ -773,6 +800,13 @@ watch(storageId, () => {
                 <td>{{ storageBatchCropLabel(b) }}</td>
                 <td>{{ Number(b.total_net_tons || 0).toFixed(2) }}</td>
                 <td>{{ batchPurposeLabel(b.purpose) }}</td>
+                <td>
+                  {{
+                    (b.completed_at && Number(b.total_net_tons || 0) <= 0.0001)
+                      ? 'Закрыта'
+                      : (b.completed_at ? 'Завершена' : 'Формируется')
+                  }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -780,6 +814,41 @@ watch(storageId, () => {
         <div v-else class="warehouse-cell-empty-panel">
           <h2>История операций</h2>
           <p>После формирования первой партии здесь появятся записи.</p>
+        </div>
+      </section>
+
+      <section v-else class="warehouse-cell-tab-panel">
+        <div v-if="writeoffs.length" class="warehouse-cell-table-wrap">
+          <table class="warehouse-cell-table">
+            <thead>
+              <tr>
+                <th>Дата операции</th>
+                <th>Партия</th>
+                <th>Культура</th>
+                <th>Тип списания</th>
+                <th>Масса (т)</th>
+                <th>Контрагент</th>
+                <th>Кто провёл</th>
+                <th>Комментарий</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in writeoffs" :key="row.id">
+                <td>{{ formatDateOnlyRu(row.operation_date) }}</td>
+                <td>{{ row.batches?.code || '—' }}</td>
+                <td>{{ row.crops?.label || row.crops?.key || '—' }}</td>
+                <td>{{ storageWriteoffTypeLabel(row.writeoff_type) }}</td>
+                <td>{{ Number(row.mass_tons || 0).toFixed(2) }}</td>
+                <td>{{ row.counterparty || '—' }}</td>
+                <td>{{ row.actorName }}</td>
+                <td>{{ row.comment || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="warehouse-cell-empty-panel">
+          <h2>Списания</h2>
+          <p>Записей о списании пока нет.</p>
         </div>
       </section>
 

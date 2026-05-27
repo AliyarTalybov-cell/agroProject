@@ -2,10 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import WarehouseTransferModal from '@/components/WarehouseTransferModal.vue'
+import WarehouseWriteoffModal from '@/components/WarehouseWriteoffModal.vue'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { loadStorageLocations, storageLocationCropLabel, storageLocationFillStatusCode, storageLocationFillStatusName, storageLocationMarksInactive, storageLocationTypeName, type StorageLocationRow } from '@/lib/storageLocationsSupabase'
 import { loadStorageFillStatuses, type StorageFillStatusRow } from '@/lib/storageRefsSupabase'
 import { loadCrops, type CropRow } from '@/lib/landTypesAndCrops'
+import { loadStorageLocationSummaries, type StorageLocationSummary } from '@/lib/storageTransfersSupabase'
 import {
   fillBatchStateFromCode,
   placeholderWarehouseMetrics,
@@ -32,6 +35,12 @@ const page = ref(1)
 const pageSize = ref(8)
 
 const places = ref<StorageLocationRow[]>([])
+const summaries = ref<Record<string, StorageLocationSummary>>({})
+
+const transferModalOpen = ref(false)
+const transferFromId = ref<string | null>(null)
+const writeoffModalOpen = ref(false)
+const writeoffFromId = ref<string | null>(null)
 
 async function reloadPlaces() {
   if (!isSupabaseConfigured()) {
@@ -51,6 +60,7 @@ async function reloadPlaces() {
     places.value = rows
     fillStatusOptions.value = fills
     cropOptions.value = crops
+    summaries.value = rows.length ? await loadStorageLocationSummaries(rows) : {}
     if (page.value > totalPages.value) page.value = totalPages.value
   } catch (e) {
     error.value = e instanceof Error && e.message ? e.message : 'Не удалось загрузить места хранения'
@@ -59,15 +69,35 @@ async function reloadPlaces() {
   }
 }
 
-/** Метрики-заглушка; состояние заполнения берётся из справочника места хранения. */
 function metricsForPlace(place: StorageLocationRow): WarehouseCardMetrics {
-  const base = placeholderWarehouseMetrics()
+  const summary = summaries.value[place.id]
   const code = storageLocationFillStatusCode(place)
-  const crop = storageLocationCropLabel(place)
+  const cropFromPlace = storageLocationCropLabel(place)
+  if (summary) {
+    const cropLabel =
+      summary.cropLabel ||
+      (cropFromPlace !== '—' ? cropFromPlace : null) ||
+      (summary.cropKey ? summary.cropKey : null)
+    return {
+      fillState: fillBatchStateFromCode(code),
+      occupancyPercent: summary.occupancyPercent,
+      totalMassTons: summary.totalMassTons,
+      availableForTransferTons: summary.availableMassTons,
+      reservedTons: summary.reservedTons,
+      spoiledTons: summary.spoiledTons,
+      cropLabel,
+      lastOperationAt: summary.lastOperationAt,
+      lastOperationLabel: summary.lastOperationLabel,
+    }
+  }
+  const base = placeholderWarehouseMetrics()
   return {
     ...base,
     fillState: fillBatchStateFromCode(code),
-    cropLabel: crop !== '—' ? crop : null,
+    cropLabel: cropFromPlace !== '—' ? cropFromPlace : null,
+    availableForTransferTons: 0,
+    reservedTons: Number(place.reserved_tons || 0),
+    spoiledTons: Number(place.spoiled_tons || 0),
   }
 }
 
@@ -134,11 +164,15 @@ function formatMassTons(tons: number): string {
   return `${n.toLocaleString('ru-RU')} т`
 }
 
-function formatDate(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
+function formatLastOperation(metrics: WarehouseCardMetrics): string {
+  if (!metrics.lastOperationAt) return '—'
+  const d = new Date(metrics.lastOperationAt)
   if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  const datePart = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+  const label = metrics.lastOperationLabel || 'Операция'
+  if (label.startsWith('Приёмка')) return `Приёмка ${datePart}`
+  if (label.startsWith('Перемещение')) return `Перемещ. ${datePart}`
+  return `${label} ${datePart}`
 }
 
 function typeIconPath(type: string): string {
@@ -163,6 +197,38 @@ function onPageSizeChange() {
 
 function openStorageCell(id: string) {
   void router.push({ name: 'warehouse-cell', params: { id } })
+}
+
+function openGrainIntake(id: string) {
+  void router.push({ name: 'warehouse-cell', params: { id }, query: { intake: '1' } })
+}
+
+function openTransferModal(fromId?: string) {
+  transferFromId.value = fromId ?? null
+  transferModalOpen.value = true
+}
+
+function closeTransferModal() {
+  transferModalOpen.value = false
+  transferFromId.value = null
+}
+
+function onTransferSuccess() {
+  void reloadPlaces()
+}
+
+function openWriteoffModal(fromId?: string) {
+  writeoffFromId.value = fromId ?? null
+  writeoffModalOpen.value = true
+}
+
+function closeWriteoffModal() {
+  writeoffModalOpen.value = false
+  writeoffFromId.value = null
+}
+
+function onWriteoffSuccess() {
+  void reloadPlaces()
 }
 
 onMounted(() => {
@@ -190,7 +256,7 @@ watch(cropFilter, () => {
       <header class="fields-header page-enter-item">
         <div class="fields-header-text">
           <p class="fields-subtitle">
-            Карточки привязаны к справочнику «Места хранения». Заполненность, масса и культура появятся после учёта поступлений зерна.
+            Карточки привязаны к справочнику «Места хранения». Масса и заполненность обновляются по поступлениям, партиям и перемещениям.
           </p>
         </div>
         <RouterLink class="fields-add-btn" to="/warehouses/storage-locations?create=1">
@@ -259,12 +325,15 @@ watch(cropFilter, () => {
             :key="place.id"
             class="warehouse-card"
             :class="{ 'warehouse-card--inactive': storageLocationMarksInactive(place) }"
-            role="button"
-            tabindex="0"
-            @click="openStorageCell(place.id)"
-            @keydown.enter.prevent="openStorageCell(place.id)"
-            @keydown.space.prevent="openStorageCell(place.id)"
           >
+            <div
+              class="warehouse-card-main"
+              role="button"
+              tabindex="0"
+              @click="openStorageCell(place.id)"
+              @keydown.enter.prevent="openStorageCell(place.id)"
+              @keydown.space.prevent="openStorageCell(place.id)"
+            >
             <div class="warehouse-card-top">
               <div class="warehouse-card-icon" aria-hidden="true">
                 <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -290,12 +359,35 @@ watch(cropFilter, () => {
               <div class="warehouse-card-metric">
                 <span class="warehouse-card-metric-label">Общая масса</span>
                 <span class="warehouse-card-metric-value">{{ formatMassTons(metrics.totalMassTons) }}</span>
+                <p class="warehouse-card-transfer-available">
+                  Доступно для перемещения: {{ formatMassTons(metrics.availableForTransferTons) }}
+                </p>
+                <p
+                  v-if="metrics.reservedTons > 0 || metrics.spoiledTons > 0"
+                  class="warehouse-card-mass-holds"
+                >
+                  <template v-if="metrics.reservedTons > 0">резерв {{ formatMassTons(metrics.reservedTons) }}</template>
+                  <template v-if="metrics.reservedTons > 0 && metrics.spoiledTons > 0"> · </template>
+                  <template v-if="metrics.spoiledTons > 0">брак {{ formatMassTons(metrics.spoiledTons) }}</template>
+                </p>
                 <span class="warehouse-card-crop">{{ metrics.cropLabel || 'Нет' }}</span>
               </div>
               <div class="warehouse-card-metric warehouse-card-metric--right">
                 <span class="warehouse-card-metric-label">Последняя операция</span>
-                <span class="warehouse-card-metric-value warehouse-card-metric-value--date">{{ formatDate(metrics.lastOperationAt) }}</span>
+                <span class="warehouse-card-metric-value warehouse-card-metric-value--date">{{ formatLastOperation(metrics) }}</span>
               </div>
+            </div>
+            </div>
+            <div class="warehouse-card-actions">
+              <button type="button" class="warehouse-card-btn warehouse-card-btn--move" @click.stop="openTransferModal(place.id)">
+                Перемещение
+              </button>
+              <button type="button" class="warehouse-card-btn warehouse-card-btn--writeoff" @click.stop="openWriteoffModal(place.id)">
+                Списание
+              </button>
+              <button type="button" class="warehouse-card-btn warehouse-card-btn--intake" @click.stop="openGrainIntake(place.id)">
+                Приёмка зерна
+              </button>
             </div>
           </article>
         </div>
@@ -342,6 +434,21 @@ watch(cropFilter, () => {
         </footer>
       </section>
     </div>
+
+    <WarehouseTransferModal
+      :open="transferModalOpen"
+      :places="places"
+      :initial-from-id="transferFromId"
+      @close="closeTransferModal"
+      @success="onTransferSuccess"
+    />
+    <WarehouseWriteoffModal
+      :open="writeoffModalOpen"
+      :storage-location-id="writeoffFromId"
+      :storage-name="writeoffFromId ? (places.find((x) => x.id === writeoffFromId)?.name || null) : null"
+      @close="closeWriteoffModal"
+      @success="onWriteoffSuccess"
+    />
   </section>
 </template>
 
@@ -571,29 +678,45 @@ watch(cropFilter, () => {
 .warehouse-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-auto-rows: 1fr;
   gap: var(--space-md);
 }
 
 .warehouse-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--toolbar-form-surface-border);
   border-radius: 12px;
   background: var(--toolbar-form-surface);
-  padding: 14px 14px 12px;
+  padding: 0;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
   transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  overflow: hidden;
+}
+
+.warehouse-card-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 14px 12px;
   cursor: pointer;
+  transition: background 0.2s ease;
 }
 
 .warehouse-card:hover {
   border-color: color-mix(in srgb, var(--accent-green) 45%, var(--border-color));
-  background: color-mix(in srgb, var(--toolbar-form-surface) 92%, #ffffff);
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
   transform: translateY(-1px);
 }
 
-.warehouse-card:focus-visible {
+.warehouse-card:hover .warehouse-card-main {
+  background: color-mix(in srgb, var(--toolbar-form-surface) 92%, #ffffff);
+}
+
+.warehouse-card-main:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent-green) 52%, transparent);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 [data-theme='dark'] .warehouse-card {
@@ -687,6 +810,7 @@ watch(cropFilter, () => {
   font-size: 0.82rem;
   color: var(--text-secondary);
   line-height: 1.35;
+  min-height: calc(1.35em * 2);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -698,9 +822,11 @@ watch(cropFilter, () => {
   font-size: 0.78rem;
   color: var(--text-secondary);
   font-weight: 500;
+  min-height: 1.1rem;
 }
 
 .warehouse-card-progress-block {
+  min-height: 42px;
   margin-bottom: 12px;
 }
 
@@ -728,6 +854,7 @@ watch(cropFilter, () => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+  margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--border-color);
 }
@@ -761,12 +888,86 @@ watch(cropFilter, () => {
 .warehouse-card-metric-value--date {
   font-size: 0.9rem;
   font-weight: 600;
+  min-height: 2.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.warehouse-card-transfer-available {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.warehouse-card-mass-holds {
+  margin: 2px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--text-muted);
 }
 
 .warehouse-card-crop {
   font-size: 0.78rem;
   color: var(--text-secondary);
-  margin-top: 2px;
+  margin-top: 4px;
+}
+
+.warehouse-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+
+.warehouse-card-btn {
+  width: 100%;
+  height: 38px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.warehouse-card-btn--move {
+  border: 1px solid color-mix(in srgb, #2563eb 55%, var(--border-color));
+  background: var(--bg-panel);
+  color: #2563eb;
+}
+
+.warehouse-card-btn--move:hover {
+  background: color-mix(in srgb, #2563eb 10%, var(--bg-panel));
+}
+
+.warehouse-card-btn--writeoff {
+  border: 1px solid color-mix(in srgb, var(--danger-red) 45%, var(--border-color));
+  background: var(--bg-panel);
+  color: var(--danger-red);
+}
+
+.warehouse-card-btn--writeoff:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.warehouse-card-btn--intake {
+  border: 1px solid var(--accent-green);
+  background: var(--accent-green);
+  color: #fff;
+}
+
+.warehouse-card-btn--intake:hover {
+  background: var(--accent-green-hover);
 }
 
 .fields-pagination {

@@ -8,6 +8,10 @@ export type StorageLocationRow = {
   fgis_grain_code: string | null
   /** Номинальная вместимость по массе зерна, т */
   capacity_tons: number | null
+  /** Зарезервировано под отгрузку, т (не для перемещения) */
+  reserved_tons?: number | null
+  /** Испорченное зерно, т (не для перемещения) */
+  spoiled_tons?: number | null
   location_type_id: string
   location_status_id: string
   fill_status_id: string
@@ -30,7 +34,7 @@ export type StorageLocationRow = {
 
 const STORAGE_LOCATIONS_TABLE = 'storage_locations'
 const STORAGE_LOCATIONS_SELECT =
-  'id, name, address, fgis_grain_code, capacity_tons, location_type_id, location_status_id, fill_status_id, crop_key, sort_order, created_at, updated_at, storage_location_types ( id, name ), storage_location_statuses ( id, name, marks_inactive ), storage_fill_statuses ( id, name, code ), crops ( key, label )'
+  'id, name, address, fgis_grain_code, capacity_tons, reserved_tons, spoiled_tons, location_type_id, location_status_id, fill_status_id, crop_key, sort_order, created_at, updated_at, storage_location_types ( id, name ), storage_location_statuses ( id, name, marks_inactive ), storage_fill_statuses ( id, name, code ), crops ( key, label )'
 
 export async function loadStorageLocations(searchQuery = ''): Promise<StorageLocationRow[]> {
   if (!supabase) return []

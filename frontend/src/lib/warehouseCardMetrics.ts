@@ -9,8 +9,13 @@ export type WarehouseCardMetrics = {
   fillState: BatchFillState
   occupancyPercent: number
   totalMassTons: number
+  /** Масса, доступная для перемещения (без резерва и брака) */
+  availableForTransferTons: number
+  reservedTons: number
+  spoiledTons: number
   cropLabel: string | null
   lastOperationAt: string | null
+  lastOperationLabel?: string | null
 }
 
 /** Код из справочника `storage_fill_statuses`; неизвестные и пользовательские без кода — как «пусто» для цвета/фильтра по системным кодам. */
@@ -24,6 +29,9 @@ export function placeholderWarehouseMetrics(): WarehouseCardMetrics {
     fillState: 'empty',
     occupancyPercent: 0,
     totalMassTons: 0,
+    availableForTransferTons: 0,
+    reservedTons: 0,
+    spoiledTons: 0,
     cropLabel: null,
     lastOperationAt: null,
   }
