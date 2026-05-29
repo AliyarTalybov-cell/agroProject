@@ -126,12 +126,12 @@ export async function loadFieldsPage(params: FieldsPageParams = {}): Promise<Fie
 
   const { data, error, count } = await build(FIELDS_SELECT_WITH_OPTIONAL)
   if (!error) {
-    return { rows: ((data ?? []) as Record<string, unknown>[]).map(normalizeFieldRow), total: Number(count ?? 0) }
+    return { rows: ((data ?? []) as unknown as Record<string, unknown>[]).map(normalizeFieldRow), total: Number(count ?? 0) }
   }
   if (!isMissingGeometryColumnError(error)) throw error
   const fallback = await build(FIELDS_SELECT_BASE)
   if (fallback.error) throw fallback.error
-  return { rows: ((fallback.data ?? []) as Record<string, unknown>[]).map(normalizeFieldRow), total: Number(fallback.count ?? 0) }
+  return { rows: ((fallback.data ?? []) as unknown as Record<string, unknown>[]).map(normalizeFieldRow), total: Number(fallback.count ?? 0) }
 }
 
 /** Максимальный номер поля (для подсказки номера новой записи при серверной пагинации). */
