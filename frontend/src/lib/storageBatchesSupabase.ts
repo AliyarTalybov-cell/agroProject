@@ -14,11 +14,12 @@ export type StorageBatchRow = {
   updated_at: string
   completed_at: string | null
   crops?: { key: string; label: string } | { key: string; label: string }[] | null
+  storage_locations?: { id: string; name: string; address: string } | { id: string; name: string; address: string }[] | null
 }
 
 const STORAGE_BATCHES_TABLE = 'storage_batches'
 const STORAGE_BATCHES_SELECT =
-  'id, code, storage_location_id, crop_key, purpose, use_goal, quality, total_net_tons, created_at, updated_at, completed_at, crops ( key, label )'
+  'id, code, storage_location_id, crop_key, purpose, use_goal, quality, total_net_tons, created_at, updated_at, completed_at, crops ( key, label ), storage_locations ( id, name, address )'
 
 function coalesceCropJoin(row: StorageBatchRow): { key: string; label: string } | null {
   const x = row.crops
@@ -29,6 +30,23 @@ function coalesceCropJoin(row: StorageBatchRow): { key: string; label: string } 
 
 export function storageBatchCropLabel(row: StorageBatchRow): string {
   return coalesceCropJoin(row)?.label ?? '—'
+}
+
+export type StorageBatchRegistryFilters = {
+  search?: string
+  cropKey?: string
+  status?: 'forming' | 'completed' | 'closed'
+  storageLocationId?: string
+  fgisStatus?: 'ready' | 'uploaded' | 'not_required'
+  dateFrom?: string
+  dateTo?: string
+  page?: number
+  pageSize?: number
+}
+
+export type StorageBatchRegistryPage = {
+  rows: StorageBatchRow[]
+  total: number
 }
 
 export async function loadStorageBatches(storageLocationId: string): Promise<StorageBatchRow[]> {
@@ -43,6 +61,51 @@ export async function loadStorageBatches(storageLocationId: string): Promise<Sto
     ...r,
     completed_at: r.completed_at ?? null,
   }))
+}
+
+export async function loadAllStorageBatches(): Promise<StorageBatchRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from(STORAGE_BATCHES_TABLE)
+    .select(STORAGE_BATCHES_SELECT)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return ((data ?? []) as StorageBatchRow[]).map((r) => ({
+    ...r,
+    completed_at: r.completed_at ?? null,
+  }))
+}
+
+export async function loadStorageBatchesRegistry(filters: StorageBatchRegistryFilters = {}): Promise<StorageBatchRegistryPage> {
+  if (!supabase) return { rows: [], total: 0 }
+  const page = Math.max(1, Number(filters.page || 1))
+  const pageSize = Math.max(1, Number(filters.pageSize || 10))
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
+
+  let query = supabase.from(STORAGE_BATCHES_TABLE).select(STORAGE_BATCHES_SELECT, { count: 'exact' }).order('created_at', { ascending: false })
+
+  const search = String(filters.search || '').trim()
+  if (search) query = query.ilike('code', `%${search}%`)
+  if (filters.cropKey && filters.cropKey !== 'all') query = query.eq('crop_key', filters.cropKey)
+  if (filters.storageLocationId && filters.storageLocationId !== 'all') query = query.eq('storage_location_id', filters.storageLocationId)
+  if (filters.dateFrom) query = query.gte('created_at', `${filters.dateFrom}T00:00:00`)
+  if (filters.dateTo) query = query.lte('created_at', `${filters.dateTo}T23:59:59`)
+
+  if (filters.status === 'forming') query = query.is('completed_at', null)
+  if (filters.status === 'completed') query = query.not('completed_at', 'is', null).gt('total_net_tons', 0.0001)
+  if (filters.status === 'closed') query = query.not('completed_at', 'is', null).lte('total_net_tons', 0.0001)
+
+  if (filters.fgisStatus === 'ready') query = query.filter('quality->>Статус выгрузки в ФГИС', 'eq', 'Готов к выгрузке')
+  if (filters.fgisStatus === 'uploaded') query = query.filter('quality->>Статус выгрузки в ФГИС', 'eq', 'Выгружено')
+  if (filters.fgisStatus === 'not_required') query = query.filter('quality->>Статус выгрузки в ФГИС', 'eq', 'Не требуется')
+
+  const { data, error, count } = await query.range(from, to)
+  if (error) throw error
+  return {
+    rows: ((data ?? []) as StorageBatchRow[]).map((r) => ({ ...r, completed_at: r.completed_at ?? null })),
+    total: Number(count || 0),
+  }
 }
 
 function nextBatchCode(now = new Date()): string {
@@ -130,4 +193,14 @@ export async function formStorageBatch(payload: {
   await recalculateStorageBatchTotals((batch as StorageBatchRow).id)
 
   return batch as StorageBatchRow
+}
+
+export async function updateStorageBatchQuality(batchId: string, quality: Record<string, unknown>): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const nowIso = new Date().toISOString()
+  const { error } = await supabase
+    .from(STORAGE_BATCHES_TABLE)
+    .update({ quality, updated_at: nowIso })
+    .eq('id', batchId)
+  if (error) throw error
 }

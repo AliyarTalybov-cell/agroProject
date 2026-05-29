@@ -24,6 +24,7 @@ import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import UserAvatar from '@/components/UserAvatar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -133,6 +134,10 @@ function employeeAccentColor(employee: string): string {
 
 function employeeAvatarStyle(employee: string): Record<string, string> {
   return { background: employeeAccentColor(employee) }
+}
+
+function employeeAvatarUrl(employee: string): string | null {
+  return profileByEmployeeString(employee)?.avatar_url ?? null
 }
 
 function conditionToneClass(h: EquipmentOperationHistoryRow): string {
@@ -833,7 +838,7 @@ onMounted(refreshAll)
 
                 <div class="equipment-history-toggle-right">
                   <div class="equipment-history-toggle-employee">
-                    <span class="equipment-history-avatar" :style="employeeAvatarStyle(h.employee)">{{ employeeInitials(h.employee) }}</span>
+                    <UserAvatar class="equipment-history-avatar" :style="employeeAvatarStyle(h.employee)" :url="employeeAvatarUrl(h.employee)" :initials="employeeInitials(h.employee)" />
                     <span class="equipment-history-toggle-employee-name">{{ h.employee }}</span>
                   </div>
                   <span class="equipment-history-condition-pill" :class="conditionToneClass(h)">

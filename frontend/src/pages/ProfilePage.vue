@@ -3,9 +3,11 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '@/stores/auth'
 import type { ProfileRow } from '@/lib/tasksSupabase'
-import { isSupabaseConfigured, ensureProfileRow, loadProfileById, upsertMyProfile } from '@/lib/tasksSupabase'
+import { isSupabaseConfigured, ensureProfileRow, loadProfileById, upsertMyProfile, uploadMyAvatar, removeMyAvatar } from '@/lib/tasksSupabase'
 import { deleteMyAccount } from '@/lib/accountSupabase'
 import { formatSupabaseError } from '@/lib/formatSupabaseError'
+import { PHOTO_MAX_BYTES, PHOTO_MAX_LABEL } from '@/lib/uploadLimits'
+import { compressImageFile } from '@/lib/imageCompress'
 
 const PROFILE_STORAGE_KEY = 'agro:profile'
 
@@ -33,6 +35,7 @@ const profileForm = ref({
 })
 
 const myProfile = ref<{ display_name: string | null; role: string | null } | null>(null)
+const avatarUrl = ref<string | null>(null)
 
 const displayName = computed(() => {
   const name = myProfile.value?.display_name || auth.user.value?.user_metadata?.full_name
@@ -76,6 +79,7 @@ const createdAt = computed(() => {
 
 function applyProfileToForm(p: ProfileRow) {
   myProfile.value = { display_name: p.display_name, role: p.role }
+  avatarUrl.value = p.avatar_url ?? null
   const parts = (p.display_name || '').trim().split(/\s+/)
   profileForm.value.firstName = parts[0] || ''
   profileForm.value.lastName = parts[1] || ''
@@ -310,6 +314,89 @@ async function confirmSaveProfile() {
   }
 }
 
+const AVATAR_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+const AVATAR_MAX_SIZE = PHOTO_MAX_BYTES
+const avatarInput = ref<HTMLInputElement | null>(null)
+const avatarUploading = ref(false)
+const avatarMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
+let avatarMessageTimer: ReturnType<typeof setTimeout> | null = null
+
+function setAvatarMessage(type: 'success' | 'error', text: string) {
+  if (avatarMessageTimer) clearTimeout(avatarMessageTimer)
+  avatarMessage.value = { type, text }
+  avatarMessageTimer = setTimeout(() => {
+    avatarMessage.value = null
+    avatarMessageTimer = null
+  }, 5000)
+}
+
+function triggerAvatarPick() {
+  if (avatarUploading.value) return
+  avatarInput.value?.click()
+}
+
+function syncAvatarToCache(url: string | null) {
+  avatarUrl.value = url
+  const cache = auth.profileCache.value
+  if (cache && auth.user.value && cache.id === auth.user.value.id) {
+    auth.profileCache.value = { ...cache, avatar_url: url }
+  }
+}
+
+async function onAvatarSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (!auth.user.value) return
+  if (!isSupabaseConfigured()) {
+    setAvatarMessage('error', 'Загрузка фото недоступна: база данных не подключена.')
+    input.value = ''
+    return
+  }
+  if (!AVATAR_ALLOWED_TYPES.includes(file.type)) {
+    setAvatarMessage('error', 'Допустимы только изображения PNG, JPEG, WEBP или GIF.')
+    input.value = ''
+    return
+  }
+  if (file.size > AVATAR_MAX_SIZE) {
+    setAvatarMessage('error', `Размер файла не должен превышать ${PHOTO_MAX_LABEL}.`)
+    input.value = ''
+    return
+  }
+  avatarMessage.value = null
+  avatarUploading.value = true
+  try {
+    // Сжимаем на клиенте: в хранилище попадёт лёгкая версия (~512px, WebP/JPEG)
+    const optimized = await compressImageFile(file, { maxSize: 512, quality: 0.85 })
+    const url = await uploadMyAvatar(auth.user.value.id, optimized)
+    syncAvatarToCache(url)
+    setAvatarMessage('success', 'Фото профиля обновлено.')
+  } catch (err) {
+    const text = err instanceof Error ? err.message : 'Не удалось загрузить фото.'
+    setAvatarMessage('error', text)
+  } finally {
+    avatarUploading.value = false
+    input.value = ''
+  }
+}
+
+async function deleteAvatar() {
+  if (!auth.user.value || avatarUploading.value) return
+  if (!isSupabaseConfigured()) return
+  avatarMessage.value = null
+  avatarUploading.value = true
+  try {
+    await removeMyAvatar(auth.user.value.id)
+    syncAvatarToCache(null)
+    setAvatarMessage('success', 'Фото профиля удалено.')
+  } catch (err) {
+    const text = err instanceof Error ? err.message : 'Не удалось удалить фото.'
+    setAvatarMessage('error', text)
+  } finally {
+    avatarUploading.value = false
+  }
+}
+
 async function changePassword() {
   const { currentPassword, newPassword, confirmPassword } = passwordForm.value
   if (!currentPassword.trim()) {
@@ -392,7 +479,41 @@ async function confirmDeleteAccount() {
       <!-- Левая колонка: карточка пользователя и активность -->
       <aside class="profile-card-aside">
         <div class="profile-user-card card-rounded">
-          <div class="profile-avatar">{{ userInitials }}</div>
+          <div class="profile-avatar-wrap">
+            <button
+              type="button"
+              class="profile-avatar"
+              :class="{ 'profile-avatar--busy': avatarUploading }"
+              :disabled="avatarUploading"
+              :title="avatarUrl ? 'Сменить фото профиля' : 'Загрузить фото профиля'"
+              @click="triggerAvatarPick"
+            >
+              <img v-if="avatarUrl" :src="avatarUrl" alt="Фото профиля" class="profile-avatar-img" />
+              <span v-else class="profile-avatar-initials">{{ userInitials }}</span>
+              <span class="profile-avatar-overlay" aria-hidden="true">
+                <svg v-if="!avatarUploading" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+                <svg v-else class="profile-avatar-spinner" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+              </span>
+            </button>
+            <input
+              ref="avatarInput"
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              class="profile-avatar-input"
+              @change="onAvatarSelected"
+            />
+          </div>
+          <div class="profile-avatar-actions">
+            <button type="button" class="profile-avatar-link" :disabled="avatarUploading" @click="triggerAvatarPick">
+              {{ avatarUploading ? 'Загрузка…' : (avatarUrl ? 'Сменить фото' : 'Загрузить фото') }}
+            </button>
+            <button v-if="avatarUrl && !avatarUploading" type="button" class="profile-avatar-link profile-avatar-link--danger" @click="deleteAvatar">
+              Удалить
+            </button>
+          </div>
+          <p v-if="avatarMessage" class="profile-avatar-message" :class="avatarMessage.type === 'success' ? 'profile-avatar-message--success' : 'profile-avatar-message--error'">
+            {{ avatarMessage.text }}
+          </p>
           <div class="profile-user-name">{{ displayName }}</div>
           <div class="profile-user-position">{{ profileForm.position || 'Главный агроном' }}</div>
           <div class="profile-badge">
@@ -668,7 +789,7 @@ async function confirmDeleteAccount() {
 
 .profile-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 340px 1fr;
   gap: var(--space-xl);
   align-items: start;
 }
@@ -702,18 +823,119 @@ async function confirmDeleteAccount() {
   padding: var(--space-xl);
 }
 
+.profile-avatar-wrap {
+  display: flex;
+  justify-content: center;
+}
+
 .profile-avatar {
-  width: 80px;
-  height: 80px;
+  position: relative;
+  width: 100%;
+  max-width: 200px;
+  aspect-ratio: 1 / 1;
+  height: auto;
   border-radius: 50%;
   background: var(--accent-green);
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.5rem;
+  font-size: 2.75rem;
   font-weight: 700;
-  margin: 0 auto 12px;
+  margin: 0 auto 16px;
+  padding: 0;
+  border: none;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.profile-avatar:disabled {
+  cursor: progress;
+}
+
+.profile-avatar-initials {
+  line-height: 1;
+}
+
+.profile-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.profile-avatar-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.42);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.profile-avatar:hover .profile-avatar-overlay,
+.profile-avatar:focus-visible .profile-avatar-overlay,
+.profile-avatar--busy .profile-avatar-overlay {
+  opacity: 1;
+}
+
+.profile-avatar-spinner {
+  animation: profile-avatar-spin 0.8s linear infinite;
+}
+
+@keyframes profile-avatar-spin {
+  to { transform: rotate(360deg); }
+}
+
+.profile-avatar-input {
+  display: none;
+}
+
+.profile-avatar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.profile-avatar-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--accent-green);
+  cursor: pointer;
+}
+
+.profile-avatar-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.profile-avatar-link:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.profile-avatar-link--danger {
+  color: var(--danger-red);
+}
+
+.profile-avatar-message {
+  margin: 0 0 10px 0;
+  font-size: 0.8125rem;
+}
+
+.profile-avatar-message--success {
+  color: var(--accent-green);
+}
+
+.profile-avatar-message--error {
+  color: var(--danger-red);
 }
 
 [data-theme='dark'] .profile-avatar {

@@ -263,6 +263,44 @@ export async function loadLands(searchQuery = ''): Promise<LandRow[]> {
   return ((data ?? []) as Record<string, unknown>[]).map(normalizeLandRow)
 }
 
+export type LandsPageResult = { rows: LandRow[]; total: number }
+
+/** Серверная пагинация земель для реестра: поиск по кадастру/адресу, сортировка по номеру. */
+export async function loadLandsPage(params: {
+  search?: string
+  page?: number
+  pageSize?: number
+}): Promise<LandsPageResult> {
+  if (!supabase) return { rows: [], total: 0 }
+  const page = Math.max(1, Math.trunc(params.page ?? 1) || 1)
+  const pageSize = Math.max(1, Math.trunc(params.pageSize ?? 10) || 10)
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
+  let req = supabase
+    .from(LANDS_TABLE)
+    .select(LANDS_COLUMNS, { count: 'exact' })
+    .order('number', { ascending: true })
+    .range(from, to)
+  const query = (params.search ?? '').replace(/[(),*]/g, ' ').trim()
+  if (query) req = req.or(`cadastral_number.ilike.*${query}*,address.ilike.*${query}*`)
+  const { data, error, count } = await req
+  if (error) throw error
+  return { rows: ((data ?? []) as Record<string, unknown>[]).map(normalizeLandRow), total: Number(count ?? 0) }
+}
+
+/** Максимальный номер участка (подсказка номера новой записи при серверной пагинации). */
+export async function loadMaxLandNumber(): Promise<number> {
+  if (!supabase) return 0
+  const { data, error } = await supabase
+    .from(LANDS_TABLE)
+    .select('number')
+    .order('number', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) return 0
+  return Number((data as { number?: number } | null)?.number ?? 0)
+}
+
 export async function addLand(payload: {
   number: number
   name: string

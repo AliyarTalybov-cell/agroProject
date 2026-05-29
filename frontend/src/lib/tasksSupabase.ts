@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { assertCanDelete, assertCanDeleteTask } from '@/lib/deletePermissions'
+import { assertPhotoSize } from '@/lib/uploadLimits'
 
 export const TASK_ASSIGNEE_FILTER_UNASSIGNED = '__unassigned__' as const
 export const TASK_UNASSIGNED_LABEL = 'Без исполнителя'
@@ -15,6 +16,7 @@ export type ProfileRow = {
   phone: string | null
   position: string | null
   additional_info: string | null
+  avatar_url?: string | null
   created_at: string
   updated_at: string
   /** Редко обновляется клиентом (см. activityHeartbeat) */
@@ -120,42 +122,67 @@ function initialsFromName(name: string, email: string): string {
 
 export async function loadProfiles(): Promise<ProfileRow[]> {
   if (!supabase) return []
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('id, email, display_name, role, phone, position, additional_info, last_activity_at, created_at, updated_at')
-    .order('email')
-  if (error) throw error
-  return (data ?? []) as ProfileRow[]
+  const withAvatar = 'id, email, display_name, role, phone, position, additional_info, avatar_url, last_activity_at, created_at, updated_at'
+  const { data, error } = await supabase.from('profiles').select(withAvatar).order('email')
+  if (!error) return (data ?? []) as ProfileRow[]
+  if (isColumnMissingError(error)) {
+    // Колонки avatar_url ещё нет — грузим без неё
+    const { data: d2, error: e2 } = await supabase
+      .from('profiles')
+      .select('id, email, display_name, role, phone, position, additional_info, last_activity_at, created_at, updated_at')
+      .order('email')
+    if (e2) throw e2
+    return (d2 ?? []) as ProfileRow[]
+  }
+  throw error
 }
 
+const PROFILE_AVATAR_COLUMNS = 'id, email, display_name, role, phone, position, additional_info, avatar_url, created_at, updated_at'
 const PROFILE_FULL_COLUMNS = 'id, email, display_name, role, phone, position, additional_info, created_at, updated_at'
 const PROFILE_MIN_COLUMNS = 'id, email, display_name, role, created_at, updated_at'
+
+function isColumnMissingError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false
+  return error.code === '42703' || /column .* does not exist/i.test(error.message ?? '')
+}
 
 export async function loadProfileById(userId: string): Promise<ProfileRow | null> {
   if (!supabase) return null
   const { data, error } = await supabase
     .from('profiles')
-    .select(PROFILE_FULL_COLUMNS)
+    .select(PROFILE_AVATAR_COLUMNS)
     .eq('id', userId)
     .maybeSingle()
   if (!error) {
     return data as ProfileRow | null
   }
-  const isColumnError = error.code === '42703' || /column .* does not exist/i.test(error.message)
-  if (isColumnError) {
-    const { data: fallback, error: err2 } = await supabase
+  if (isColumnMissingError(error)) {
+    // Колонки avatar_url ещё нет — пробуем расширенный набор без аватара
+    const { data: full, error: errFull } = await supabase
       .from('profiles')
-      .select(PROFILE_MIN_COLUMNS)
+      .select(PROFILE_FULL_COLUMNS)
       .eq('id', userId)
       .maybeSingle()
-    if (err2) return null
-    if (!fallback) return null
-    return {
-      ...fallback,
-      phone: null,
-      position: null,
-      additional_info: null,
-    } as ProfileRow
+    if (!errFull) {
+      return full ? ({ ...full, avatar_url: null } as ProfileRow) : null
+    }
+    if (isColumnMissingError(errFull)) {
+      const { data: fallback, error: err2 } = await supabase
+        .from('profiles')
+        .select(PROFILE_MIN_COLUMNS)
+        .eq('id', userId)
+        .maybeSingle()
+      if (err2) return null
+      if (!fallback) return null
+      return {
+        ...fallback,
+        phone: null,
+        position: null,
+        additional_info: null,
+        avatar_url: null,
+      } as ProfileRow
+    }
+    return null
   }
   throw error
 }
@@ -243,6 +270,67 @@ export async function upsertMyProfile(
   }
 }
 
+const AVATARS_BUCKET = 'avatars'
+
+/** Загружает новый аватар в бакет, удаляет старые файлы пользователя и сохраняет ссылку в профиле. */
+export async function uploadMyAvatar(userId: string, file: File): Promise<string> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  assertPhotoSize(file)
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg'
+  const path = `${userId}/${Date.now()}.${ext}`
+
+  // Удаляем прежние файлы пользователя, чтобы не копить мусор в бакете
+  try {
+    const { data: existing } = await supabase.storage.from(AVATARS_BUCKET).list(userId)
+    if (existing && existing.length) {
+      await supabase.storage
+        .from(AVATARS_BUCKET)
+        .remove(existing.map((f) => `${userId}/${f.name}`))
+    }
+  } catch {
+    /* список/удаление не критичны для загрузки нового файла */
+  }
+
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from(AVATARS_BUCKET)
+    .upload(path, file, { cacheControl: '3600', upsert: true, contentType: file.type || undefined })
+  if (uploadError) throw uploadError
+
+  const { data: urlData } = supabase.storage.from(AVATARS_BUCKET).getPublicUrl(uploadData.path)
+  const publicUrl = urlData.publicUrl
+
+  const { error: updErr } = await supabase
+    .from('profiles')
+    .update({ avatar_url: publicUrl, updated_at: new Date().toISOString() })
+    .eq('id', userId)
+  if (updErr) {
+    // откатываем загруженный файл, если профиль обновить не удалось
+    await supabase.storage.from(AVATARS_BUCKET).remove([uploadData.path]).catch(() => {})
+    throw updErr
+  }
+  return publicUrl
+}
+
+/** Удаляет аватар пользователя из бакета и очищает ссылку в профиле. */
+export async function removeMyAvatar(userId: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  try {
+    const { data: existing } = await supabase.storage.from(AVATARS_BUCKET).list(userId)
+    if (existing && existing.length) {
+      await supabase.storage
+        .from(AVATARS_BUCKET)
+        .remove(existing.map((f) => `${userId}/${f.name}`))
+    }
+  } catch {
+    /* отсутствие файлов не мешает очистить ссылку */
+  }
+  const { error } = await supabase
+    .from('profiles')
+    .update({ avatar_url: null, updated_at: new Date().toISOString() })
+    .eq('id', userId)
+  if (error) throw error
+}
+
 export async function loadTasksFromSupabase(
   onlyMine: boolean,
   userId: string,
@@ -291,6 +379,13 @@ export type LoadTasksFilterOpts = {
 export type LoadTasksPageOpts = {
   assigneeId?: string
   status?: TaskStatus
+  /** Точный поиск по номеру задачи */
+  number?: number
+  /** Задачи, где пользователь исполнитель, автор или участник */
+  involvedUserId?: string
+  /** Фильтр по сроку (YYYY-MM-DD); включает задачи без срока */
+  dueFrom?: string
+  dueTo?: string
   page?: number
   pageSize?: number
 }
@@ -298,6 +393,13 @@ export type LoadTasksPageOpts = {
 export type TaskRowsPage = {
   rows: TaskRow[]
   total: number
+  /** true, если фильтр по сроку не применён на сервере (нет колонки due_date_norm) */
+  dueFilterUnsupported?: boolean
+}
+
+function isMissingDueNormColumn(error: unknown): boolean {
+  const e = error as { code?: string; message?: string }
+  return e?.code === '42703' || /due_date_norm/i.test(e?.message ?? '')
 }
 
 /** Загрузка задач с фильтрами для поиска по номеру (бекенд). */
@@ -337,27 +439,58 @@ export async function loadTasksFilteredPage(
   const from = (safePage - 1) * safePageSize
   const to = from + safePageSize - 1
 
-  let q = supabase
-    .from('tasks')
-    .select('id, number, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at', {
-      count: 'exact',
-    })
-    .order('created_at', { ascending: false })
-    .range(from, to)
-
-  const pageOpts = opts as LoadTasksFilterOpts
-  if (pageOpts.involvedUserId) {
-    const participantTaskIds = await loadParticipantTaskIds(pageOpts.involvedUserId)
-    q = q.or(involvedUserOrFilter(pageOpts.involvedUserId, participantTaskIds))
-  } else if (onlyMine) {
-    q = q.eq('assignee_id', userId)
+  // Заранее резолвим id задач участника (один раз), чтобы переиспользовать при фолбэке.
+  let participantTaskIds: string[] | null = null
+  if (opts.involvedUserId) {
+    participantTaskIds = await loadParticipantTaskIds(opts.involvedUserId)
   }
-  q = applyAssigneeFilter(q, opts.assigneeId)
-  if (opts.status) q = q.eq('status', opts.status)
 
-  const { data, count, error } = await q
-  if (error) throw error
-  return { rows: (data ?? []) as TaskRow[], total: Number(count ?? 0) }
+  const buildQuery = (applyDueFilter: boolean) => {
+    let q = supabase!
+      .from('tasks')
+      .select('id, number, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at', {
+        count: 'exact',
+      })
+      .order('created_at', { ascending: false })
+      .range(from, to)
+
+    if (opts.involvedUserId) {
+      q = q.or(involvedUserOrFilter(opts.involvedUserId, participantTaskIds ?? []))
+    } else if (onlyMine) {
+      q = q.eq('assignee_id', userId)
+    }
+    q = applyAssigneeFilter(q, opts.assigneeId)
+    if (opts.status) q = q.eq('status', opts.status)
+    if (opts.number != null && Number.isFinite(opts.number)) q = q.eq('number', opts.number)
+    if (applyDueFilter && (opts.dueFrom || opts.dueTo)) {
+      // Задачи без срока (due_date_norm IS NULL) сохраняем в выдаче, как в прежней клиентской логике.
+      if (opts.dueFrom && opts.dueTo) {
+        q = q.or(`due_date_norm.is.null,and(due_date_norm.gte.${opts.dueFrom},due_date_norm.lte.${opts.dueTo})`)
+      } else if (opts.dueFrom) {
+        q = q.or(`due_date_norm.is.null,due_date_norm.gte.${opts.dueFrom}`)
+      } else if (opts.dueTo) {
+        q = q.or(`due_date_norm.is.null,due_date_norm.lte.${opts.dueTo}`)
+      }
+    }
+    return q
+  }
+
+  const hasDueFilter = Boolean(opts.dueFrom || opts.dueTo)
+  const { data, count, error } = await buildQuery(true)
+  if (!error) {
+    return { rows: (data ?? []) as TaskRow[], total: Number(count ?? 0) }
+  }
+  // Колонки due_date_norm ещё нет (миграция не применена) — повторяем без фильтра по сроку.
+  if (hasDueFilter && isMissingDueNormColumn(error)) {
+    const fallback = await buildQuery(false)
+    if (fallback.error) throw fallback.error
+    return {
+      rows: (fallback.data ?? []) as TaskRow[],
+      total: Number(fallback.count ?? 0),
+      dueFilterUnsupported: true,
+    }
+  }
+  throw error
 }
 
 export function tasksWithAssignees(

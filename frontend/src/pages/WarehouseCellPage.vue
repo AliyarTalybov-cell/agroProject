@@ -31,6 +31,7 @@ import {
   formStorageBatch,
   loadStorageBatches,
   storageBatchCropLabel,
+  updateStorageBatchQuality,
   type StorageBatchRow,
 } from '@/lib/storageBatchesSupabase'
 import { loadStorageWriteoffsForLocation, storageWriteoffTypeLabel } from '@/lib/storageWriteoffsSupabase'
@@ -38,7 +39,7 @@ import { loadStorageWriteoffsForLocation, storageWriteoffTypeLabel } from '@/lib
 const route = useRoute()
 const router = useRouter()
 
-const BASE_MOISTURE_PERCENT = 14
+const DEFAULT_BASE_MOISTURE_PERCENT = 14
 
 const storageId = computed(() => String(route.params.id || ''))
 const loading = ref(true)
@@ -69,15 +70,25 @@ const selectedIntakeIds = ref<string[]>([])
 const intakeModalOpen = ref(false)
 const batchWizardOpen = ref(false)
 const batchStep = ref<1 | 2 | 3>(1)
-const batchCompositionSort = ref<'date_desc' | 'date_asc'>('date_desc')
 const detachConfirmIntake = ref<StorageIntakeRow | null>(null)
 const passportModalOpen = ref(false)
+const passportForm = ref({
+  proteinPercent: '',
+  oilContentPercent: '',
+  acidNumber: '',
+  gmoStatus: 'not_detected' as 'detected' | 'not_detected',
+  pesticidesStatus: 'normal' as 'normal' | 'excess',
+  sampleDate: '',
+  labConclusionNumber: '',
+})
 
 const intakeForm = ref({
   receivedAt: '',
   fieldId: '',
   grossMassTons: '',
-  moisturePercent: String(BASE_MOISTURE_PERCENT).replace('.', ','),
+  moisturePercent: String(DEFAULT_BASE_MOISTURE_PERCENT).replace('.', ','),
+  weedImpurityPercent: '0',
+  grainImpurityPercent: '0',
   cropKey: '',
   storageLocationId: '',
   comment: '',
@@ -128,26 +139,64 @@ function parseDecimal(value: string): number | null {
 
 const selectedField = computed(() => fields.value.find((f) => f.id === intakeForm.value.fieldId) ?? null)
 
-watch(selectedField, (field) => {
-  if (field?.crop_key) intakeForm.value.cropKey = field.crop_key
-})
+watch(
+  selectedField,
+  (field) => {
+    intakeForm.value.cropKey = field?.crop_key ?? ''
+  },
+  { immediate: true },
+)
 
 const selectedCropLabel = computed(() => {
   const key = intakeForm.value.cropKey
-  if (!key) return '—'
+  if (!key) return 'Культура не указана у выбранного поля'
   return crops.value.find((c) => c.key === key)?.label ?? key
 })
 
 const grossMassNum = computed(() => parseDecimal(intakeForm.value.grossMassTons))
 const moistureNum = computed(() => parseDecimal(intakeForm.value.moisturePercent))
-
-const netMassNum = computed(() => {
+const weedImpurityNum = computed(() => parseDecimal(intakeForm.value.weedImpurityPercent))
+const grainImpurityNum = computed(() => parseDecimal(intakeForm.value.grainImpurityPercent))
+const totalImpurityPercentNum = computed(() => {
+  const weed = weedImpurityNum.value
+  const grain = grainImpurityNum.value
+  if (weed == null || grain == null) return null
+  return Number((weed + grain).toFixed(2))
+})
+const selectedCropBaseMoistureNum = computed(() => {
+  const key = intakeForm.value.cropKey
+  if (!key) return DEFAULT_BASE_MOISTURE_PERCENT
+  const value = crops.value.find((c) => c.key === key)?.base_moisture_percent
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value >= 100) {
+    return DEFAULT_BASE_MOISTURE_PERCENT
+  }
+  return value
+})
+const selectedCropBaseMoistureLabel = computed(() => formatDecimalPlain(selectedCropBaseMoistureNum.value, 1))
+const dryMassNum = computed(() => {
   const gross = grossMassNum.value
   const moisture = moistureNum.value
+  const baseMoisture = selectedCropBaseMoistureNum.value
   if (gross == null || moisture == null) return null
-  if (gross <= 0 || moisture < 0 || moisture >= 100) return null
-  const raw = gross * (100 - moisture) / (100 - BASE_MOISTURE_PERCENT)
-  return Math.max(0, Number(raw.toFixed(2)))
+  if (gross < 0 || moisture < 0 || moisture >= 100 || baseMoisture >= 100) return null
+  const raw = gross * (100 - moisture) / (100 - baseMoisture)
+  return Number(raw.toFixed(2))
+})
+const impurityLossNum = computed(() => {
+  const gross = grossMassNum.value
+  const weed = weedImpurityNum.value
+  const grain = grainImpurityNum.value
+  if (gross == null || weed == null || grain == null) return null
+  if (gross < 0 || weed < 0 || grain < 0) return null
+  const raw = gross * (weed + grain) / 100
+  return Number(raw.toFixed(2))
+})
+
+const netMassNum = computed(() => {
+  const dryMass = dryMassNum.value
+  const impurityLoss = impurityLossNum.value
+  if (dryMass == null || impurityLoss == null) return null
+  return Math.max(0, Number((dryMass - impurityLoss).toFixed(2)))
 })
 
 const canSaveIntake = computed(() => {
@@ -155,6 +204,9 @@ const canSaveIntake = computed(() => {
   if (!intakeForm.value.receivedAt || !intakeForm.value.fieldId || !intakeForm.value.cropKey) return false
   if (grossMassNum.value == null || grossMassNum.value <= 0) return false
   if (moistureNum.value == null || moistureNum.value < 0 || moistureNum.value >= 100) return false
+  if (weedImpurityNum.value == null || weedImpurityNum.value < 0 || weedImpurityNum.value > 100) return false
+  if (grainImpurityNum.value == null || grainImpurityNum.value < 0 || grainImpurityNum.value > 100) return false
+  if ((weedImpurityNum.value + grainImpurityNum.value) > 100) return false
   return netMassNum.value != null
 })
 
@@ -187,8 +239,7 @@ const currentBatchIntakes = computed(() => {
 
 const currentBatchIntakesSorted = computed(() => {
   const rows = [...currentBatchIntakes.value]
-  const dir = batchCompositionSort.value === 'date_desc' ? -1 : 1
-  rows.sort((a, b) => dir * (new Date(a.received_at).getTime() - new Date(b.received_at).getTime()))
+  rows.sort((a, b) => new Date(b.received_at).getTime() - new Date(a.received_at).getTime())
   return rows
 })
 
@@ -290,6 +341,16 @@ async function onCompleteCurrentBatch() {
 }
 
 function openPassportModal() {
+  const quality = (currentBatch.value?.quality ?? {}) as Record<string, unknown>
+  passportForm.value = {
+    proteinPercent: String(quality['Протеин (%)'] ?? ''),
+    oilContentPercent: String(quality['Масличность (%)'] ?? ''),
+    acidNumber: String(quality['Кислотное число'] ?? ''),
+    gmoStatus: quality['ГМО'] === 'Обнаружено' ? 'detected' : 'not_detected',
+    pesticidesStatus: quality['Пестициды'] === 'Превышение' ? 'excess' : 'normal',
+    sampleDate: String(quality['Дата отбора пробы'] ?? ''),
+    labConclusionNumber: String(quality['Номер лабораторного заключения'] ?? ''),
+  }
   passportModalOpen.value = true
 }
 
@@ -299,6 +360,107 @@ function closePassportModal() {
 
 function printBatchView() {
   window.print()
+}
+
+function normalizePassportText(value: string): string {
+  return value.trim()
+}
+
+const passportIsOilCrop = computed(() => {
+  const batch = currentBatch.value
+  if (!batch) return false
+  const key = (batch.crop_key ?? '').toLowerCase()
+  if (['sunflower', 'soy', 'rapeseed', 'raps', 'canola', 'flax', 'linseed'].includes(key)) return true
+  const label = storageBatchCropLabel(batch).toLowerCase()
+  return label.includes('подсолнеч') || label.includes('рапс') || label.includes('соя') || label.includes('лён') || label.includes('лен')
+})
+
+const fgisExportStatus = computed(() => {
+  const status = String(((currentBatch.value?.quality ?? {}) as Record<string, unknown>)['Статус выгрузки в ФГИС'] ?? 'Готов')
+  return status.toLowerCase().includes('выгруж') ? 'Выгружено' : 'Готов'
+})
+
+async function exportBatchCsvForFgis() {
+  const batch = currentBatch.value
+  if (!batch) return
+  const quality = (batch.quality ?? {}) as Record<string, unknown>
+  const escapeCsv = (value: unknown): string => {
+    const raw = String(value ?? '')
+    if (raw.includes('"') || raw.includes(';') || raw.includes('\n')) return `"${raw.replaceAll('"', '""')}"`
+    return raw
+  }
+  const rows: string[][] = [
+    ['Код партии', batch.code],
+    ['Место хранения', storage.value?.name ?? ''],
+    ['Культура', storageBatchCropLabel(batch)],
+    ['Назначение', batchPurposeLabel(batch.purpose)],
+    ['Цель использования', batchUseGoalLabel(batch.use_goal)],
+    ['Статус ФГИС', fgisExportStatus.value],
+    ['Общий зачётный вес (т)', Number(batchHeaderNetTons.value || 0).toFixed(2)],
+    ['Кол-во рейсов', String(currentBatchIntakes.value.length)],
+    ['Средняя влажность (%)', compositionAvgMoisture.value != null ? Number(compositionAvgMoisture.value).toFixed(1) : ''],
+    [],
+    ['Дата и время', 'Источник', 'Масса брутто (т)', 'Влажность (%)', 'Зачётный вес (т)'],
+    ...currentBatchIntakesSorted.value.map((row) => [
+      formatDateTimeRu(row.received_at),
+      storageIntakeFieldLabel(row),
+      Number(row.gross_mass_tons || 0).toFixed(2),
+      Number(row.moisture_percent || 0).toFixed(1),
+      Number(row.net_mass_tons || 0).toFixed(2),
+    ]),
+    [],
+    ['Протеин (%)', String(quality['Протеин (%)'] ?? '')],
+    ['Масличность (%)', String(quality['Масличность (%)'] ?? '')],
+    ['Кислотное число', String(quality['Кислотное число'] ?? '')],
+    ['ГМО', String(quality['ГМО'] ?? '')],
+    ['Пестициды', String(quality['Пестициды'] ?? '')],
+    ['Дата отбора пробы', String(quality['Дата отбора пробы'] ?? '')],
+    ['Номер лабораторного заключения', String(quality['Номер лабораторного заключения'] ?? '')],
+  ]
+  const csv = rows.map((line) => line.map((cell) => escapeCsv(cell)).join(';')).join('\n')
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${batch.code}-fgis.csv`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+async function savePassportQuality() {
+  const batch = currentBatch.value
+  if (!batch) return
+  saving.value = true
+  try {
+    const previous = (batch.quality ?? {}) as Record<string, unknown>
+    const next: Record<string, unknown> = {
+      ...previous,
+      'Протеин (%)': normalizePassportText(passportForm.value.proteinPercent),
+      'Кислотное число': normalizePassportText(passportForm.value.acidNumber),
+      ГМО: passportForm.value.gmoStatus === 'detected' ? 'Обнаружено' : 'Не обнаружено',
+      Пестициды: passportForm.value.pesticidesStatus === 'excess' ? 'Превышение' : 'В норме',
+      'Дата отбора пробы': normalizePassportText(passportForm.value.sampleDate),
+      'Номер лабораторного заключения': normalizePassportText(passportForm.value.labConclusionNumber),
+    }
+    if (passportIsOilCrop.value) {
+      next['Масличность (%)'] = normalizePassportText(passportForm.value.oilContentPercent)
+    } else {
+      delete next['Масличность (%)']
+    }
+    await updateStorageBatchQuality(batch.id, next)
+    await loadStorageCell()
+    passportModalOpen.value = false
+  } catch (e) {
+    error.value = e instanceof Error && e.message ? e.message : 'Не удалось сохранить паспорт качества'
+  } finally {
+    saving.value = false
+  }
+}
+
+function downloadPassportPdfStub() {
+  printBatchView()
 }
 
 function formatTons(n: number): string {
@@ -329,12 +491,15 @@ function statusClass(): string {
 const cropLabel = computed(() => (storage.value ? storageLocationCropLabel(storage.value) : '—'))
 
 function resetIntakeForm() {
+  const defaultField = fields.value[0] ?? null
   intakeForm.value = {
     receivedAt: nowDateTimeLocal(),
-    fieldId: fields.value[0]?.id ?? '',
+    fieldId: defaultField?.id ?? '',
     grossMassTons: '',
-    moisturePercent: String(BASE_MOISTURE_PERCENT).replace('.', ','),
-    cropKey: '',
+    moisturePercent: String(DEFAULT_BASE_MOISTURE_PERCENT).replace('.', ','),
+    weedImpurityPercent: '0',
+    grainImpurityPercent: '0',
+    cropKey: defaultField?.crop_key ?? '',
     storageLocationId: storage.value?.id ?? '',
     comment: '',
   }
@@ -486,7 +651,7 @@ async function loadStorageCell() {
 }
 
 async function saveIntake() {
-  if (!storage.value || !canSaveIntake.value || !netMassNum.value) return
+  if (!storage.value || !canSaveIntake.value || netMassNum.value == null) return
   saving.value = true
   try {
     const receivedAtIso = new Date(intakeForm.value.receivedAt).toISOString()
@@ -497,6 +662,9 @@ async function saveIntake() {
       crop_key: intakeForm.value.cropKey || null,
       gross_mass_tons: grossMassNum.value || 0,
       moisture_percent: moistureNum.value || 0,
+      base_moisture_percent: selectedCropBaseMoistureNum.value,
+      weed_impurity_percent: weedImpurityNum.value || 0,
+      grain_impurity_percent: grainImpurityNum.value || 0,
       net_mass_tons: netMassNum.value,
       comment: intakeForm.value.comment || null,
     })
@@ -673,6 +841,9 @@ watch(storageId, () => {
               <p class="batch-detail-meta">
                 Создана {{ formatDateOnlyRu(currentBatch.created_at) }} · {{ storageBatchCropLabel(currentBatch) }}
               </p>
+              <p class="batch-detail-meta batch-detail-meta--muted">
+                {{ storage.name }} · {{ storage.address }}
+              </p>
               <p v-if="isCurrentBatchClosed" class="batch-detail-meta batch-detail-meta--muted">
                 Закрыта, остаток 0 т
               </p>
@@ -704,6 +875,11 @@ watch(storageId, () => {
                   </svg>
                 </button>
                 <button type="button" class="warehouse-cell-btn batch-detail-passport-btn" @click="openPassportModal">Паспорт качества</button>
+                <button type="button" class="warehouse-cell-btn batch-detail-passport-btn" @click="downloadPassportPdfStub">Скачать PDF</button>
+                <button type="button" class="warehouse-cell-btn batch-detail-passport-btn" @click="exportBatchCsvForFgis">Экспорт CSV для ФГИС</button>
+                <span class="batch-fgis-status" :class="fgisExportStatus === 'Выгружено' ? 'batch-fgis-status--uploaded' : 'batch-fgis-status--ready'">
+                  Статус ФГИС: {{ fgisExportStatus === 'Выгружено' ? '✅ Выгружено' : '☁️ Готов' }}
+                </span>
               </div>
               <button
                 v-if="!isCurrentBatchCompleted"
@@ -720,13 +896,6 @@ watch(storageId, () => {
           <div class="batch-composition-block">
             <div class="batch-composition-head">
               <h3 class="batch-composition-title">Состав партии</h3>
-              <label class="batch-composition-sort">
-                <span class="batch-composition-sort-label">Сортировка:</span>
-                <select v-model="batchCompositionSort" class="batch-composition-sort-select">
-                  <option value="date_desc">По дате (сначала новые)</option>
-                  <option value="date_asc">По дате (сначала старые)</option>
-                </select>
-              </label>
             </div>
             <div class="warehouse-cell-table-wrap batch-composition-table-wrap">
               <table class="warehouse-cell-table warehouse-cell-table--composition">
@@ -914,15 +1083,66 @@ watch(storageId, () => {
           </div>
           <div class="modal-body">
             <p class="batch-passport-crop">{{ storageBatchCropLabel(currentBatch) }}</p>
-            <div v-if="Object.keys(currentBatch.quality || {}).length" class="warehouse-cell-quality">
-              <div v-for="(v, k) in currentBatch.quality" :key="String(k)" class="warehouse-cell-quality-row">
-                <span>{{ k }}</span><strong>{{ String(v ?? '—') }}</strong>
+            <div class="warehouse-cell-quality warehouse-cell-quality--passport-editor">
+              <div class="warehouse-cell-quality-row">
+                <span>Протеин (%)</span>
+                <input v-model.trim="passportForm.proteinPercent" class="task-form-input" type="text" inputmode="decimal" placeholder="14,5" />
+              </div>
+              <div v-if="passportIsOilCrop" class="warehouse-cell-quality-row">
+                <span>Масличность (%)</span>
+                <input v-model.trim="passportForm.oilContentPercent" class="task-form-input" type="text" inputmode="decimal" placeholder="42,0" />
+              </div>
+              <div class="warehouse-cell-quality-row">
+                <span>Кислотное число</span>
+                <input v-model.trim="passportForm.acidNumber" class="task-form-input" type="text" inputmode="decimal" placeholder="1,8" />
+              </div>
+              <div class="warehouse-cell-quality-row warehouse-cell-quality-row--radio">
+                <span>ГМО</span>
+                <div class="passport-radio-group">
+                  <label class="passport-radio-option">
+                    <input v-model="passportForm.gmoStatus" type="radio" value="detected" />
+                    <span>Обнаружено</span>
+                  </label>
+                  <label class="passport-radio-option">
+                    <input v-model="passportForm.gmoStatus" type="radio" value="not_detected" />
+                    <span>Не обнаружено</span>
+                  </label>
+                </div>
+              </div>
+              <div class="warehouse-cell-quality-row warehouse-cell-quality-row--radio">
+                <span>Пестициды</span>
+                <div class="passport-radio-group">
+                  <label class="passport-radio-option">
+                    <input v-model="passportForm.pesticidesStatus" type="radio" value="normal" />
+                    <span>В норме</span>
+                  </label>
+                  <label class="passport-radio-option">
+                    <input v-model="passportForm.pesticidesStatus" type="radio" value="excess" />
+                    <span>Превышение</span>
+                  </label>
+                </div>
+              </div>
+              <div class="warehouse-cell-quality-row">
+                <span>Дата отбора пробы</span>
+                <input v-model="passportForm.sampleDate" class="task-form-input" type="date" />
+              </div>
+              <div class="warehouse-cell-quality-row">
+                <span>Номер лабораторного заключения</span>
+                <input
+                  v-model.trim="passportForm.labConclusionNumber"
+                  class="task-form-input"
+                  type="text"
+                  placeholder="LZ-984410-23"
+                />
               </div>
             </div>
-            <p v-else class="warehouse-cell-hint">Показатели качества в партии не заполнены.</p>
           </div>
           <div class="modal-actions">
-            <button type="button" class="task-form-submit" @click="closePassportModal">Закрыть</button>
+            <button type="button" class="task-form-cancel" :disabled="saving" @click="closePassportModal">Отмена</button>
+            <button type="button" class="task-form-cancel" :disabled="saving" @click="downloadPassportPdfStub">Скачать паспорт PDF</button>
+            <button type="button" class="task-form-submit" :disabled="saving" @click="savePassportQuality">
+              {{ saving ? 'Сохранение…' : 'Сохранить изменения' }}
+            </button>
           </div>
         </div>
       </div>
@@ -956,24 +1176,70 @@ watch(storageId, () => {
                 </select>
               </div>
               <div class="task-form-field">
-                <label class="task-form-label">Влажность (%)</label>
+                <label class="task-form-label">Культура</label>
+                <input class="task-form-input" type="text" :value="selectedCropLabel" disabled />
+                <p class="warehouse-cell-hint">Культура определяется автоматически по выбранному полю.</p>
+              </div>
+            </div>
+
+            <div class="warehouse-cell-form-section-title">Качество зерна</div>
+
+            <div class="task-form-row task-form-row--two">
+              <div class="task-form-field">
+                <label class="task-form-label">Базовая влажность (%)</label>
+                <input class="task-form-input" type="text" :value="selectedCropBaseMoistureLabel" disabled />
+                <p class="warehouse-cell-hint">Подтягивается из справочника культур и не редактируется вручную.</p>
+              </div>
+              <div class="task-form-field">
+                <label class="task-form-label">Влажность фактическая (%)</label>
                 <input v-model.trim="intakeForm.moisturePercent" type="text" inputmode="decimal" class="task-form-input" />
               </div>
             </div>
 
             <div class="task-form-row task-form-row--two">
               <div class="task-form-field">
-                <label class="task-form-label">Культура</label>
-                <input class="task-form-input" type="text" :value="selectedCropLabel" disabled />
-                <p class="warehouse-cell-hint">Культура определяется автоматически по выбранному полю.</p>
+                <label class="task-form-label">Сорная примесь (%)</label>
+                <input v-model.trim="intakeForm.weedImpurityPercent" type="text" inputmode="decimal" class="task-form-input" />
               </div>
               <div class="task-form-field">
-                <label class="task-form-label">Зачётный вес (итог)</label>
-                <div class="warehouse-cell-summary">
-                  <strong>{{ netMassNum != null ? formatTons(netMassNum) : '—' }}</strong>
-                  <span>Формула: Масса × (100 - Влажность) / (100 - Базовая влажность)</span>
-                </div>
+                <label class="task-form-label">Зерновая примесь (%)</label>
+                <input v-model.trim="intakeForm.grainImpurityPercent" type="text" inputmode="decimal" class="task-form-input" />
               </div>
+            </div>
+
+            <div class="warehouse-cell-form-section-title">Пошаговый расчёт зачётного веса</div>
+            <div class="warehouse-cell-summary warehouse-cell-summary--calc">
+              <div class="warehouse-cell-summary-row">
+                <span>Масса брутто</span>
+                <strong>{{ grossMassNum != null ? formatDecimalPlain(grossMassNum, 2) : '—' }} т</strong>
+              </div>
+              <div class="warehouse-cell-summary-row warehouse-cell-summary-row--formula">
+                <span>
+                  Масса после сушки:
+                  {{
+                    grossMassNum != null && moistureNum != null
+                      ? `${formatDecimalPlain(grossMassNum, 2)} × (100 - ${formatDecimalPlain(moistureNum, 1)}) / (100 - ${selectedCropBaseMoistureLabel}) = ${dryMassNum != null ? formatDecimalPlain(dryMassNum, 2) : '—'} т`
+                      : '—'
+                  }}
+                </span>
+              </div>
+              <div class="warehouse-cell-summary-row warehouse-cell-summary-row--formula">
+                <span>
+                  Потери на примеси:
+                  {{
+                    grossMassNum != null && totalImpurityPercentNum != null
+                      ? `${formatDecimalPlain(grossMassNum, 2)} × ${formatDecimalPlain(totalImpurityPercentNum, 2)} / 100 = -${impurityLossNum != null ? formatDecimalPlain(impurityLossNum, 2) : '—'} т`
+                      : '—'
+                  }}
+                </span>
+              </div>
+              <div class="warehouse-cell-summary-total">
+                <span>ИТОГО ЗАЧЁТНЫЙ ВЕС</span>
+                <strong>{{ netMassNum != null ? `${formatDecimalPlain(netMassNum, 2)} т` : '0,00 т' }}</strong>
+              </div>
+              <p class="warehouse-cell-hint warehouse-cell-hint--inline">
+                Формула: Mзач = Mбр × (100 - Wфакт) / (100 - Wбаз) - Mбр × (Сор + Зерн) / 100
+              </p>
             </div>
 
             <div class="task-form-row">
@@ -1250,6 +1516,24 @@ watch(storageId, () => {
   border-top: 1px solid var(--border-color);
 }
 .batch-detail-toolbar-left { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.batch-fgis-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: .78rem;
+  font-weight: 700;
+  border: 1px solid var(--toolbar-form-surface-border);
+  background: var(--toolbar-form-surface);
+  color: var(--text-primary);
+}
+.batch-fgis-status--ready {
+  border-color: color-mix(in srgb, var(--accent-green) 35%, var(--toolbar-form-surface-border));
+}
+.batch-fgis-status--uploaded {
+  border-color: color-mix(in srgb, var(--accent-green) 55%, var(--toolbar-form-surface-border));
+  background: color-mix(in srgb, var(--accent-green) 10%, var(--toolbar-form-surface));
+}
 .batch-detail-icon-btn {
   width: 40px;
   height: 40px;
@@ -1310,6 +1594,15 @@ watch(storageId, () => {
 .warehouse-cell-confirm-text { margin: 0; line-height: 1.5; color: var(--text-secondary); }
 .batch-passport-crop { margin: 0 0 12px; font-weight: 600; color: var(--text-primary); }
 .warehouse-cell-hint { margin: 6px 0 0; font-size: .78rem; color: var(--text-secondary); }
+.warehouse-cell-hint--inline { margin-top: 6px; }
+.warehouse-cell-form-section-title {
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
 .warehouse-cell-summary {
   border: 1px solid var(--toolbar-form-surface-border);
   background: var(--toolbar-form-surface);
@@ -1339,6 +1632,30 @@ watch(storageId, () => {
 .warehouse-cell-quality-row { display: grid; grid-template-columns: 1fr 190px; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border-color); align-items: center; }
 .warehouse-cell-quality-row:last-child { border-bottom: 0; }
 .warehouse-cell-quality-row--head { font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-secondary); background: color-mix(in srgb, var(--toolbar-form-surface) 84%, #fff); }
+.warehouse-cell-quality--passport-editor .warehouse-cell-quality-row {
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 340px);
+}
+.warehouse-cell-quality-row--radio {
+  align-items: flex-start;
+}
+.passport-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  justify-content: flex-end;
+}
+.passport-radio-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: .92rem;
+}
+.passport-radio-option input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-green);
+}
 .warehouse-cell-link-btn { margin-top: 10px; border: none; background: transparent; color: #6690e9; font-size: 1.15rem; cursor: pointer; padding: 0; }
 .warehouse-cell-total { margin: 10px 0 0; font-size: .95rem; font-weight: 600; color: var(--text-primary); }
 .warehouse-cell-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; font-size: .86rem; color: var(--text-secondary); }
@@ -1346,6 +1663,34 @@ watch(storageId, () => {
 .warehouse-cell-steps span.is-active { border-color: color-mix(in srgb, var(--accent-green) 45%, var(--border-color)); color: var(--text-primary); background: color-mix(in srgb, var(--accent-green) 10%, var(--bg-panel)); }
 .warehouse-cell-summary strong { font-size: 1.35rem; color: var(--text-primary); }
 .warehouse-cell-summary span { font-size: .8rem; color: var(--text-secondary); }
+.warehouse-cell-summary--calc {
+  gap: 8px;
+}
+.warehouse-cell-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px dashed var(--toolbar-form-surface-border);
+  padding-bottom: 8px;
+}
+.warehouse-cell-summary-row:last-of-type {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.warehouse-cell-summary-row--formula {
+  align-items: flex-start;
+}
+.warehouse-cell-summary-row strong {
+  font-size: 1rem;
+}
+.warehouse-cell-summary-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 2px;
+}
 
 .modal-backdrop {
   position: fixed;
@@ -1477,9 +1822,12 @@ tr.is-row-muted td:not(.warehouse-cell-table-check) { opacity: 0.48; }
   .batch-detail-metrics { grid-column: 1; min-width: 0; }
   .batch-detail-metric { text-align: left; }
   .batch-detail-toolbar { flex-direction: column; align-items: stretch; }
-  .batch-detail-toolbar-left { margin-right: 0; }
-  .batch-composition-sort { width: 100%; flex-direction: column; align-items: stretch; }
-  .batch-composition-sort-select { min-width: 0; width: 100%; }
+  .batch-detail-toolbar-left { margin-right: 0; flex-wrap: wrap; }
+  .warehouse-cell-summary-row,
+  .warehouse-cell-summary-total {
+    flex-direction: column;
+    align-items: flex-start;
+  }
   .warehouse-cell-fab { right: 16px; bottom: 16px; max-width: calc(100vw - 32px); }
 }
 </style>

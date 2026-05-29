@@ -12,6 +12,7 @@ export type CropRow = {
   id: string
   key: string
   label: string
+  base_moisture_percent: number
   sort_order: number
   created_at: string
 }
@@ -109,7 +110,7 @@ export async function loadCrops(): Promise<CropRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from(CROPS_TABLE)
-    .select('id, key, label, sort_order, created_at')
+    .select('id, key, label, base_moisture_percent, sort_order, created_at')
     .order('sort_order', { ascending: true })
     .order('label', { ascending: true })
   if (error) throw error

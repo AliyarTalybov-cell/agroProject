@@ -53,6 +53,9 @@ import {
   deleteLandUser,
   isSupabaseConfigured,
   loadLands,
+  loadLandsPage,
+  loadMaxLandNumber,
+  type LandsPageResult,
   loadLandRights,
   loadLandRightDocumentTypes,
   loadLandRightHolders,
@@ -200,6 +203,10 @@ const landMeliorationEntries = ref<LandMeliorationEntryRow[]>([])
 const selectedLandId = ref<string>('')
 const activeTab = ref<'info' | 'fields' | 'rights' | 'users' | 'crop-rotation' | 'real-estate'>('info')
 const landsSearch = ref('')
+const landsPage = ref(1)
+const landsPageSize = ref(10)
+const landsTotal = ref(0)
+const maxLandNumber = ref(0)
 const mapLat = ref(55.7558)
 const mapLon = ref(37.6176)
 const resolvingAddress = ref(false)
@@ -344,13 +351,6 @@ const router = useRouter()
 const ROOT_TAB_QUERY_MAP = new Set(['registry', 'melioration', 'land-refs', 'land-types', 'land-categories', 'land-usage', 'rights-refs', 'crops-refs', 'melioration-refs', 'equipment-refs', 'field-refs', 'crop-rotation-refs', 'storage-refs', 'storage-types', 'storage-statuses', 'storage-fill-statuses'])
 const routeLandId = computed(() => String(route.params.id || ''))
 const isDetailsMode = computed(() => Boolean(routeLandId.value))
-const landsListTitle = computed(() => (
-  landsRootTab.value === 'rights-refs' || landsRootTab.value === 'land-refs' || landsRootTab.value === 'crops-refs' || landsRootTab.value === 'melioration-refs' || landsRootTab.value === 'equipment-refs' || landsRootTab.value === 'field-refs' || landsRootTab.value === 'crop-rotation-refs' || landsRootTab.value === 'storage-refs'
-    ? 'Справочники'
-    : landsRootTab.value === 'melioration'
-      ? 'Мелиорация'
-      : 'Земли'
-))
 const landsListSubtitle = computed(() => (
   landsRootTab.value === 'rights-refs'
     ? 'Справочники для заполнения документов по правам владения'
@@ -1129,7 +1129,7 @@ function confirmRemoveUserSupportingFile() {
 function setFormFromLand(land: LandRow | null) {
   if (!land) {
     form.value = {
-      number: (lands.value.at(-1)?.number ?? 0) + 1,
+      number: (isLandsRegistryPaginated() ? maxLandNumber.value : (lands.value.at(-1)?.number ?? 0)) + 1,
       name: '',
       landTypeId: '',
       landCategory: '',
@@ -2484,13 +2484,25 @@ async function reloadLandDetails() {
   landMeliorationEntries.value = meliorationRows
 }
 
+function isLandsRegistryPaginated(): boolean {
+  return !isDetailsMode.value && landsRootTab.value === 'registry'
+}
+
+async function loadLandsForCurrentView(): Promise<LandsPageResult> {
+  if (isLandsRegistryPaginated()) {
+    return loadLandsPage({ search: landsSearch.value, page: landsPage.value, pageSize: landsPageSize.value })
+  }
+  const rows = await loadLands(!isDetailsMode.value && landsRootTab.value === 'melioration' ? landsSearch.value : '')
+  return { rows, total: rows.length }
+}
+
 async function reloadAll() {
   if (!isSupabaseConfigured()) return
   loading.value = true
   error.value = null
   try {
     const [
-      landsRows,
+      landsResult,
       landTypeRows,
       landCategoryRows,
       fieldRows,
@@ -2509,7 +2521,7 @@ async function reloadAll() {
       storageLocStatusRows,
       storageFillStatusRows,
     ] = await Promise.all([
-      loadLands(!isDetailsMode.value && (landsRootTab.value === 'registry' || landsRootTab.value === 'melioration') ? landsSearch.value : ''),
+      loadLandsForCurrentView(),
       loadLandTypes(),
       loadLandCategories(),
       loadFields(),
@@ -2528,7 +2540,10 @@ async function reloadAll() {
       loadStorageLocationStatuses(),
       loadStorageFillStatuses(),
     ])
+    const landsRows = landsResult.rows
     lands.value = landsRows
+    landsTotal.value = landsResult.total
+    if (isLandsRegistryPaginated()) maxLandNumber.value = await loadMaxLandNumber()
     landTypes.value = landTypeRows
     landCategories.value = landCategoryRows
     actualUseOptions.value = useOptions
@@ -2576,9 +2591,11 @@ async function reloadLandsRegistryList() {
   if (!isSupabaseConfigured() || isDetailsMode.value || (landsRootTab.value !== 'registry' && landsRootTab.value !== 'melioration')) return
   const requestId = ++landsSearchRequestId
   try {
-    const rows = await loadLands(landsSearch.value)
+    const result = await loadLandsForCurrentView()
     if (requestId !== landsSearchRequestId) return
-    lands.value = rows
+    lands.value = result.rows
+    landsTotal.value = result.total
+    if (isLandsRegistryPaginated()) maxLandNumber.value = await loadMaxLandNumber()
   } catch (e) {
     if (requestId !== landsSearchRequestId) return
     error.value = e instanceof Error ? e.message : 'Не удалось загрузить земли'
@@ -3575,11 +3592,37 @@ watch(() => String(route.query.tab || ''), (tab) => {
 }, { immediate: true })
 watch([landsSearch, landsRootTab, isDetailsMode], ([, rootTab, detailsMode]) => {
   if (detailsMode || (rootTab !== 'registry' && rootTab !== 'melioration')) return
+  landsPage.value = 1
   if (landsSearchDebounce) clearTimeout(landsSearchDebounce)
   landsSearchDebounce = setTimeout(() => {
     void reloadLandsRegistryList()
   }, 320)
 })
+
+const landsTotalPages = computed(() => Math.max(1, Math.ceil(landsTotal.value / landsPageSize.value)))
+const landsPageStart = computed(() => (landsTotal.value ? (landsPage.value - 1) * landsPageSize.value + 1 : 0))
+const landsPageEnd = computed(() => Math.min(landsPage.value * landsPageSize.value, landsTotal.value))
+const landsPageNumbers = computed(() => {
+  const total = landsTotalPages.value
+  const current = landsPage.value
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+  const pages: (number | 'ellipsis')[] = [1]
+  if (current > 4) pages.push('ellipsis')
+  for (let p = Math.max(2, current - 1); p <= Math.min(total - 1, current + 1); p += 1) pages.push(p)
+  if (current < total - 3) pages.push('ellipsis')
+  pages.push(total)
+  return pages
+})
+function setLandsPage(p: number) {
+  const next = Math.max(1, Math.min(p, landsTotalPages.value))
+  if (next === landsPage.value) return
+  landsPage.value = next
+  void reloadLandsRegistryList()
+}
+function onLandsPageSizeChange() {
+  landsPage.value = 1
+  void reloadLandsRegistryList()
+}
 watch(landsRootTab, (tab) => {
   if (tab === 'equipment-refs') void loadEquipmentRefsSafe()
   if (tab === 'field-refs') void loadFieldMunicipalityRefsSafe()
@@ -3651,7 +3694,6 @@ onMounted(() => void reloadAll())
   <section class="lands-page">
     <header class="lands-top page-enter-item">
       <div class="lands-top-text">
-        <h1 v-if="!isDetailsMode" class="page-title">{{ landsListTitle }}</h1>
         <button v-if="isDetailsMode" type="button" class="lands-back-btn" @click="goToRegistry" aria-label="Назад к списку земель">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="m15 18-6-6 6-6" />
@@ -3797,6 +3839,30 @@ onMounted(() => void reloadAll())
           </div>
           <p v-if="!lands.length && landsSearch.trim()" class="lands-muted">По вашему запросу ничего не найдено.</p>
           <p v-else-if="!lands.length" class="lands-muted">Пока нет созданных земель.</p>
+
+          <div v-if="landsTotal > 0" class="lands-pagination">
+            <p class="lands-pagination-info">
+              Показано <span class="lands-pagination-num">{{ landsPageStart }}</span>–<span class="lands-pagination-num">{{ landsPageEnd }}</span> из <span class="lands-pagination-num">{{ landsTotal }}</span>
+            </p>
+            <div class="lands-pagination-right">
+              <nav class="lands-pagination-nav" aria-label="Пагинация">
+                <button type="button" class="lands-page-btn" :disabled="landsPage <= 1" aria-label="Предыдущая страница" @click="setLandsPage(landsPage - 1)">‹</button>
+                <template v-for="(p, i) in landsPageNumbers" :key="i">
+                  <button v-if="p !== 'ellipsis'" type="button" class="lands-page-btn" :class="{ 'is-active': p === landsPage }" @click="setLandsPage(p as number)">{{ p }}</button>
+                  <span v-else class="lands-page-ellipsis">…</span>
+                </template>
+                <button type="button" class="lands-page-btn" :disabled="landsPage >= landsTotalPages" aria-label="Следующая страница" @click="setLandsPage(landsPage + 1)">›</button>
+              </nav>
+              <label class="lands-pagination-size">
+                <span>На странице</span>
+                <select v-model.number="landsPageSize" class="lands-pagination-select" @change="onLandsPageSizeChange">
+                  <option :value="10">10</option>
+                  <option :value="25">25</option>
+                  <option :value="50">50</option>
+                </select>
+              </label>
+            </div>
+          </div>
         </template>
 
         <template v-else-if="landsRootTab === 'melioration'">
@@ -6534,6 +6600,24 @@ onMounted(() => void reloadAll())
 .lands-mini-btn:hover { border-color:var(--accent-green); background:var(--bg-panel-hover); }
 .lands-muted { margin:0; color:var(--text-secondary); font-size:.9rem; }
 .lands-muted-line { color:var(--text-secondary); font-size:.84rem; margin-top:2px; }
+
+.lands-pagination { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:14px; }
+.lands-pagination-info { margin:0; color:var(--text-secondary); font-size:.86rem; }
+.lands-pagination-num { color:var(--text-primary); font-weight:600; }
+.lands-pagination-right { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.lands-pagination-nav { display:flex; align-items:center; gap:4px; }
+.lands-page-btn {
+  min-width:34px; height:34px; padding:0 8px; border:1px solid var(--border-color); background:var(--bg-base);
+  border-radius:8px; color:var(--text-primary); font-size:.86rem; cursor:pointer;
+  transition: background-color .18s ease, border-color .18s ease, color .18s ease;
+}
+.lands-page-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-green) 12%, transparent); border-color: var(--accent-green); }
+.lands-page-btn.is-active { background: var(--accent-green); border-color: var(--accent-green); color:#fff; }
+.lands-page-btn:disabled { opacity:.5; cursor:not-allowed; }
+.lands-page-ellipsis { padding:0 4px; color:var(--text-secondary); }
+.lands-pagination-size { display:flex; align-items:center; gap:6px; font-size:.84rem; color:var(--text-secondary); }
+.lands-pagination-select { height:34px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-base); color:var(--text-primary); padding:0 8px; cursor:pointer; }
+@media (prefers-reduced-motion: reduce) { .lands-page-btn { transition:none; } }
 .lands-crop-rotation-card-main {
   min-width: 0;
   flex: 1;

@@ -9,7 +9,7 @@ import { isSupabaseConfigured } from '@/lib/supabase'
 import {
   addStorageLocation,
   deleteStorageLocation,
-  loadStorageLocations,
+  loadStorageLocationsPage,
   updateStorageLocation,
   storageLocationCropLabel,
   storageLocationFillStatusName,
@@ -65,17 +65,15 @@ const form = ref({
 })
 
 const storagePlaces = ref<StorageLocationRow[]>([])
+const storageTotal = ref(0)
 
 const filteredPlaces = computed(() => storagePlaces.value)
-const total = computed(() => filteredPlaces.value.length)
+const total = computed(() => storageTotal.value)
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const pageStart = computed(() => (total.value ? (page.value - 1) * pageSize.value + 1 : 0))
 const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value))
 
-const pagedPlaces = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return filteredPlaces.value.slice(start, start + pageSize.value)
-})
+const pagedPlaces = computed(() => storagePlaces.value)
 
 const pageNumbers = computed(() => {
   if (totalPages.value <= 7) return Array.from({ length: totalPages.value }, (_, i) => i + 1)
@@ -173,8 +171,15 @@ async function reloadStorageLocations() {
   loading.value = true
   error.value = null
   try {
-    storagePlaces.value = await loadStorageLocations(search.value)
-    if (page.value > totalPages.value) page.value = totalPages.value
+    const res = await loadStorageLocationsPage({ search: search.value, page: page.value, pageSize: pageSize.value })
+    storagePlaces.value = res.rows
+    storageTotal.value = res.total
+    if (page.value > totalPages.value) {
+      page.value = totalPages.value
+      const retry = await loadStorageLocationsPage({ search: search.value, page: page.value, pageSize: pageSize.value })
+      storagePlaces.value = retry.rows
+      storageTotal.value = retry.total
+    }
   } catch (e) {
     error.value = mapError(e, 'Не удалось загрузить места хранения')
   } finally {
@@ -317,11 +322,15 @@ watch(search, () => {
 })
 
 function setPage(next: number) {
-  page.value = Math.min(totalPages.value, Math.max(1, next))
+  const clamped = Math.min(totalPages.value, Math.max(1, next))
+  if (clamped === page.value) return
+  page.value = clamped
+  void reloadStorageLocations()
 }
 
 function onPageSizeChange() {
   page.value = 1
+  void reloadStorageLocations()
 }
 </script>
 

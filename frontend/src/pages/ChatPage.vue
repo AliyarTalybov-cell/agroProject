@@ -6,6 +6,7 @@ import { formatSupabaseError } from '@/lib/formatSupabaseError'
 import { loadEmployees, searchEmployees, type EmployeeRow } from '@/lib/employeesSupabase'
 import UiTrashIcon from '@/components/UiTrashIcon.vue'
 import ModalCloseButton from '@/components/ModalCloseButton.vue'
+import UserAvatar from '@/components/UserAvatar.vue'
 import {
   type AvatarTone,
   CHAT_MESSAGES_PAGE_SIZE,
@@ -17,6 +18,7 @@ import {
   createGroupThread,
   fetchChatThreadList,
   fetchPeerLastRead,
+  fetchProfileAvatarMap,
   fetchSenderMetaMap,
   fetchThreadMessagesPage,
   getOrCreateDmThread,
@@ -45,6 +47,7 @@ const userInitials = computed(() => {
   if (part.length >= 2) return part.slice(0, 2).toUpperCase()
   return part.slice(0, 1).toUpperCase() || 'ВЫ'
 })
+const myAvatarUrl = computed(() => auth.profileCache.value?.avatar_url ?? null)
 
 const configured = computed(() => isSupabaseConfigured())
 /** Первичная загрузка списка диалогов (не «Загрузка чата») */
@@ -267,13 +270,26 @@ const composerPlaceholder = computed(() => {
 async function refreshThreads() {
   if (!configured.value) return
   const rows = await fetchChatThreadList()
-  conversations.value = rows
+  const list = rows
     .map(mapThreadRow)
     .sort((a, b) => {
       if (a.unreadUrgent !== b.unreadUrgent) return b.unreadUrgent - a.unreadUrgent
       if (a.unread !== b.unread) return b.unread - a.unread
       return 0
     })
+  conversations.value = list
+  // Подтягиваем фото собеседников лички (RPC не возвращает avatar_url)
+  const peerIds = list.filter((c) => c.kind === 'direct' && c.peerUserId).map((c) => c.peerUserId as string)
+  if (peerIds.length) {
+    const avatarMap = await fetchProfileAvatarMap(peerIds)
+    if (avatarMap.size) {
+      conversations.value = conversations.value.map((c) =>
+        c.kind === 'direct' && c.peerUserId && avatarMap.has(c.peerUserId)
+          ? { ...c, avatarUrl: avatarMap.get(c.peerUserId) ?? null }
+          : c,
+      )
+    }
+  }
 }
 
 async function reloadMessages() {
@@ -687,7 +703,9 @@ function isImageAttachmentName(fileName: string | null | undefined): boolean {
 function incomingAvatar(block: { msg: UiChatMessage }) {
   const tone = block.msg.inAvatarTone ?? active.value?.tone ?? 'blue'
   const initials = block.msg.inAvatarInitials ?? active.value?.initials ?? '?'
-  return { tone, initials }
+  // В группе — фото отправителя из меты; в личке — фото собеседника
+  const url = block.msg.inAvatarUrl ?? (active.value?.kind === 'direct' ? active.value?.avatarUrl ?? null : null)
+  return { tone, initials, url }
 }
 
 watch(dmSearch, (q) => {
@@ -953,7 +971,7 @@ onUnmounted(() => {
           @click="onPick(c)"
         >
           <div class="chat-page__row-av-wrap">
-            <div :class="toneClass(c.tone)">{{ c.initials }}</div>
+            <UserAvatar :class="toneClass(c.tone)" :url="c.avatarUrl" :initials="c.initials" />
             <span
               class="chat-page__online"
               :class="convListPresence(c).online ? 'chat-page__online--on' : 'chat-page__online--off'"
@@ -1036,10 +1054,10 @@ onUnmounted(() => {
               :title="groupRosterExpanded ? 'Скрыть состав' : 'Показать состав'"
               @click="toggleGroupRoster"
             >
-              <div :class="toneClass(active.tone)">{{ active.initials }}</div>
+              <UserAvatar :class="toneClass(active.tone)" :url="active.avatarUrl" :initials="active.initials" />
             </button>
             <div v-else class="chat-page__row-av-wrap">
-              <div :class="toneClass(active.tone)">{{ active.initials }}</div>
+              <UserAvatar :class="toneClass(active.tone)" :url="active.avatarUrl" :initials="active.initials" />
               <span
                 class="chat-page__online"
                 :class="activeDirectPresence?.online ? 'chat-page__online--on' : 'chat-page__online--off'"
@@ -1135,7 +1153,7 @@ onUnmounted(() => {
               <ul v-else class="chat-page__group-roster-list">
                 <li v-for="m in groupMembers" :key="m.userId" class="chat-page__group-roster-item">
                   <div class="chat-page__row-av-wrap">
-                    <div :class="toneClass(m.tone)">{{ m.initials }}</div>
+                    <UserAvatar :class="toneClass(m.tone)" :url="m.avatarUrl" :initials="m.initials" />
                     <span
                       class="chat-page__online"
                       :class="groupMemberPresence(m).online ? 'chat-page__online--on' : 'chat-page__online--off'"
@@ -1187,12 +1205,12 @@ onUnmounted(() => {
 
               <div v-for="block in messageBlocks" :key="block.msg.id" class="chat-page__msg-row" :class="{ 'chat-page__msg-row--out': block.msg.side === 'out' }">
                 <template v-if="block.msg.side === 'in'">
-                  <div
+                  <UserAvatar
                     v-if="block.showAvatar"
                     :class="[toneClass(incomingAvatar(block).tone), 'chat-page__msg-av']"
-                  >
-                    {{ incomingAvatar(block).initials }}
-                  </div>
+                    :url="incomingAvatar(block).url"
+                    :initials="incomingAvatar(block).initials"
+                  />
                   <div v-else class="chat-page__msg-av-spacer" />
                 </template>
 
@@ -1323,9 +1341,7 @@ onUnmounted(() => {
                 </div>
 
                 <template v-if="block.msg.side === 'out'">
-                  <div v-if="block.showAvatar" class="chat-page__msg-av chat-page__msg-av--me">
-                    {{ userInitials }}
-                  </div>
+                  <UserAvatar v-if="block.showAvatar" class="chat-page__msg-av chat-page__msg-av--me" :url="myAvatarUrl" :initials="userInitials" />
                   <div v-else class="chat-page__msg-av-spacer" />
                 </template>
               </div>

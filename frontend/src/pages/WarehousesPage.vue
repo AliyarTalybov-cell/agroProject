@@ -5,7 +5,7 @@ import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import WarehouseTransferModal from '@/components/WarehouseTransferModal.vue'
 import WarehouseWriteoffModal from '@/components/WarehouseWriteoffModal.vue'
 import { isSupabaseConfigured } from '@/lib/supabase'
-import { loadStorageLocations, storageLocationCropLabel, storageLocationFillStatusCode, storageLocationFillStatusName, storageLocationMarksInactive, storageLocationTypeName, type StorageLocationRow } from '@/lib/storageLocationsSupabase'
+import { loadStorageLocationsPage, storageLocationCropLabel, storageLocationFillStatusCode, storageLocationFillStatusName, storageLocationMarksInactive, storageLocationTypeName, type StorageLocationRow } from '@/lib/storageLocationsSupabase'
 import { loadStorageFillStatuses, type StorageFillStatusRow } from '@/lib/storageRefsSupabase'
 import { loadCrops, type CropRow } from '@/lib/landTypesAndCrops'
 import { loadStorageLocationSummaries, type StorageLocationSummary } from '@/lib/storageTransfersSupabase'
@@ -33,6 +33,7 @@ const cropOptions = ref<CropRow[]>([])
 
 const page = ref(1)
 const pageSize = ref(8)
+const placesTotal = ref(0)
 
 const places = ref<StorageLocationRow[]>([])
 const summaries = ref<Record<string, StorageLocationSummary>>({})
@@ -52,16 +53,36 @@ async function reloadPlaces() {
   loading.value = true
   error.value = null
   try {
-    const [rows, fills, crops] = await Promise.all([
-      loadStorageLocations(search.value),
+    const [pageRes, fills, crops] = await Promise.all([
+      loadStorageLocationsPage({
+        search: search.value,
+        fillStatusId: statusFilter.value,
+        cropKey: cropFilter.value,
+        page: page.value,
+        pageSize: pageSize.value,
+      }),
       loadStorageFillStatuses(),
       loadCrops(),
     ])
+    const rows = pageRes.rows
     places.value = rows
+    placesTotal.value = pageRes.total
     fillStatusOptions.value = fills
     cropOptions.value = crops
     summaries.value = rows.length ? await loadStorageLocationSummaries(rows) : {}
-    if (page.value > totalPages.value) page.value = totalPages.value
+    if (page.value > totalPages.value) {
+      page.value = totalPages.value
+      const retry = await loadStorageLocationsPage({
+        search: search.value,
+        fillStatusId: statusFilter.value,
+        cropKey: cropFilter.value,
+        page: page.value,
+        pageSize: pageSize.value,
+      })
+      places.value = retry.rows
+      placesTotal.value = retry.total
+      summaries.value = retry.rows.length ? await loadStorageLocationSummaries(retry.rows) : {}
+    }
   } catch (e) {
     error.value = e instanceof Error && e.message ? e.message : 'Не удалось загрузить места хранения'
   } finally {
@@ -118,30 +139,14 @@ const rowsWithMetrics = computed(() =>
   })),
 )
 
-const filteredRows = computed(() => {
-  let rows = rowsWithMetrics.value
-  if (statusFilter.value !== 'all') {
-    rows = rows.filter((r) => r.place.fill_status_id === statusFilter.value)
-  }
-  if (cropFilter.value !== 'all') {
-    if (cropFilter.value === '__none__') {
-      rows = rows.filter((r) => !r.place.crop_key?.trim())
-    } else {
-      rows = rows.filter((r) => r.place.crop_key === cropFilter.value)
-    }
-  }
-  return rows
-})
+const filteredRows = computed(() => rowsWithMetrics.value)
 
-const totalFiltered = computed(() => filteredRows.value.length)
+const totalFiltered = computed(() => placesTotal.value)
 const totalPages = computed(() => Math.max(1, Math.ceil(totalFiltered.value / pageSize.value)))
 const pageStart = computed(() => (totalFiltered.value ? (page.value - 1) * pageSize.value + 1 : 0))
 const pageEnd = computed(() => Math.min(page.value * pageSize.value, totalFiltered.value))
 
-const pagedRows = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return filteredRows.value.slice(start, start + pageSize.value)
-})
+const pagedRows = computed(() => rowsWithMetrics.value)
 
 const pageNumbers = computed(() => {
   if (totalPages.value <= 7) return Array.from({ length: totalPages.value }, (_, i) => i + 1)
@@ -188,11 +193,15 @@ function typeIconPath(type: string): string {
 }
 
 function setPage(next: number) {
-  page.value = Math.min(totalPages.value, Math.max(1, next))
+  const clamped = Math.min(totalPages.value, Math.max(1, next))
+  if (clamped === page.value) return
+  page.value = clamped
+  void reloadPlaces()
 }
 
 function onPageSizeChange() {
   page.value = 1
+  void reloadPlaces()
 }
 
 function openStorageCell(id: string) {
@@ -243,10 +252,12 @@ watch(search, () => {
 
 watch(statusFilter, () => {
   page.value = 1
+  void reloadPlaces()
 })
 
 watch(cropFilter, () => {
   page.value = 1
+  void reloadPlaces()
 })
 </script>
 

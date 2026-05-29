@@ -50,6 +50,8 @@ export type UiChatConversation = {
   role: string
   initials: string
   tone: AvatarTone
+  /** Фото собеседника (личка); у группы null */
+  avatarUrl: string | null
   lastPreview: string
   lastTime: string
   unread: number
@@ -90,6 +92,7 @@ export type UiChatMessage = {
   /** В группе — аватар отправителя входящих */
   inAvatarInitials?: string
   inAvatarTone?: AvatarTone
+  inAvatarUrl?: string | null
 }
 
 function formatBytes(n: number | null): string {
@@ -174,6 +177,7 @@ export function mapThreadRow(r: ChatThreadListRow): UiChatConversation {
     role,
     initials,
     tone: avatarToneFromUserId(toneKey),
+    avatarUrl: null,
     lastPreview: r.last_message_body || (isTeam ? 'Нет сообщений' : ''),
     lastTime: formatThreadListTime(r.last_message_at),
     unread: Number(r.unread_count) || 0,
@@ -278,22 +282,41 @@ export type ThreadMessageRealtimePayload =
   | { kind: 'insert'; record: ChatMessageRow }
   | { kind: 'delete'; messageId: string }
 
-export type SenderMeta = { initials: string; tone: AvatarTone }
+export type SenderMeta = { initials: string; tone: AvatarTone; avatarUrl: string | null }
 
 export async function fetchSenderMetaMap(senderIds: string[]): Promise<Map<string, SenderMeta>> {
   const map = new Map<string, SenderMeta>()
   const uniq = [...new Set(senderIds)].filter(Boolean)
   if (!supabase || !uniq.length) return map
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('id, display_name, email, position')
-    .in('id', uniq)
-  if (error || !data) return map
-  for (const p of data as { id: string; display_name: string | null; email: string; position: string | null }[]) {
+  const baseCols = 'id, display_name, email, position'
+  let rows: { id: string; display_name: string | null; email: string; position: string | null; avatar_url?: string | null }[] = []
+  const withAvatar = await supabase.from('profiles').select(`${baseCols}, avatar_url`).in('id', uniq)
+  if (!withAvatar.error && withAvatar.data) {
+    rows = withAvatar.data as typeof rows
+  } else {
+    const base = await supabase.from('profiles').select(baseCols).in('id', uniq)
+    if (base.error || !base.data) return map
+    rows = base.data as typeof rows
+  }
+  for (const p of rows) {
     map.set(p.id, {
       initials: initialsFromProfile(p.display_name, p.email || ''),
       tone: avatarToneByPosition(p.position),
+      avatarUrl: p.avatar_url ?? null,
     })
+  }
+  return map
+}
+
+/** Карта userId → avatar_url для произвольного набора пользователей (для лички/списка чатов). */
+export async function fetchProfileAvatarMap(ids: string[]): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>()
+  const uniq = [...new Set(ids)].filter(Boolean)
+  if (!supabase || !uniq.length) return map
+  const { data, error } = await supabase.from('profiles').select('id, avatar_url').in('id', uniq)
+  if (error || !data) return map
+  for (const p of data as { id: string; avatar_url: string | null }[]) {
+    map.set(p.id, p.avatar_url ?? null)
   }
   return map
 }
@@ -342,6 +365,7 @@ export function mapMessagesForUi(
       urgentKind: m.urgent_kind === 'problem_report' ? 'problem_report' : undefined,
       inAvatarInitials: meta?.initials,
       inAvatarTone: meta?.tone,
+      inAvatarUrl: meta?.avatarUrl ?? null,
     }
   })
 }
@@ -536,6 +560,7 @@ export type GroupMemberDisplay = {
   roleLabel: string
   initials: string
   tone: AvatarTone
+  avatarUrl: string | null
   /** profiles.last_activity_at — текст «В сети» считается на клиенте по таймеру */
   lastActivityAt: string | null
   isSelf: boolean
@@ -552,11 +577,16 @@ export async function fetchGroupThreadMembersDisplay(
   const { data: rows, error } = await supabase.from('chat_thread_members').select('user_id').eq('thread_id', threadId)
   if (error || !rows?.length) return []
   const ids = rows.map((r) => r.user_id as string)
-  const { data: profs, error: pErr } = await supabase
-    .from('profiles')
-    .select('id, display_name, email, position, role, last_activity_at')
-    .in('id', ids)
-  if (pErr) throw pErr
+  const baseMemberCols = 'id, display_name, email, position, role, last_activity_at'
+  let profs: P[] | null = null
+  const withAvatar = await supabase.from('profiles').select(`${baseMemberCols}, avatar_url`).in('id', ids)
+  if (!withAvatar.error) {
+    profs = withAvatar.data as P[] | null
+  } else {
+    const base = await supabase.from('profiles').select(baseMemberCols).in('id', ids)
+    if (base.error) throw base.error
+    profs = base.data as P[] | null
+  }
   type P = {
     id: string
     display_name: string | null
@@ -564,6 +594,7 @@ export async function fetchGroupThreadMembersDisplay(
     position: string | null
     role: string | null
     last_activity_at: string | null
+    avatar_url?: string | null
   }
   const profMap = new Map((profs as P[] | null)?.map((p) => [p.id, p]) ?? [])
   const me = currentUserId ?? ''
@@ -581,6 +612,7 @@ export async function fetchGroupThreadMembersDisplay(
       roleLabel,
       initials: initialsFromProfile(p?.display_name, email),
       tone: avatarToneFromUserId(id),
+      avatarUrl: p?.avatar_url ?? null,
       lastActivityAt: p?.last_activity_at ?? null,
       isSelf: Boolean(me && id === me),
     }

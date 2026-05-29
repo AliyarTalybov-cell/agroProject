@@ -31,6 +31,7 @@ import { loadFields as loadFieldsApi } from '@/lib/fieldsSupabase'
 import { loadWorkOperations, type WorkOperationRow } from '@/lib/reasonsAndOperations'
 import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow, TaskFileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
+import UserAvatar from '@/components/UserAvatar.vue'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
@@ -207,6 +208,11 @@ function avatarStyleByUserId(userId: string | null | undefined): Record<string, 
   return { background: avatarColorByPosition(p?.position) }
 }
 
+function avatarUrlByUserId(userId: string | null | undefined): string | null {
+  if (!userId) return null
+  return profilesMap.value.get(userId)?.avatar_url ?? null
+}
+
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
   const d = new Date(value)
@@ -237,28 +243,49 @@ async function loadData() {
     profiles.value = profileList
     fields.value = fieldRows.map((f) => f.name).sort((a, b) => a.localeCompare(b, 'ru-RU'))
     workTypes.value = workOps.map((op: WorkOperationRow) => op.name)
-    const hasClientOnlyFilters = Boolean(searchTaskNumber.value.trim() || filterDateFrom.value || filterDateTo.value)
 
-    if (!hasClientOnlyFilters) {
-      serverPagingMode.value = true
-      const page = await loadTasksFilteredPage(false, user.id, {
-        status: filterStatus.value || undefined,
-        assigneeId: filterEmployeeId.value || undefined,
-        page: currentPage.value,
-        pageSize: pageSize.value,
-      })
-      const participantsMap = await loadTaskParticipantsMap(page.rows.map((r) => r.id))
-      tasks.value = tasksWithAssignees(page.rows, profileList, participantsMap)
-      serverTotal.value = page.total
-    } else {
+    const numStr = searchTaskNumber.value.trim()
+    let numberOpt: number | undefined
+    if (numStr) {
+      const n = parseInt(numStr, 10)
+      if (isNaN(n) || n < 1) {
+        tasks.value = []
+        serverTotal.value = 0
+        serverPagingMode.value = true
+        return
+      }
+      numberOpt = n
+    }
+    const involvedUserId = activeFilter.value === 'mine' ? user.id : undefined
+
+    const page = await loadTasksFilteredPage(false, user.id, {
+      status: filterStatus.value || undefined,
+      assigneeId: filterEmployeeId.value || undefined,
+      involvedUserId,
+      number: numberOpt,
+      dueFrom: filterDateFrom.value || undefined,
+      dueTo: filterDateTo.value || undefined,
+      page: currentPage.value,
+      pageSize: pageSize.value,
+    })
+
+    if (page.dueFilterUnsupported) {
+      // Миграция нормализации даты не применена — фильтр по сроку считаем на клиенте.
       serverPagingMode.value = false
       const rows = await loadTasksFiltered(false, user.id, {
         status: filterStatus.value || undefined,
         assigneeId: filterEmployeeId.value || undefined,
+        involvedUserId,
+        limit: 500,
       })
       const participantsMap = await loadTaskParticipantsMap(rows.map((r) => r.id))
       tasks.value = tasksWithAssignees(rows, profileList, participantsMap)
       serverTotal.value = 0
+    } else {
+      serverPagingMode.value = true
+      const participantsMap = await loadTaskParticipantsMap(page.rows.map((r) => r.id))
+      tasks.value = tasksWithAssignees(page.rows, profileList, participantsMap)
+      serverTotal.value = page.total
     }
   } catch {
     tasks.value = []
@@ -472,6 +499,11 @@ function parseDueDate(dueDate: string): Date | null {
 
 const filteredTasks = computed(() => {
   let list = tasks.value
+  const numStr = searchTaskNumber.value.trim()
+  if (numStr) {
+    const n = parseInt(numStr, 10)
+    list = isNaN(n) ? [] : list.filter((t) => t.number === n)
+  }
   if (activeFilter.value === 'mine' && auth.user.value) {
     const myId = auth.user.value.id
     list = list.filter(
@@ -595,114 +627,42 @@ function getTaskNumber(taskId: string): number {
   return task?.number ?? 0
 }
 
+function reloadFromFirstPage() {
+  if (!isSupabaseConfigured() || !auth.user.value) return
+  if (currentPage.value !== 1) {
+    currentPage.value = 1
+  } else {
+    void loadData()
+  }
+}
+
 function applyDateFilter() {
+  // Изменение filterDateFrom/To перехватывается watch ниже и перезагружает с первой страницы.
   filterDateFrom.value = dateFromInput.value
   filterDateTo.value = dateToInput.value
-  currentPage.value = 1
-  const numStr = searchTaskNumber.value.trim()
-  if (numStr && parseInt(numStr, 10) >= 1) {
-    searchTaskByNumber()
-    return
-  }
-  if (isSupabaseConfigured() && auth.user.value) loadData()
 }
 
 watch(
   () => [filterDateFrom.value, filterDateTo.value, filterEmployeeId.value, filterStatus.value, activeFilter.value],
   () => {
-    currentPage.value = 1
-    const numStr = searchTaskNumber.value.trim()
-    if (numStr && parseInt(numStr, 10) >= 1) {
-      searchTaskByNumber()
-      return
-    }
-    if (isSupabaseConfigured() && auth.user.value) loadData()
+    reloadFromFirstPage()
   },
 )
-watch(searchTaskNumber, () => { currentPage.value = 1 })
+watch(searchTaskNumber, () => {
+  if (searchByNumberTimeout) clearTimeout(searchByNumberTimeout)
+  searchByNumberTimeout = setTimeout(() => {
+    reloadFromFirstPage()
+  }, 400)
+})
+watch(pageSize, () => {
+  reloadFromFirstPage()
+})
 watch(totalPages, (pages) => {
   if (currentPage.value > pages) currentPage.value = Math.max(1, pages)
 })
-watch([currentPage, pageSize], () => {
+watch(currentPage, () => {
   if (!isSupabaseConfigured() || !auth.user.value) return
-  if (searchTaskNumber.value.trim()) return
   void loadData()
-})
-
-async function searchTaskByNumber() {
-  const numSearch = searchTaskNumber.value.trim()
-  if (!numSearch || !auth.user.value || !isSupabaseConfigured()) return
-  const num = parseInt(numSearch, 10)
-  if (isNaN(num) || num < 1) {
-    tasks.value = []
-    return
-  }
-  tasksLoading.value = true
-  try {
-    const profileList = await loadProfiles()
-    const rows = await loadTasksFiltered(false, auth.user.value.id, {
-      assigneeId: filterEmployeeId.value || undefined,
-      status: filterStatus.value || undefined,
-      limit: 500,
-    })
-    const participantsMap = await loadTaskParticipantsMap(rows.map((r) => r.id))
-    let list = tasksWithAssignees(rows, profileList, participantsMap)
-    if (activeFilter.value === 'mine' && auth.user.value) {
-      const myId = auth.user.value.id
-      list = list.filter(
-        (t) =>
-          t.assignee.id === myId
-          || t.participantIds.includes(myId)
-          || t.createdBy?.id === myId,
-      )
-    }
-    const from = filterDateFrom.value ? new Date(filterDateFrom.value) : null
-    const to = filterDateTo.value ? new Date(filterDateTo.value) : null
-    if (from || to) {
-      list = list.filter((t) => {
-        const d = parseDueDate(t.dueDate)
-        if (!d) return true
-        if (from && d < new Date(from.getFullYear(), from.getMonth(), from.getDate())) return false
-        if (to) {
-          const toEnd = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1)
-          if (d >= toEnd) return false
-        }
-        return true
-      })
-    }
-    const task = list.find((t) => t.number === num) ?? null
-    tasks.value = task ? [task] : []
-  } catch {
-    tasks.value = []
-  } finally {
-    tasksLoading.value = false
-  }
-}
-
-function onSearchTaskNumberChange() {
-  const val = searchTaskNumber.value.trim()
-  if (!val) {
-    loadData()
-    return
-  }
-  const num = parseInt(val, 10)
-  if (!isNaN(num) && num >= 1) searchTaskByNumber()
-  else tasks.value = []
-}
-
-watch(searchTaskNumber, (val) => {
-  if (searchByNumberTimeout) clearTimeout(searchByNumberTimeout)
-  const trimmed = val.trim()
-  if (!trimmed) {
-    loadData()
-    return
-  }
-  const num = parseInt(trimmed, 10)
-  if (isNaN(num) || num < 1) {
-    tasks.value = []
-    return
-  }
-  searchByNumberTimeout = setTimeout(() => searchTaskByNumber(), 400)
 })
 
 const selectedTask = computed(() =>
@@ -1331,7 +1291,7 @@ function statusClass(s: Status) {
               </td>
               <td class="task-list-cell-assignee" data-label="Исполнитель">
                 <div class="task-list-assignee-inner">
-                  <span class="task-list-avatar" :style="avatarStyleByUserId(task.assignee.id)">{{ task.assignee.initials }}</span>
+                  <UserAvatar class="task-list-avatar" :style="avatarStyleByUserId(task.assignee.id)" :url="avatarUrlByUserId(task.assignee.id)" :initials="task.assignee.initials" />
                   <span class="task-list-assignee-name">{{ task.assignee.name }}</span>
                 </div>
               </td>
@@ -1452,10 +1412,12 @@ function statusClass(s: Status) {
                   <label class="modal-field modal-field--design">
                     <span class="modal-label modal-label--design">Исполнитель</span>
                     <div v-if="isManager" class="task-form-select-wrap">
-                      <span
+                      <UserAvatar
                         class="task-form-avatar"
                         :style="avatarStyleByUserId(form.assigneeId || null)"
-                      >{{ form.assigneeId ? (assignees.find((a) => a.id === form.assigneeId)?.initials ?? '?') : '—' }}</span>
+                        :url="avatarUrlByUserId(form.assigneeId || null)"
+                        :initials="form.assigneeId ? (assignees.find((a) => a.id === form.assigneeId)?.initials ?? '?') : '—'"
+                      />
                       <select v-model="form.assigneeId" class="modal-input modal-input--design modal-select modal-select--design task-form-select">
                         <option value="">Без исполнителя</option>
                         <option v-for="a in assignees" :key="a.id" :value="a.id">{{ a.name }}</option>
@@ -1507,7 +1469,7 @@ function statusClass(s: Status) {
                           class="modal-assignee-option"
                           @click="addParticipant(p.id)"
                         >
-                          <span class="modal-assignee-option-avatar" :style="avatarStyleByUserId(p.id)">{{ participantInitials(p) }}</span>
+                          <UserAvatar class="modal-assignee-option-avatar" :style="avatarStyleByUserId(p.id)" :url="avatarUrlByUserId(p.id)" :initials="participantInitials(p)" />
                           <span class="modal-assignee-option-label">{{ profileLabel(p) }}{{ p.id === auth.user.value?.id ? ' (Вы)' : '' }}</span>
                         </button>
                         <p v-if="participantOptions.length === 0" class="modal-assignee-empty">
@@ -1522,10 +1484,12 @@ function statusClass(s: Status) {
                       :key="uid"
                       class="modal-chip modal-chip--design"
                     >
-                      <span
+                      <UserAvatar
                         class="modal-chip-avatar modal-chip-avatar--design"
                         :style="profileById(uid) ? avatarStyleByUserId(uid) : undefined"
-                      >{{ profileById(uid) ? participantInitials(profileById(uid)!) : '?' }}</span>
+                        :url="avatarUrlByUserId(uid)"
+                        :initials="profileById(uid) ? participantInitials(profileById(uid)!) : '?'"
+                      />
                       <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
                       <button type="button" class="modal-chip-remove" aria-label="Убрать" @click="removeParticipant(uid)">×</button>
                     </div>
@@ -1675,7 +1639,7 @@ function statusClass(s: Status) {
                 <div class="task-detail-item">
                   <dt class="task-detail-label">Исполнитель</dt>
                   <dd class="task-detail-value">
-                    <span class="task-detail-avatar" :style="avatarStyleByUserId(selectedTask.assignee.id)">{{ selectedTask.assignee.initials }}</span>
+                    <UserAvatar class="task-detail-avatar" :style="avatarStyleByUserId(selectedTask.assignee.id)" :url="avatarUrlByUserId(selectedTask.assignee.id)" :initials="selectedTask.assignee.initials" />
                     {{ selectedTask.assignee.name }}
                   </dd>
                 </div>
@@ -1724,10 +1688,12 @@ function statusClass(s: Status) {
                     :key="uid"
                     class="modal-chip modal-chip--design modal-chip--readonly"
                   >
-                    <span
+                    <UserAvatar
                       class="modal-chip-avatar modal-chip-avatar--design"
                       :style="profileById(uid) ? avatarStyleByUserId(uid) : undefined"
-                    >{{ profileById(uid) ? participantInitials(profileById(uid)!) : '?' }}</span>
+                      :url="avatarUrlByUserId(uid)"
+                      :initials="profileById(uid) ? participantInitials(profileById(uid)!) : '?'"
+                    />
                     <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
                   </div>
                 </div>
@@ -1781,9 +1747,7 @@ function statusClass(s: Status) {
               <section class="task-detail-card">
                 <h3 class="task-detail-card-title">Информация о задаче</h3>
                 <div class="task-detail-info-row">
-                  <div class="task-detail-info-avatar" :style="avatarStyleByUserId(selectedTask.createdBy?.id ?? null)">
-                    <span>{{ profileInitials(selectedTask.createdBy?.id ?? null) }}</span>
-                  </div>
+                  <UserAvatar class="task-detail-info-avatar" :style="avatarStyleByUserId(selectedTask.createdBy?.id ?? null)" :url="avatarUrlByUserId(selectedTask.createdBy?.id ?? null)" :initials="profileInitials(selectedTask.createdBy?.id ?? null)" />
                   <div class="task-detail-info-main">
                     <div class="task-detail-info-name">{{ selectedTaskCreatorName }}</div>
                     <div class="task-detail-info-role">Автор задачи</div>
@@ -1865,9 +1829,7 @@ function statusClass(s: Status) {
               </div>
               <ul v-else class="task-chat-list">
                 <li v-for="comment in taskComments" :key="comment.id" class="task-chat-item">
-                  <div class="task-chat-avatar" :style="avatarStyleByUserId(comment.user_id)">
-                    {{ profileInitials(comment.user_id) }}
-                  </div>
+                  <UserAvatar class="task-chat-avatar" :style="avatarStyleByUserId(comment.user_id)" :url="avatarUrlByUserId(comment.user_id)" :initials="profileInitials(comment.user_id)" />
                   <div class="task-chat-message">
                     <div class="task-chat-meta">
                       <span class="task-chat-author">{{ profileName(comment.user_id) }}</span>

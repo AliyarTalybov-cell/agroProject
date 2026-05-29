@@ -4,7 +4,7 @@ import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas'
 import {
   isSupabaseConfigured,
-  loadEquipment,
+  loadEquipmentPage,
   loadEquipmentImplementsOptions,
   loadEquipmentImplementsPage,
   insertEquipmentImplement,
@@ -55,6 +55,8 @@ const loading = ref(true)
 const saving = ref(false)
 const searchQuery = ref('')
 const currentPage = ref(1)
+const equipmentTotal = ref(0)
+let equipmentSearchTimer: ReturnType<typeof setTimeout> | null = null
 const editingId = ref<string | null>(null)
 const profiles = ref<ProfileRow[]>([])
 const implementOptions = ref<EquipmentImplementRow[]>([])
@@ -97,9 +99,41 @@ const implementForm = ref({
   condition: 'operational' as EquipmentCondition,
 })
 
+async function fetchEquipmentPage() {
+  if (!isSupabaseConfigured()) {
+    list.value = []
+    equipmentTotal.value = 0
+    loading.value = false
+    return
+  }
+  loading.value = true
+  try {
+    const { rows, total } = await loadEquipmentPage({
+      search: searchQuery.value,
+      page: currentPage.value,
+      pageSize: PAGE_SIZE,
+    })
+    list.value = rows
+    equipmentTotal.value = total
+    const maxPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
+    if (currentPage.value > maxPage) {
+      currentPage.value = maxPage
+      const retry = await loadEquipmentPage({ search: searchQuery.value, page: currentPage.value, pageSize: PAGE_SIZE })
+      list.value = retry.rows
+      equipmentTotal.value = retry.total
+    }
+  } catch {
+    list.value = []
+    equipmentTotal.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
 async function fetchList() {
   if (!isSupabaseConfigured()) {
     list.value = []
+    equipmentTotal.value = 0
     profiles.value = []
     implementOptions.value = []
     loading.value = false
@@ -107,22 +141,33 @@ async function fetchList() {
   }
   loading.value = true
   try {
-    const [rows, profileRows, implementRows] = await Promise.all([
-      loadEquipment(),
+    const [pageRes, profileRows, implementRows] = await Promise.all([
+      loadEquipmentPage({ search: searchQuery.value, page: currentPage.value, pageSize: PAGE_SIZE }),
       loadProfiles(),
       loadEquipmentImplementsOptions(),
     ])
-    list.value = rows
+    list.value = pageRes.rows
+    equipmentTotal.value = pageRes.total
     profiles.value = profileRows
     implementOptions.value = implementRows
   } catch {
     list.value = []
+    equipmentTotal.value = 0
     profiles.value = []
     implementOptions.value = []
   } finally {
     loading.value = false
   }
 }
+
+watch(searchQuery, () => {
+  currentPage.value = 1
+  if (!isSupabaseConfigured()) return
+  if (equipmentSearchTimer) clearTimeout(equipmentSearchTimer)
+  equipmentSearchTimer = setTimeout(() => {
+    void fetchEquipmentPage()
+  }, 300)
+})
 
 async function fetchEquipmentRefs() {
   if (!isSupabaseConfigured()) {
@@ -182,19 +227,9 @@ onMounted(async () => {
   await Promise.all([fetchList(), fetchImplementsPage(), fetchEquipmentRefs()])
 })
 
-const filteredList = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase()
-  if (!q) return list.value
-  return list.value.filter(
-    (r) =>
-      r.brand.toLowerCase().includes(q) ||
-      r.license_plate.toLowerCase().includes(q) ||
-      (r.model?.toLowerCase().includes(q) ?? false) ||
-      (r.equipment_type?.toLowerCase().includes(q) ?? false),
-  )
-})
+const filteredList = computed(() => list.value)
 
-const totalCount = computed(() => filteredList.value.length)
+const totalCount = computed(() => equipmentTotal.value)
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / PAGE_SIZE)))
 
 const pageNumbers = computed(() => {
@@ -220,10 +255,7 @@ const pageNumbers = computed(() => {
   return pages
 })
 
-const paginatedList = computed(() => {
-  const start = (currentPage.value - 1) * PAGE_SIZE
-  return filteredList.value.slice(start, start + PAGE_SIZE)
-})
+const paginatedList = computed(() => list.value)
 
 const responsibleOptions = computed(() =>
   profiles.value.map((p) => ({
@@ -482,7 +514,10 @@ async function removeImplement(row: EquipmentImplementRow) {
 
 
 function goToPage(page: number) {
-  currentPage.value = Math.max(1, Math.min(page, totalPages.value))
+  const next = Math.max(1, Math.min(page, totalPages.value))
+  if (next === currentPage.value) return
+  currentPage.value = next
+  if (isSupabaseConfigured()) void fetchEquipmentPage()
 }
 
 function goToImplementsPage(page: number) {
@@ -595,10 +630,6 @@ async function exportToPdf() {
 
 <template>
   <section class="equipment-page page-enter-item">
-    <header class="header-area equipment-header">
-      <h1 class="page-title">Управление техникой</h1>
-    </header>
-
     <nav class="equipment-tabs" aria-label="Разделы">
       <button
         v-for="tab in TABS"

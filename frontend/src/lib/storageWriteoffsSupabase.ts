@@ -83,6 +83,139 @@ export async function loadStorageWriteoffsForLocation(storageLocationId: string)
   }))
 }
 
+export type StorageWriteoffWithLocationRow = StorageWriteoffRow & {
+  actorName: string
+  storageName: string
+}
+
+/** Списания по всем складам (для общего реестра «Учёт зерна»). */
+export async function loadAllStorageWriteoffs(): Promise<StorageWriteoffWithLocationRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('storage_writeoffs')
+    .select('id, storage_location_id, batch_id, crop_key, writeoff_type, mass_tons, operation_date, counterparty, comment, created_by, created_at, batches:storage_batches ( id, code ), crops ( key, label ), storage_locations ( id, name )')
+    .order('operation_date', { ascending: false })
+    .order('created_at', { ascending: false })
+  if (error) {
+    if (/storage_writeoffs|does not exist|relation/i.test(error.message || '')) return []
+    throw error
+  }
+  const rows = (data ?? []) as Array<{
+    id: string
+    storage_location_id: string
+    batch_id: string
+    crop_key: string | null
+    writeoff_type: StorageWriteoffType
+    mass_tons: number
+    operation_date: string
+    counterparty: string | null
+    comment: string | null
+    created_by: string | null
+    created_at: string
+    batches?: { id: string; code: string }[] | { id: string; code: string } | null
+    crops?: { key: string; label: string }[] | { key: string; label: string } | null
+    storage_locations?: { id: string; name: string }[] | { id: string; name: string } | null
+  }>
+  const actorIds = Array.from(new Set(rows.map((x) => x.created_by).filter((x): x is string => Boolean(x))))
+  const names = new Map<string, string>()
+  if (actorIds.length) {
+    const { data: profiles } = await supabase.from('profiles').select('id, display_name, email').in('id', actorIds)
+    for (const p of (profiles ?? []) as Array<{ id: string; display_name: string | null; email: string | null }>) {
+      names.set(p.id, p.display_name?.trim() || p.email?.trim() || '—')
+    }
+  }
+  return rows.map((row) => {
+    const loc = joinOne(row.storage_locations)
+    return {
+      ...row,
+      batches: joinOne(row.batches),
+      crops: joinOne(row.crops),
+      actorName: row.created_by ? names.get(row.created_by) || row.created_by : '—',
+      storageName: loc?.name?.trim() || '—',
+    }
+  })
+}
+
+export type StorageWriteoffsPage = { rows: StorageWriteoffWithLocationRow[]; total: number }
+
+function sanitizeOrValue(value: string): string {
+  return value.replace(/[(),*]/g, ' ').trim()
+}
+
+/** Постраничная загрузка списаний по всем складам с серверным поиском и фильтром по складу. */
+export async function loadStorageWriteoffsPage(params: {
+  search?: string
+  storageLocationId?: string
+  page?: number
+  pageSize?: number
+}): Promise<StorageWriteoffsPage> {
+  if (!supabase) return { rows: [], total: 0 }
+  const page = Math.max(1, Number(params.page || 1))
+  const pageSize = Math.max(1, Number(params.pageSize || 10))
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
+
+  let query = supabase
+    .from('storage_writeoffs')
+    .select(
+      'id, storage_location_id, batch_id, crop_key, writeoff_type, mass_tons, operation_date, counterparty, comment, created_by, created_at, batches:storage_batches ( id, code ), crops ( key, label ), storage_locations ( id, name )',
+      { count: 'exact' },
+    )
+    .order('operation_date', { ascending: false })
+    .order('created_at', { ascending: false })
+
+  if (params.storageLocationId && params.storageLocationId !== 'all') {
+    query = query.eq('storage_location_id', params.storageLocationId)
+  }
+  const search = sanitizeOrValue(String(params.search || ''))
+  if (search) {
+    query = query.or(`counterparty.ilike.*${search}*,comment.ilike.*${search}*`)
+  }
+
+  const { data, error, count } = await query.range(from, to)
+  if (error) {
+    if (/storage_writeoffs|does not exist|relation/i.test(error.message || '')) return { rows: [], total: 0 }
+    throw error
+  }
+  const rows = (data ?? []) as Array<{
+    id: string
+    storage_location_id: string
+    batch_id: string
+    crop_key: string | null
+    writeoff_type: StorageWriteoffType
+    mass_tons: number
+    operation_date: string
+    counterparty: string | null
+    comment: string | null
+    created_by: string | null
+    created_at: string
+    batches?: { id: string; code: string }[] | { id: string; code: string } | null
+    crops?: { key: string; label: string }[] | { key: string; label: string } | null
+    storage_locations?: { id: string; name: string }[] | { id: string; name: string } | null
+  }>
+  const actorIds = Array.from(new Set(rows.map((x) => x.created_by).filter((x): x is string => Boolean(x))))
+  const names = new Map<string, string>()
+  if (actorIds.length) {
+    const { data: profiles } = await supabase.from('profiles').select('id, display_name, email').in('id', actorIds)
+    for (const p of (profiles ?? []) as Array<{ id: string; display_name: string | null; email: string | null }>) {
+      names.set(p.id, p.display_name?.trim() || p.email?.trim() || '—')
+    }
+  }
+  return {
+    rows: rows.map((row) => {
+      const loc = joinOne(row.storage_locations)
+      return {
+        ...row,
+        batches: joinOne(row.batches),
+        crops: joinOne(row.crops),
+        actorName: row.created_by ? names.get(row.created_by) || row.created_by : '—',
+        storageName: loc?.name?.trim() || '—',
+      }
+    }),
+    total: Number(count || 0),
+  }
+}
+
 export async function loadStorageWriteoffTotalsByBatch(
   storageLocationId: string,
 ): Promise<Record<string, number>> {

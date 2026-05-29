@@ -24,7 +24,8 @@ import {
 } from '@/lib/landTypesAndCrops'
 import { loadLands as loadLandsApi, type LandRow } from '@/lib/landsSupabase'
 import {
-  loadFields as loadFieldsApi,
+  loadFieldsPage,
+  loadMaxFieldNumber,
   addField as addFieldApi,
   updateField as updateFieldApi,
   deleteField as deleteFieldApi,
@@ -32,8 +33,10 @@ import {
   uploadFieldScheme,
   type FieldRow,
   type FieldMunicipalityRefRow,
+  type FieldsServerSortKey,
 } from '@/lib/fieldsSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
+import { PHOTO_MAX_BYTES, PHOTO_MAX_LABEL } from '@/lib/uploadLimits'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
@@ -151,18 +154,51 @@ function fieldRowToField(row: FieldRow, profileMap: Map<string, ProfileRow>, cro
   }
 }
 
+function fieldsDbSortKey(): FieldsServerSortKey {
+  switch (fieldsSortKey.value) {
+    case 'cadastralNumber':
+      return 'cadastral_number'
+    case 'area':
+      return 'area'
+    case 'crop':
+      return 'crop_key'
+    case 'land':
+      return 'land_type'
+    case 'location':
+      return 'location_description'
+    case 'responsible':
+      return 'responsible_id'
+    default:
+      return 'name'
+  }
+}
+
 async function loadFieldsData() {
   if (!isSupabaseConfigured()) return
   fieldsError.value = null
   fieldsLoading.value = true
   try {
-    const [rows, profileList] = await Promise.all([loadFieldsApi(searchText.value), loadProfiles()])
+    const [pageRes, profileList, maxNumber] = await Promise.all([
+      loadFieldsPage({
+        search: searchText.value,
+        cropKey: cropFilter.value,
+        sortKey: fieldsDbSortKey(),
+        sortDir: fieldsSortDir.value,
+        page: currentPage.value,
+        pageSize: pageSize.value,
+      }),
+      loadProfiles(),
+      loadMaxFieldNumber(),
+    ])
     profiles.value = profileList
     const profileMap = new Map(profileList.map((p) => [p.id, p]))
-    fields.value = rows.map((r) => fieldRowToField(r, profileMap, crops.value))
+    fields.value = pageRes.rows.map((r) => fieldRowToField(r, profileMap, crops.value))
+    fieldsTotal.value = pageRes.total
+    maxFieldNumber.value = maxNumber
   } catch (e) {
     fieldsError.value = e instanceof Error ? e.message : 'Не удалось загрузить поля'
     fields.value = []
+    fieldsTotal.value = 0
   } finally {
     fieldsLoading.value = false
   }
@@ -318,16 +354,17 @@ const selectedFieldId = ref<string | null>(null)
 const multiSelectedIds = ref<string[]>([])
 const pageSize = ref(10)
 const currentPage = ref(1)
+const fieldsTotal = ref(0)
+const maxFieldNumber = ref(0)
 
 const selectedField = computed(() => fields.value.find((f) => f.id === selectedFieldId.value) ?? null)
 
 const filteredFields = computed(() => {
+  if (isSupabaseConfigured()) return fields.value
   const q = searchText.value.trim().toLowerCase()
   return fields.value.filter((f) => {
     const matchesCrop = cropFilter.value === 'all' ? true : f.cropKey === cropFilter.value
     if (!matchesCrop) return false
-    if (isSupabaseConfigured()) return true
-    // Для демо-режима без БД оставляем локальный поиск только по названию поля.
     return q ? (f.name || '').toLowerCase().includes(q) : true
   })
 })
@@ -339,6 +376,11 @@ watch(searchText, () => {
   searchDebounceTimer = setTimeout(() => {
     void loadFieldsData()
   }, 300)
+})
+
+watch(cropFilter, () => {
+  currentPage.value = 1
+  if (isSupabaseConfigured()) void loadFieldsData()
 })
 
 type FieldsSortKey = 'name' | 'cadastralNumber' | 'area' | 'crop' | 'land' | 'location' | 'responsible'
@@ -353,6 +395,7 @@ function toggleFieldsSort(key: FieldsSortKey) {
     fieldsSortKey.value = key
     fieldsSortDir.value = 'asc'
   }
+  toggleFieldsSortReload()
 }
 
 function fieldsAriaSort(key: FieldsSortKey): 'ascending' | 'descending' | 'none' {
@@ -365,7 +408,13 @@ function fieldsSortMark(key: FieldsSortKey): string {
   return fieldsSortDir.value === 'asc' ? '↑' : '↓'
 }
 
+function toggleFieldsSortReload() {
+  currentPage.value = 1
+  if (isSupabaseConfigured()) void loadFieldsData()
+}
+
 const sortedFilteredFields = computed(() => {
+  if (isSupabaseConfigured()) return filteredFields.value
   const list = [...filteredFields.value]
   const dir = fieldsSortDir.value === 'asc' ? 1 : -1
   const key = fieldsSortKey.value
@@ -411,13 +460,15 @@ const selectedFields = computed(() =>
 )
 
 const nextFieldNumber = computed(() => {
+  if (isSupabaseConfigured()) return maxFieldNumber.value + 1
   const max = fields.value.reduce((m, f) => (f.number > m ? f.number : m), 0)
   return max + 1
 })
 
-const totalFiltered = computed(() => filteredFields.value.length)
+const totalFiltered = computed(() => (isSupabaseConfigured() ? fieldsTotal.value : filteredFields.value.length))
 const totalPages = computed(() => Math.max(1, Math.ceil(totalFiltered.value / pageSize.value)))
 const paginatedFields = computed(() => {
+  if (isSupabaseConfigured()) return sortedFilteredFields.value
   const start = (currentPage.value - 1) * pageSize.value
   return sortedFilteredFields.value.slice(start, start + pageSize.value)
 })
@@ -879,9 +930,8 @@ async function processSchemeFile(file: File) {
   schemeUploadError.value = ''
   fieldFormError.value = ''
 
-  const maxSize = 10 * 1024 * 1024
-  if (file.size > maxSize) {
-    schemeUploadError.value = 'Файл не должен превышать 10 МБ.'
+  if (file.size > PHOTO_MAX_BYTES) {
+    schemeUploadError.value = `Файл не должен превышать ${PHOTO_MAX_LABEL}.`
     newFieldSchemeFileName.value = ''
     return
   }
@@ -1304,14 +1354,25 @@ async function deleteField(id: string) {
   }
   const total = totalFiltered.value
   const maxPage = Math.ceil(total / pageSize.value)
-  if (currentPage.value > maxPage && maxPage > 0) currentPage.value = maxPage
+  if (currentPage.value > maxPage && maxPage > 0) {
+    currentPage.value = maxPage
+    if (isSupabaseConfigured()) void loadFieldsData()
+  }
 }
 
 function setPage(p: number) {
-  currentPage.value = Math.max(1, Math.min(p, totalPages.value))
+  const next = Math.max(1, Math.min(p, totalPages.value))
+  if (next === currentPage.value) return
+  currentPage.value = next
+  if (isSupabaseConfigured()) void loadFieldsData()
 }
 
 function onPageSizeChange() {
+  currentPage.value = 1
+  if (isSupabaseConfigured()) {
+    void loadFieldsData()
+    return
+  }
   const total = totalFiltered.value
   const maxPage = Math.ceil(total / pageSize.value)
   if (currentPage.value > maxPage && maxPage > 0) currentPage.value = maxPage
@@ -1572,7 +1633,6 @@ onMounted(async () => {
     <div class="fields-page-inner">
       <header class="fields-header page-enter-item">
         <div class="fields-header-text">
-          <h1 class="fields-title">Поля и культуры</h1>
           <p v-show="activeTab === 'fields'" class="fields-subtitle">Реестр сельскохозяйственных угодий и назначение ответственных</p>
         </div>
         <button
@@ -2272,7 +2332,7 @@ onMounted(async () => {
                   <template v-else>
                     <svg class="modal-dropzone-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
                     <span class="modal-dropzone-text">Загрузить файл</span> или перетащите сюда
-                    <span class="modal-file-hint">JPG, PNG, PDF до 10MB</span>
+                    <span class="modal-file-hint">JPG, PNG, PDF до 20 МБ</span>
                   </template>
                 </label>
                 <div v-if="schemeUploadError" class="modal-error modal-error--dropzone" role="alert">{{ schemeUploadError }}</div>

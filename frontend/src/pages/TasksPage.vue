@@ -21,6 +21,7 @@ import {
 } from '@/lib/calendarTasksSupabase'
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
+import UserAvatar from '@/components/UserAvatar.vue'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import ModalCloseButton from '@/components/ModalCloseButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
@@ -2146,14 +2147,14 @@ async function confirmDeleteTask() {
                   @mousemove.stop="moveAssigneesTooltip($event)"
                   @mouseleave.stop="hideTaskAssigneesTooltip"
                 >
-                  <span
+                  <UserAvatar
                     v-for="p in dayEventAssignees(event.task.id).slice(0, 3)"
                     :key="`w-${event.task.id}-${p.id}`"
                     class="day-event-assignee-avatar"
                     :style="assigneeAvatarStyle(p)"
-                  >
-                    {{ assigneeInitials(p) }}
-                  </span>
+                    :url="p.avatar_url"
+                    :initials="assigneeInitials(p)"
+                  />
                   <span v-if="dayEventAssignees(event.task.id).length > 3" class="day-event-assignee-more">
                     +{{ dayEventAssignees(event.task.id).length - 3 }}
                   </span>
@@ -2285,14 +2286,14 @@ async function confirmDeleteTask() {
                     @mousemove.stop="moveAssigneesTooltip($event)"
                     @mouseleave.stop="hideTaskAssigneesTooltip"
                   >
-                    <span
+                    <UserAvatar
                       v-for="p in dayEventAssignees(task.id).slice(0, 3)"
                       :key="`s-${task.id}-${p.id}`"
                       class="day-event-assignee-avatar"
                       :style="assigneeAvatarStyle(p)"
-                    >
-                      {{ assigneeInitials(p) }}
-                    </span>
+                      :url="p.avatar_url"
+                      :initials="assigneeInitials(p)"
+                    />
                     <span v-if="dayEventAssignees(task.id).length > 3" class="day-event-assignee-more">
                       +{{ dayEventAssignees(task.id).length - 3 }}
                     </span>
@@ -2365,14 +2366,14 @@ async function confirmDeleteTask() {
                       @mousemove.stop="moveAssigneesTooltip($event)"
                       @mouseleave.stop="hideTaskAssigneesTooltip"
                     >
-                      <span
+                      <UserAvatar
                         v-for="p in dayEventAssignees(event.task.id).slice(0, 3)"
                         :key="p.id"
                         class="day-event-assignee-avatar"
                         :style="assigneeAvatarStyle(p)"
-                      >
-                        {{ assigneeInitials(p) }}
-                      </span>
+                        :url="p.avatar_url"
+                        :initials="assigneeInitials(p)"
+                      />
                       <span v-if="dayEventAssignees(event.task.id).length > 3" class="day-event-assignee-more">
                         +{{ dayEventAssignees(event.task.id).length - 3 }}
                       </span>
@@ -2673,7 +2674,7 @@ async function confirmDeleteTask() {
                       class="modal-assignee-option"
                       @click="addAssignee(p.id)"
                     >
-                      <span class="modal-assignee-option-avatar" :style="assigneeAvatarStyle(p)">{{ assigneeInitials(p) }}</span>
+                      <UserAvatar class="modal-assignee-option-avatar" :style="assigneeAvatarStyle(p)" :url="p.avatar_url" :initials="assigneeInitials(p)" />
                       <span class="modal-assignee-option-label">{{ profileLabel(p) }}{{ p.id === auth.user.value?.id ? ' (Вы)' : '' }}</span>
                     </button>
                     <p
@@ -2691,10 +2692,12 @@ async function confirmDeleteTask() {
                   :key="uid"
                   class="modal-chip modal-chip--design"
                 >
-                  <span
+                  <UserAvatar
                     class="modal-chip-avatar modal-chip-avatar--design"
                     :style="profileById(uid) ? assigneeAvatarStyle(profileById(uid)!) : undefined"
-                  >{{ profileById(uid) ? assigneeInitials(profileById(uid)!) : '?' }}</span>
+                    :url="profileById(uid)?.avatar_url ?? null"
+                    :initials="profileById(uid) ? assigneeInitials(profileById(uid)!) : '?'"
+                  />
                   <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
                   <span
                     class="modal-chip-status"

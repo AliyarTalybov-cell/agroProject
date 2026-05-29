@@ -24,6 +24,7 @@ import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import type { StoredOperation } from '@/lib/operationStorage'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import UserAvatar from '@/components/UserAvatar.vue'
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -1099,7 +1100,7 @@ onUnmounted(() => {
         >
           <div class="dash-live-topbar" />
           <div class="dash-live-head">
-            <div class="dash-live-avatar" :style="{ background: avatarBg(p) }">{{ initials(p) }}</div>
+            <UserAvatar class="dash-live-avatar" :style="{ background: avatarBg(p) }" :url="p.avatar_url" :initials="initials(p)" />
             <div>
               <h3 class="dash-live-name">{{ p.display_name || p.email }}</h3>
               <span

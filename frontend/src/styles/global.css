@@ -338,6 +338,29 @@
   z-index: 2;
 }
 
+/* Универсальный плавный переход появления/исчезновения (Vue <Transition name="fade">) */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-enter-active,
+  .fade-leave-active {
+    transition: opacity 0.25s ease;
+  }
+  .fade-enter-from,
+  .fade-leave-to {
+    transform: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   :where(
     .modal-close,
@@ -442,6 +465,14 @@
   .modal-confirm,
   .app-modal {
     animation: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-item-group > .nav-submenu,
+  .nav-item-group--open > .nav-submenu,
+  .nav-group-chevron {
+    transition: none !important;
   }
 }
 
@@ -684,6 +715,14 @@ a {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   transform-origin: center;
   transition: transform 0.28s ease;
+  overflow: hidden;
+}
+
+.topbar-user-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .topbar-user-link:hover .topbar-user-avatar {
@@ -863,77 +902,73 @@ a {
   max-height: 0;
   overflow: hidden;
   opacity: 0;
-  transform: translateY(-4px);
+  transform: translateY(-6px);
   transition:
-    max-height 0.24s ease,
-    opacity 0.2s ease,
-    transform 0.2s ease;
+    max-height 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.22s ease,
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .nav-item-group--open > .nav-submenu {
-  max-height: 84px;
+  max-height: 240px;
   opacity: 1;
   transform: translateY(0);
+  transition:
+    max-height 0.4s cubic-bezier(0.33, 1, 0.68, 1),
+    opacity 0.32s ease 0.05s,
+    transform 0.36s cubic-bezier(0.33, 1, 0.68, 1);
 }
 
 .nav-item-group {
   position: relative;
 }
 
-.nav-item-group > .nav-item {
-  padding-right: 52px;
-}
-
-.nav-submenu-toggle {
-  position: absolute;
-  top: 10px;
-  right: 16px;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 8px;
+/* Раскрывающийся раздел: вся строка-родитель — переключатель аккордеона */
+.nav-item--group-toggle {
+  width: 100%;
+  appearance: none;
   background: transparent;
-  color: var(--sidebar-text);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  border: none;
+  border-left: 4px solid transparent;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
-  transition: color .18s ease, background .18s ease;
 }
 
-.nav-submenu-toggle svg {
+.nav-group-chevron {
+  margin-left: auto;
   width: 18px;
   height: 18px;
-  transition: transform .18s ease;
+  flex-shrink: 0;
+  color: inherit;
+  opacity: 0.7;
+  transition: transform 0.36s cubic-bezier(0.33, 1, 0.68, 1), color 0.2s ease, opacity 0.2s ease;
 }
 
-.nav-submenu-toggle:hover {
-  color: var(--sidebar-text-hover);
-  background: var(--sidebar-hover-bg);
-}
-
-.nav-submenu-toggle.is-open svg {
+.nav-group-chevron.is-open {
   transform: rotate(180deg);
 }
 
-.nav-submenu-toggle.is-open {
+.nav-group-chevron.is-active {
   color: var(--nav-active-text);
-  background: var(--nav-active-bg);
-}
-
-.nav-item.router-link-active + .nav-submenu-toggle {
-  color: var(--nav-active-text);
-  background: var(--nav-active-bg);
-}
-
-.nav-submenu-toggle.is-active {
-  color: var(--nav-active-text);
-  background: var(--nav-active-bg);
+  opacity: 1;
 }
 
 .nav-item--sub {
   padding-left: 56px;
   font-size: 0.9rem;
+}
+
+/* Подпункты: иконки меньше, чем у родителя */
+.nav-item--sub .nav-item-icon {
+  width: 16px;
+  height: 16px;
+  opacity: 0.8;
+}
+
+.nav-item--sub .nav-item-icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .nav-item {

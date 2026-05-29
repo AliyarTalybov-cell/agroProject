@@ -29,9 +29,11 @@ const crops = ref<CropRow[]>([])
 const loading = ref(true)
 const insightsLoading = ref(false)
 const error = ref(false)
+const showLongLoadingHint = ref(false)
 const pickedCoords = ref<{ lat: number; lon: number } | null>(null)
 const pickedCoordsCopied = ref(false)
 let pickedCoordsCopiedTimer: ReturnType<typeof setTimeout> | null = null
+let longLoadingHintTimer: ReturnType<typeof setTimeout> | null = null
 type LatLon = [number, number]
 
 function fromPolygonGeoJson(geojson: Record<string, unknown> | null | undefined): LatLon[] {
@@ -100,29 +102,48 @@ function compareFieldsByNameThenNumber(a: FieldRow, b: FieldRow): number {
 const fieldsSortedForWeather = computed(() => [...fields.value].sort(compareFieldsByNameThenNumber))
 
 async function load() {
+  if (longLoadingHintTimer) {
+    clearTimeout(longLoadingHintTimer)
+    longLoadingHintTimer = null
+  }
+  showLongLoadingHint.value = false
+  longLoadingHintTimer = setTimeout(() => {
+    if (loading.value) {
+      showLongLoadingHint.value = true
+    }
+  }, 5000)
+
   loading.value = true
   insightsLoading.value = false
   error.value = false
-  const data = await fetchWeather(city(), country())
-  weather.value = data
-  forecastDays.value = []
-  weatherInsights.value = null
-  if (data?.coord?.lat != null && data?.coord?.lon != null) {
-    const lat = data.coord.lat
-    const lon = data.coord.lon
-    forecastDays.value = await fetchForecast5(lat, lon)
-    insightsLoading.value = true
-    try {
-      weatherInsights.value = await fetchWeatherInsights(lat, lon)
-      if (weatherInsights.value?.daily.length) {
-        forecastDays.value = weatherInsights.value.daily
+  try {
+    const data = await fetchWeather(city(), country())
+    weather.value = data
+    forecastDays.value = []
+    weatherInsights.value = null
+    if (data?.coord?.lat != null && data?.coord?.lon != null) {
+      const lat = data.coord.lat
+      const lon = data.coord.lon
+      forecastDays.value = await fetchForecast5(lat, lon)
+      insightsLoading.value = true
+      try {
+        weatherInsights.value = await fetchWeatherInsights(lat, lon)
+        if (weatherInsights.value?.daily.length) {
+          forecastDays.value = weatherInsights.value.daily
+        }
+      } finally {
+        insightsLoading.value = false
       }
-    } finally {
-      insightsLoading.value = false
     }
+    if (!data) error.value = true
+  } finally {
+    loading.value = false
+    if (longLoadingHintTimer) {
+      clearTimeout(longLoadingHintTimer)
+      longLoadingHintTimer = null
+    }
+    showLongLoadingHint.value = false
   }
-  loading.value = false
-  if (!data) error.value = true
 }
 
 watch(cityValue, () => load())
@@ -165,6 +186,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (pickedCoordsCopiedTimer) clearTimeout(pickedCoordsCopiedTimer)
+  if (longLoadingHintTimer) clearTimeout(longLoadingHintTimer)
 })
 
 watch(fields, () => {
@@ -610,8 +632,11 @@ const weatherMapFieldMarkers = computed(() => {
       </div>
     </header>
 
-    <div v-if="loading" class="weather-detail-loading">
+    <div v-if="loading" class="weather-detail-loading" role="status" aria-live="polite">
       <UiLoadingBar size="md" />
+      <p v-if="showLongLoadingHint" class="weather-loading-long-hint">
+        Загрузка занимает больше времени обычного, пожалуйста подождите еще немного.
+      </p>
     </div>
     <div v-else-if="error" class="weather-detail-error">Не удалось загрузить погоду</div>
     <template v-else-if="weather">
@@ -2346,8 +2371,19 @@ const weatherMapFieldMarkers = computed(() => {
 
 .weather-detail-loading {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
+}
+
+.weather-loading-long-hint {
+  margin: 0;
+  max-width: 420px;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--text-secondary);
 }
 
 .weather-detail-error {

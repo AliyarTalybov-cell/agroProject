@@ -203,6 +203,7 @@ create table if not exists public.crops (
   id uuid primary key default gen_random_uuid(),
   key text not null unique,
   label text not null,
+  base_moisture_percent numeric not null default 14 check (base_moisture_percent >= 0 and base_moisture_percent < 100),
   sort_order int not null default 0,
   created_at timestamptz default now()
 );

@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { assertCanDelete } from '@/lib/deletePermissions'
+import { assertPhotoSize } from '@/lib/uploadLimits'
 
 export type NewsPostRow = {
   id: string
@@ -154,6 +155,7 @@ function sanitizeFileName(name: string): string {
 
 export async function uploadNewsImage(file: File, folder = 'news'): Promise<string> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertPhotoSize(file)
   const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
   const safeName = sanitizeFileName(file.name.replace(new RegExp(`\\.${ext}$`, 'i'), ''))
   const path = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeName}.${ext}`

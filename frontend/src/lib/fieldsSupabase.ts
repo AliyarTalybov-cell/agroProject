@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { assertCanDelete } from '@/lib/deletePermissions'
+import { assertPhotoSize } from '@/lib/uploadLimits'
 
 export type FieldRow = {
   id: string
@@ -80,6 +81,70 @@ export async function loadFields(nameQuery?: string): Promise<FieldRow[]> {
   const fallback = await fallbackReq
   if (fallback.error) throw fallback.error
   return ((fallback.data ?? []) as Record<string, unknown>[]).map(normalizeFieldRow)
+}
+
+export type FieldsServerSortKey =
+  | 'number'
+  | 'name'
+  | 'cadastral_number'
+  | 'area'
+  | 'crop_key'
+  | 'land_type'
+  | 'location_description'
+  | 'responsible_id'
+
+export type FieldsPageParams = {
+  search?: string
+  cropKey?: string
+  sortKey?: FieldsServerSortKey
+  sortDir?: 'asc' | 'desc'
+  page?: number
+  pageSize?: number
+}
+
+export type FieldsPageResult = { rows: FieldRow[]; total: number }
+
+/** Серверная пагинация полей: поиск по названию, фильтр по культуре, сортировка по колонкам БД. */
+export async function loadFieldsPage(params: FieldsPageParams = {}): Promise<FieldsPageResult> {
+  if (!supabase) return { rows: [], total: 0 }
+  const page = Math.max(1, Math.floor(params.page ?? 1))
+  const pageSize = Math.min(100, Math.max(1, Math.floor(params.pageSize ?? 10)))
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
+  const sortCol: FieldsServerSortKey = params.sortKey ?? 'number'
+  const asc = (params.sortDir ?? 'asc') === 'asc'
+  const search = (params.search ?? '').trim()
+  const cropKey = params.cropKey && params.cropKey !== 'all' ? params.cropKey : null
+
+  const build = (select: string) => {
+    let q = supabase!.from(FIELDS_TABLE).select(select, { count: 'exact' }).order(sortCol, { ascending: asc })
+    if (sortCol !== 'number') q = q.order('number', { ascending: true })
+    if (search) q = q.ilike('name', `%${search}%`)
+    if (cropKey) q = q.eq('crop_key', cropKey)
+    return q.range(from, to)
+  }
+
+  const { data, error, count } = await build(FIELDS_SELECT_WITH_OPTIONAL)
+  if (!error) {
+    return { rows: ((data ?? []) as Record<string, unknown>[]).map(normalizeFieldRow), total: Number(count ?? 0) }
+  }
+  if (!isMissingGeometryColumnError(error)) throw error
+  const fallback = await build(FIELDS_SELECT_BASE)
+  if (fallback.error) throw fallback.error
+  return { rows: ((fallback.data ?? []) as Record<string, unknown>[]).map(normalizeFieldRow), total: Number(fallback.count ?? 0) }
+}
+
+/** Максимальный номер поля (для подсказки номера новой записи при серверной пагинации). */
+export async function loadMaxFieldNumber(): Promise<number> {
+  if (!supabase) return 0
+  const { data, error } = await supabase
+    .from(FIELDS_TABLE)
+    .select('number')
+    .order('number', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) return 0
+  return Number((data as { number?: number } | null)?.number ?? 0)
 }
 
 export async function getFieldById(id: string): Promise<FieldRow | null> {
@@ -219,6 +284,7 @@ export async function updateField(
 /** Загружает файл схемы в Storage и возвращает публичный URL. Бакет "field-schemes" должен быть создан в Dashboard и быть публичным. */
 export async function uploadFieldScheme(file: File, fieldId?: string): Promise<string> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertPhotoSize(file)
   const ext = file.name.split('.').pop()?.toLowerCase() || 'bin'
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80)
   const path = fieldId ? `${fieldId}/${Date.now()}-${safeName}` : `temp/${Date.now()}-${safeName}`
@@ -256,6 +322,7 @@ export async function addFieldPhoto(
   description?: string,
 ): Promise<FieldPhotoRow> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertPhotoSize(file)
   const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80)
   const path = `field-photos/${fieldId}/${Date.now()}-${safeName}`

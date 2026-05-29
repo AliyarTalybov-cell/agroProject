@@ -15,6 +15,8 @@ import EquipmentDetailsPage from '@/pages/EquipmentDetailsPage.vue'
 import WarehousesPage from '@/pages/WarehousesPage.vue'
 import WarehouseCellPage from '@/pages/WarehouseCellPage.vue'
 import StorageLocationsPage from '@/pages/StorageLocationsPage.vue'
+import WarehouseBatchRegistryPage from '@/pages/WarehouseBatchRegistryPage.vue'
+import GrainAccountingPage from '@/pages/GrainAccountingPage.vue'
 import ProfilePage from '@/pages/ProfilePage.vue'
 import EmployeesPage from '@/pages/EmployeesPage.vue'
 import ChatPage from '@/pages/ChatPage.vue'
@@ -38,7 +40,14 @@ export const routes = [
   { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true, meta: { title: 'Поле' } },
   { path: '/warehouses', name: 'warehouses', component: WarehousesPage, meta: { title: 'Склады' } },
   { path: '/warehouses/storage-locations', name: 'storage-locations', component: StorageLocationsPage, meta: { title: 'Места хранения' } },
+  { path: '/warehouses/batches', redirect: '/grain/batches' },
   { path: '/warehouses/:id', name: 'warehouse-cell', component: WarehouseCellPage, props: true, meta: { title: 'Карточка склада' } },
+  { path: '/grain', redirect: '/grain/batches' },
+  { path: '/grain/batches', name: 'grain-batches', component: WarehouseBatchRegistryPage, meta: { title: 'Реестр партий' } },
+  { path: '/grain/current', name: 'grain-current', component: GrainAccountingPage, meta: { title: 'Текущие партии' } },
+  { path: '/grain-batches', redirect: '/grain/batches' },
+  { path: '/grain-transfers', redirect: '/warehouses' },
+  { path: '/grain-writeoffs', redirect: '/warehouses' },
   { path: '/equipment', name: 'equipment', component: EquipmentPage, meta: { title: 'Управление техникой' } },
   { path: '/equipment/:id', name: 'equipment-details', component: EquipmentDetailsPage, props: true, meta: { title: 'Техника' } },
   { path: '/tasks', name: 'tasks', component: TasksPage, meta: { title: 'Календарь' } },

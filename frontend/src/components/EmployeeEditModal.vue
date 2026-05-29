@@ -5,6 +5,7 @@ import type { EmployeeRole, EmployeeRow, PositionRow } from '@/lib/employeesSupa
 import { deleteEmployee, updateEmployee } from '@/lib/employeesSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
+import UserAvatar from '@/components/UserAvatar.vue'
 
 const props = defineProps<{
   open: boolean
@@ -156,7 +157,7 @@ watch(
 
           <div class="eem-layout">
             <aside class="eem-aside">
-              <div class="eem-avatar" :style="{ background: avatarBg }">{{ avatar }}</div>
+              <UserAvatar class="eem-avatar" :style="{ background: avatarBg }" :url="employee?.avatar_url" :initials="avatar" />
               <div class="eem-status-card">
                 <div class="eem-status-row">
                   <div>

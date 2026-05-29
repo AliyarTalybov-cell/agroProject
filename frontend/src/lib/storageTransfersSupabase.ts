@@ -333,6 +333,9 @@ export async function executeStorageTransfer(payload: {
     crop_key: cropKey,
     gross_mass_tons: payload.massTons,
     moisture_percent: avgMoisture,
+    base_moisture_percent: 14,
+    weed_impurity_percent: 0,
+    grain_impurity_percent: 0,
     net_mass_tons: payload.massTons,
     comment: destComment,
   })

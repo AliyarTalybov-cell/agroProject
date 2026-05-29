@@ -15,13 +15,14 @@ export type EmployeeRow = {
   phone: string | null
   position: string | null
   additional_info: string | null
+  avatar_url?: string | null
   last_activity_at: string | null
   created_at: string
   updated_at: string
 }
 
 const EMPLOYEE_COLUMNS =
-  'id, email, display_name, role, active, phone, position, additional_info, last_activity_at, created_at, updated_at'
+  'id, email, display_name, role, active, phone, position, additional_info, avatar_url, last_activity_at, created_at, updated_at'
 
 function normalizeQuery(q: string): string {
   return q.trim().replace(/\s+/g, ' ')

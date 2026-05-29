@@ -64,8 +64,7 @@ onMounted(() => void loadData())
 
 <template>
   <section class="news-page">
-    <header class="news-header page-enter-item">
-      <h1 class="page-title">Новости</h1>
+    <header class="news-header news-header--actions-only page-enter-item">
       <button v-if="isManager" type="button" class="news-add-btn" @click="openCreate">
         <svg class="news-add-btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
         Добавить новость
@@ -109,6 +108,8 @@ onMounted(() => void loadData())
 <style scoped>
 .news-page { display:flex; flex-direction:column; gap:1rem; }
 .news-header { display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; flex-wrap:wrap; }
+.news-header--actions-only { justify-content:flex-end; }
+.news-header--actions-only:empty { display:none; }
 .news-loading { margin-top:0.75rem; }
 .news-empty { margin:0; color:var(--text-muted); }
 .news-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1.35rem 1rem; align-items:start; }

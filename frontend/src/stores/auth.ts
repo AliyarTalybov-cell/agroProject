@@ -17,6 +17,30 @@ function isUserActive(u: User | null): boolean {
   return u.user_metadata?.active !== false
 }
 
+/** Признак, что текущий logout инициирован самим пользователем (а не сбоем сети/БД). */
+let userInitiatedSignOut = false
+
+/**
+ * Читает сохранённую сессию Supabase напрямую из localStorage (ключ `sb-<ref>-auth-token`).
+ * Нужна, чтобы при недоступной БД не выкидывать недавнего пользователя из кабинета.
+ */
+function readPersistedUser(): User | null {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key || !key.startsWith('sb-') || !key.endsWith('-auth-token')) continue
+      const raw = localStorage.getItem(key)
+      if (!raw) continue
+      const parsed = JSON.parse(raw) as { currentSession?: { user?: User }; user?: User } | null
+      const sessionUser = parsed?.currentSession?.user ?? parsed?.user ?? null
+      if (sessionUser) return sessionUser as User
+    }
+  } catch {
+    /* повреждённый/недоступный storage — игнорируем */
+  }
+  return null
+}
+
 export function useAuth() {
   const isLoggedIn = computed(() => Boolean(user.value))
 
@@ -25,24 +49,42 @@ export function useAuth() {
       loading.value = false
       return
     }
+    // Сохранённый пользователь из localStorage: показываем сразу, чтобы при недоступной
+    // БД недавнего пользователя не выкидывало на экран входа.
+    const persistedUser = readPersistedUser()
+    if (persistedUser && isUserActive(persistedUser)) {
+      user.value = persistedUser
+    }
     try {
-      await Promise.race([
+      const result = await Promise.race([
         (async () => {
-          const { data: { session } } = await supabase!.auth.getSession()
-          const nextUser = session?.user ?? null
-          if (nextUser && !isUserActive(nextUser)) {
-            await supabase!.auth.signOut()
+          const { data: { session }, error } = await supabase!.auth.getSession()
+          return { kind: 'session' as const, session, error }
+        })(),
+        new Promise<{ kind: 'timeout' }>((resolve) => {
+          setTimeout(() => resolve({ kind: 'timeout' as const }), AUTH_INIT_TIMEOUT_MS)
+        }),
+      ])
+
+      if (result.kind === 'session') {
+        const nextUser = result.session?.user ?? null
+        if (nextUser) {
+          if (!isUserActive(nextUser)) {
+            userInitiatedSignOut = true
+            try { await supabase!.auth.signOut() } finally { userInitiatedSignOut = false }
             user.value = null
           } else {
             user.value = nextUser
           }
-        })(),
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, AUTH_INIT_TIMEOUT_MS)
-        }),
-      ])
+        } else if (!result.error && !persistedUser) {
+          // Сессии действительно нет (и локально тоже) — пользователь не вошёл.
+          user.value = null
+        }
+        // Если session=null из-за сбоя сети/БД, но локальная сессия есть — оставляем persistedUser.
+      }
+      // timeout: оставляем persistedUser (если был) — кабинет откроется в офлайн-режиме.
     } catch {
-      /* сеть/БД недоступны — оставляем user=null, UI всё равно откроется */
+      /* сеть/БД недоступны — оставляем сохранённого пользователя, если он есть */
     } finally {
       loading.value = false
     }
@@ -50,13 +92,25 @@ export function useAuth() {
 
   function startAuthListener() {
     if (!supabase) return
-    supabase!.auth.onAuthStateChange(async (_event, session) => {
+    supabase!.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        // Если это НЕ наш logout и локальная сессия ещё на месте — это транзиентный сбой
+        // (недоступная БД / неудачный refresh из-за сети). Не выкидываем пользователя.
+        if (!userInitiatedSignOut && readPersistedUser()) return
+        user.value = null
+        profileCache.value = null
+        return
+      }
       const nextUser = session?.user ?? null
+      // Игнорируем «пустые» события без сессии, если у нас уже есть активный пользователь
+      // (иначе сетевые сбои refresh-токена сбрасывали бы вход).
+      if (!nextUser && user.value) return
       if (nextUser?.id !== user.value?.id) {
         profileCache.value = null
       }
       if (nextUser && !isUserActive(nextUser)) {
-        await supabase!.auth.signOut()
+        userInitiatedSignOut = true
+        try { await supabase!.auth.signOut() } finally { userInitiatedSignOut = false }
         user.value = null
         return
       }
@@ -91,7 +145,12 @@ export function useAuth() {
 
   async function logout() {
     if (!supabase) return
-    await supabase!.auth.signOut()
+    userInitiatedSignOut = true
+    try {
+      await supabase!.auth.signOut()
+    } finally {
+      userInitiatedSignOut = false
+    }
     user.value = null
     profileCache.value = null
     try {

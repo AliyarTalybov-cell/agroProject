@@ -1,4 +1,4 @@
-const OPENMETEO_TIMEOUT_MS = 5000
+const OPENMETEO_TIMEOUT_MS = 20000
 
 export type WeatherData = {
   cityName: string

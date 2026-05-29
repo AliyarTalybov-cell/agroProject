@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import { assertCanDelete } from '@/lib/deletePermissions'
+import { assertPhotoSize } from '@/lib/uploadLimits'
 
 export type EquipmentCondition = string
 
@@ -106,6 +107,36 @@ export async function loadEquipment(): Promise<EquipmentRow[]> {
     .order('created_at', { ascending: false })
   if (error) throw error
   return (data ?? []) as EquipmentRow[]
+}
+
+export type EquipmentPageResult = { rows: EquipmentRow[]; total: number }
+
+const EQUIPMENT_SELECT =
+  'id, brand, license_plate, factory_number, epsm_psm, svr_number, registration_certificate, registration_date, deregistration_date, model, equipment_type, year, purpose_crop, implement_id, condition, responsible_id, notes, created_at, updated_at'
+
+/** Серверная пагинация техники с поиском по марке/госномеру/модели/типу. */
+export async function loadEquipmentPage(params: {
+  search?: string
+  page?: number
+  pageSize?: number
+}): Promise<EquipmentPageResult> {
+  if (!supabase) return { rows: [], total: 0 }
+  const page = Math.max(1, Math.trunc(params.page ?? 1) || 1)
+  const pageSize = Math.max(1, Math.trunc(params.pageSize ?? 10) || 10)
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
+  let q = supabase
+    .from(EQUIPMENT_TABLE)
+    .select(EQUIPMENT_SELECT, { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(from, to)
+  const s = (params.search ?? '').replace(/[(),*]/g, ' ').trim()
+  if (s) {
+    q = q.or(`brand.ilike.*${s}*,license_plate.ilike.*${s}*,model.ilike.*${s}*,equipment_type.ilike.*${s}*`)
+  }
+  const { data, count, error } = await q
+  if (error) throw error
+  return { rows: (data ?? []) as EquipmentRow[], total: Number(count ?? 0) }
 }
 
 export async function insertEquipment(payload: {
@@ -402,6 +433,7 @@ export async function addEquipmentPhoto(
   description?: string,
 ): Promise<EquipmentPhotoRow> {
   if (!supabase) throw new Error('Supabase не настроен')
+  assertPhotoSize(file)
   const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
   const baseName = file.name.replace(/\.[^.]+$/, '')
   const safeBase = baseName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80)

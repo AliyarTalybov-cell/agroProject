@@ -13,6 +13,7 @@ import EmployeeCreateModal from '@/components/EmployeeCreateModal.vue'
 import EmployeeEditModal from '@/components/EmployeeEditModal.vue'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import UserAvatar from '@/components/UserAvatar.vue'
 
 const auth = useAuth()
 
@@ -160,7 +161,6 @@ function openEmployee(e: EmployeeRow) {
   <section class="emp-page page-enter-item">
     <header class="emp-header">
       <div>
-        <h1 class="emp-title">Сотрудники</h1>
         <p class="emp-subtitle">Управление персоналом и доступом к системе.</p>
       </div>
 
@@ -216,9 +216,12 @@ function openEmployee(e: EmployeeRow) {
           @keydown.enter="openEmployee(e)"
         >
           <div class="emp-card-head">
-            <div class="emp-avatar" :style="{ background: avatarColor(e.position) }">
-              {{ initials(e.display_name, e.email) }}
-            </div>
+            <UserAvatar
+              class="emp-avatar"
+              :style="{ background: avatarColor(e.position) }"
+              :url="e.avatar_url"
+              :initials="initials(e.display_name, e.email)"
+            />
             <div class="emp-card-meta">
               <div class="emp-name">{{ e.display_name || e.email }}</div>
               <div class="emp-position">{{ e.position || '—' }}</div>

@@ -10,6 +10,9 @@ export type StorageIntakeRow = {
   crop_key: string | null
   gross_mass_tons: number
   moisture_percent: number
+  base_moisture_percent: number
+  weed_impurity_percent: number
+  grain_impurity_percent: number
   net_mass_tons: number
   comment: string | null
   batch_code: string | null
@@ -22,7 +25,7 @@ export type StorageIntakeRow = {
 
 const STORAGE_INTAKES_TABLE = 'storage_intakes'
 const STORAGE_INTAKES_SELECT =
-  'id, storage_location_id, received_at, field_id, crop_key, gross_mass_tons, moisture_percent, net_mass_tons, comment, batch_code, batch_id, created_at, updated_at, fields ( id, number, name ), crops ( key, label )'
+  'id, storage_location_id, received_at, field_id, crop_key, gross_mass_tons, moisture_percent, base_moisture_percent, weed_impurity_percent, grain_impurity_percent, net_mass_tons, comment, batch_code, batch_id, created_at, updated_at, fields ( id, number, name ), crops ( key, label )'
 
 export async function loadStorageIntakes(storageLocationId: string): Promise<StorageIntakeRow[]> {
   if (!supabase || !storageLocationId) return []
@@ -35,6 +38,67 @@ export async function loadStorageIntakes(storageLocationId: string): Promise<Sto
   return (data ?? []) as StorageIntakeRow[]
 }
 
+const STORAGE_INTAKES_SELECT_WITH_LOCATION = `${STORAGE_INTAKES_SELECT}, storage_locations ( id, name, address )`
+
+export type StorageIntakeWithLocationRow = StorageIntakeRow & {
+  storage_locations?: { id: string; name: string; address: string } | { id: string; name: string; address: string }[] | null
+}
+
+/** Поступления по всем складам (для общего реестра «Учёт зерна»). */
+export async function loadAllStorageIntakes(): Promise<StorageIntakeWithLocationRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from(STORAGE_INTAKES_TABLE)
+    .select(STORAGE_INTAKES_SELECT_WITH_LOCATION)
+    .order('received_at', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as StorageIntakeWithLocationRow[]
+}
+
+export type StorageIntakesPage = { rows: StorageIntakeWithLocationRow[]; total: number }
+
+function sanitizeOrValue(value: string): string {
+  return value.replace(/[(),*]/g, ' ').trim()
+}
+
+/** Постраничная загрузка поступлений по всем складам с серверным поиском и фильтром по складу. */
+export async function loadStorageIntakesPage(params: {
+  search?: string
+  storageLocationId?: string
+  page?: number
+  pageSize?: number
+}): Promise<StorageIntakesPage> {
+  if (!supabase) return { rows: [], total: 0 }
+  const page = Math.max(1, Number(params.page || 1))
+  const pageSize = Math.max(1, Number(params.pageSize || 10))
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
+
+  let query = supabase
+    .from(STORAGE_INTAKES_TABLE)
+    .select(STORAGE_INTAKES_SELECT_WITH_LOCATION, { count: 'exact' })
+    .order('received_at', { ascending: false })
+
+  if (params.storageLocationId && params.storageLocationId !== 'all') {
+    query = query.eq('storage_location_id', params.storageLocationId)
+  }
+  const search = sanitizeOrValue(String(params.search || ''))
+  if (search) {
+    query = query.or(`batch_code.ilike.*${search}*,comment.ilike.*${search}*`)
+  }
+
+  const { data, error, count } = await query.range(from, to)
+  if (error) throw error
+  return { rows: (data ?? []) as StorageIntakeWithLocationRow[], total: Number(count || 0) }
+}
+
+export function storageIntakeLocationName(row: StorageIntakeWithLocationRow): string {
+  const x = row.storage_locations
+  if (!x) return '—'
+  const one = Array.isArray(x) ? x[0] ?? null : x
+  return one?.name?.trim() || '—'
+}
+
 export async function addStorageIntake(payload: {
   storage_location_id: string
   received_at: string
@@ -42,6 +106,9 @@ export async function addStorageIntake(payload: {
   crop_key: string | null
   gross_mass_tons: number
   moisture_percent: number
+  base_moisture_percent: number
+  weed_impurity_percent: number
+  grain_impurity_percent: number
   net_mass_tons: number
   comment?: string | null
 }): Promise<StorageIntakeRow> {
@@ -55,6 +122,9 @@ export async function addStorageIntake(payload: {
       crop_key: payload.crop_key,
       gross_mass_tons: payload.gross_mass_tons,
       moisture_percent: payload.moisture_percent,
+      base_moisture_percent: payload.base_moisture_percent,
+      weed_impurity_percent: payload.weed_impurity_percent,
+      grain_impurity_percent: payload.grain_impurity_percent,
       net_mass_tons: payload.net_mass_tons,
       comment: payload.comment?.trim() || null,
       updated_at: new Date().toISOString(),

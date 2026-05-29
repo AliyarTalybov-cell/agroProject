@@ -48,6 +48,42 @@ export async function loadStorageLocations(searchQuery = ''): Promise<StorageLoc
   return (data ?? []) as StorageLocationRow[]
 }
 
+export type StorageLocationsPage = { rows: StorageLocationRow[]; total: number }
+
+/** Серверная пагинация мест хранения с поиском и фильтрами по статусу заполнения и культуре. */
+export async function loadStorageLocationsPage(params: {
+  search?: string
+  fillStatusId?: string
+  cropKey?: string | '__none__'
+  page?: number
+  pageSize?: number
+}): Promise<StorageLocationsPage> {
+  if (!supabase) return { rows: [], total: 0 }
+  const page = Math.max(1, Math.trunc(params.page ?? 1) || 1)
+  const pageSize = Math.max(1, Math.trunc(params.pageSize ?? 8) || 8)
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
+  let req = supabase
+    .from(STORAGE_LOCATIONS_TABLE)
+    .select(STORAGE_LOCATIONS_SELECT, { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(from, to)
+  const query = (params.search ?? '').replace(/[(),*]/g, ' ').trim()
+  if (query) {
+    req = req.or(`name.ilike.*${query}*,address.ilike.*${query}*,fgis_grain_code.ilike.*${query}*`)
+  }
+  if (params.fillStatusId && params.fillStatusId !== 'all') {
+    req = req.eq('fill_status_id', params.fillStatusId)
+  }
+  if (params.cropKey && params.cropKey !== 'all') {
+    if (params.cropKey === '__none__') req = req.is('crop_key', null)
+    else req = req.eq('crop_key', params.cropKey)
+  }
+  const { data, error, count } = await req
+  if (error) throw error
+  return { rows: (data ?? []) as StorageLocationRow[], total: Number(count ?? 0) }
+}
+
 export async function getStorageLocationById(id: string): Promise<StorageLocationRow | null> {
   if (!supabase) return null
   const { data, error } = await supabase

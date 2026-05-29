@@ -4,12 +4,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import { useAuth } from '@/stores/auth'
 import { useBackendHealth } from '@/stores/backendHealth'
-import AppBackendBanner from '@/components/AppBackendBanner.vue'
+import AppBackendBadge from '@/components/AppBackendBadge.vue'
+import AppBackendModal from '@/components/AppBackendModal.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import ModalCloseButton from '@/components/ModalCloseButton.vue'
+import NavStatusHint from '@/components/NavStatusHint.vue'
 import { chatTotalUnread, refreshChatTotalUnread } from '@/lib/chatSupabase'
 import { countMyUnreadNotifications } from '@/lib/notificationsSupabase'
 import { startActivityHeartbeat, stopActivityHeartbeat } from '@/lib/activityHeartbeat'
+import { loadProfileById } from '@/lib/tasksSupabase'
+import { isSupabaseConfigured } from '@/lib/supabase'
 
 const route = useRoute()
 const router = useRouter()
@@ -23,6 +27,20 @@ const showBackendBanner = computed(
   () => backendHealth.isUnavailable.value && backendHealth.errorMessage.value,
 )
 const backendBannerMessage = computed(() => backendHealth.errorMessage.value ?? '')
+
+/** Модалка недоступности на экране входа (можно закрыть, появляется снова при новой ошибке). */
+const backendModalDismissed = ref(false)
+const showAuthBackendModal = computed(
+  () => isAuthLayout.value && Boolean(showBackendBanner.value) && !backendModalDismissed.value,
+)
+/** Плавающий бейдж «Нет связи с БД» в кабинете (на экране входа вместо него — модалка). */
+const showBackendBadge = computed(
+  () => !isAuthLayout.value && Boolean(showBackendBanner.value),
+)
+watch(
+  () => backendHealth.status.value,
+  (s) => { if (s === 'error' || s === 'not_configured') backendModalDismissed.value = false },
+)
 const pageTitle = computed(() => {
   if (route.name === 'dashboard' && route.query.tab === 'about') return 'О сервисе'
   if (route.path.startsWith('/lands')) {
@@ -63,14 +81,31 @@ const storageLocationsNavActive = computed(
 const warehousesNavActive = computed(
   () => route.path.startsWith('/warehouses') && !route.path.startsWith('/warehouses/storage-locations'),
 )
+const grainBatchesNavActive = computed(
+  () => route.path.startsWith('/grain/batches'),
+)
+const grainCurrentNavActive = computed(
+  () => route.path.startsWith('/grain/current'),
+)
+const landsSectionActive = computed(
+  () => landsNavActive.value || fieldsNavActive.value || meliorationNavActive.value,
+)
+const warehousesSectionActive = computed(
+  () => route.path.startsWith('/warehouses'),
+)
+const grainSectionActive = computed(
+  () => route.path.startsWith('/grain'),
+)
 const settingsNavExpanded = ref(isFieldsReferencesTab.value || isLandsReferencesTab.value)
-const settingsNavActive = computed(() => false)
 const referencesNavActive = computed(() => isFieldsReferencesTab.value || isLandsReferencesTab.value)
 const landsNavExpanded = ref(
-  route.path.startsWith('/fields') || route.path.startsWith('/field-details') || isLandsMeliorationTab.value,
+  landsNavActive.value || route.path.startsWith('/fields') || route.path.startsWith('/field-details') || isLandsMeliorationTab.value,
 )
 const warehousesNavExpanded = ref(
   route.path.startsWith('/warehouses'),
+)
+const grainNavExpanded = ref(
+  route.path.startsWith('/grain'),
 )
 
 function toggleLandsNavSubmenu() {
@@ -83,6 +118,10 @@ function toggleSettingsNavSubmenu() {
 
 function toggleWarehousesNavSubmenu() {
   warehousesNavExpanded.value = !warehousesNavExpanded.value
+}
+
+function toggleGrainNavSubmenu() {
+  grainNavExpanded.value = !grainNavExpanded.value
 }
 
 function goDashboardHome() {
@@ -108,6 +147,21 @@ const userInitials = computed(() => {
   if (part.length >= 2) return part.slice(0, 2).toUpperCase()
   return part.slice(0, 1).toUpperCase() || '?'
 })
+const userAvatarUrl = computed(() => auth.profileCache.value?.avatar_url ?? null)
+
+/** Подгружаем профиль в кэш, чтобы аватар отображался в шапке после перезагрузки. */
+async function ensureProfileInCache() {
+  const u = auth.user.value
+  if (!u || !isSupabaseConfigured()) return
+  if (auth.profileCache.value?.id === u.id) return
+  try {
+    const p = await loadProfileById(u.id)
+    if (p && auth.user.value?.id === u.id) auth.profileCache.value = p
+  } catch {
+    /* недоступность профиля не критична для шапки */
+  }
+}
+watch(() => auth.user.value?.id, (id) => { if (id) void ensureProfileInCache() }, { immediate: true })
 
 /** Ref из chatSupabase: в шаблоне используем computed для гарантированной размотки */
 const chatUnreadDisplay = computed(() => Number(chatTotalUnread.value) || 0)
@@ -183,17 +237,24 @@ watch(
 
 <template>
   <div v-if="isAuthLayout" class="app-auth-shell">
-    <AppBackendBanner
-      v-if="showBackendBanner"
-      class="app-auth-shell__banner"
+    <RouterView />
+    <AppBackendModal
+      v-if="showAuthBackendModal"
       :message="backendBannerMessage"
       :checking="backendHealth.isChecking.value"
       @retry="void backendHealth.check(true)"
+      @close="backendModalDismissed = true"
     />
-    <RouterView />
   </div>
 
   <div v-else class="app-layout" :class="{ 'mobile-menu-open': mobileMenuOpen }">
+    <Transition name="fade">
+      <AppBackendBadge
+        v-if="showBackendBadge"
+        :checking="backendHealth.isChecking.value"
+        @retry="void backendHealth.check(true)"
+      />
+    </Transition>
     <div class="sidebar-overlay" aria-hidden="true" @click="closeMobileMenu"></div>
     <aside class="sidebar">
       <div class="sidebar-brand">
@@ -242,23 +303,27 @@ watch(
               </RouterLink>
             </li>
             <li class="nav-item-group" :class="{ 'nav-item-group--open': landsNavExpanded }">
-              <RouterLink class="nav-item" :class="{ 'router-link-active': landsNavActive }" active-class="" exact-active-class="" to="/lands">
+              <button
+                type="button"
+                class="nav-item nav-item--group-toggle"
+                :aria-expanded="landsNavExpanded"
+                @click="toggleLandsNavSubmenu"
+              >
                 <span class="nav-item-icon" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7l8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
                 </span>
-                Земли
-              </RouterLink>
-              <button
-                type="button"
-                class="nav-submenu-toggle"
-                :class="{ 'is-open': landsNavExpanded }"
-                aria-label="Показать подпункты раздела Земли"
-                :aria-expanded="landsNavExpanded"
-                @click.stop="toggleLandsNavSubmenu"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                <span class="nav-item-label">Земли</span>
+                <svg class="nav-group-chevron" :class="{ 'is-open': landsNavExpanded, 'is-active': landsSectionActive }" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </button>
               <ul class="nav-submenu">
+                <li>
+                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': landsNavActive }" active-class="" exact-active-class="" to="/lands">
+                    <span class="nav-item-icon" aria-hidden="true">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l-6 3V6l6-3 6 3 6-3v15l-6 3-6-3Z"/><path d="M9 3v15"/><path d="M15 6v15"/></svg>
+                    </span>
+                    Земельные участки
+                  </RouterLink>
+                </li>
                 <li>
                   <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': fieldsNavActive }" to="/fields">
                     <span class="nav-item-icon" aria-hidden="true">
@@ -284,7 +349,12 @@ watch(
               </ul>
             </li>
             <li class="nav-item-group" :class="{ 'nav-item-group--open': warehousesNavExpanded }">
-              <RouterLink class="nav-item" :class="{ 'router-link-active': warehousesNavActive }" active-class="" exact-active-class="" to="/warehouses">
+              <button
+                type="button"
+                class="nav-item nav-item--group-toggle"
+                :aria-expanded="warehousesNavExpanded"
+                @click="toggleWarehousesNavSubmenu"
+              >
                 <span class="nav-item-icon" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M3 10.5 12 4l9 6.5" />
@@ -292,19 +362,24 @@ watch(
                     <path d="M9 20v-5h6v5" />
                   </svg>
                 </span>
-                Склады
-              </RouterLink>
-              <button
-                type="button"
-                class="nav-submenu-toggle"
-                :class="{ 'is-open': warehousesNavExpanded }"
-                aria-label="Показать подпункты раздела Склады"
-                :aria-expanded="warehousesNavExpanded"
-                @click.stop="toggleWarehousesNavSubmenu"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                <span class="nav-item-label">Склады</span>
+                <NavStatusHint text="Раздел «Склады» ещё не завершён — функционал и логика будут дорабатываться." />
+                <svg class="nav-group-chevron" :class="{ 'is-open': warehousesNavExpanded, 'is-active': warehousesSectionActive }" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </button>
               <ul class="nav-submenu">
+                <li>
+                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': warehousesNavActive }" active-class="" exact-active-class="" to="/warehouses">
+                    <span class="nav-item-icon" aria-hidden="true">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="3" width="7" height="7" rx="1" />
+                        <rect x="3" y="14" width="7" height="7" rx="1" />
+                        <rect x="14" y="14" width="7" height="7" rx="1" />
+                      </svg>
+                    </span>
+                    Карточки складов
+                  </RouterLink>
+                </li>
                 <li>
                   <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': storageLocationsNavActive }" to="/warehouses/storage-locations">
                     <span class="nav-item-icon" aria-hidden="true">
@@ -315,6 +390,52 @@ watch(
                       </svg>
                     </span>
                     Места хранения
+                  </RouterLink>
+                </li>
+              </ul>
+            </li>
+            <li class="nav-item-group" :class="{ 'nav-item-group--open': grainNavExpanded }">
+              <button
+                type="button"
+                class="nav-item nav-item--group-toggle"
+                :aria-expanded="grainNavExpanded"
+                @click="toggleGrainNavSubmenu"
+              >
+                <span class="nav-item-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22V8" />
+                    <path d="M12 8c0-2.5-1.5-4-4-4 0 2.5 1.5 4 4 4Z" />
+                    <path d="M12 8c0-2.5 1.5-4 4-4 0 2.5-1.5 4-4 4Z" />
+                    <path d="M12 14c0-2.5-1.5-4-4-4 0 2.5 1.5 4 4 4Z" />
+                    <path d="M12 14c0-2.5 1.5-4 4-4 0 2.5-1.5 4-4 4Z" />
+                  </svg>
+                </span>
+                <span class="nav-item-label">Учёт зерна</span>
+                <NavStatusHint text="Раздел «Учёт зерна» ещё не завершён — функционал и логика будут дорабатываться." />
+                <svg class="nav-group-chevron" :class="{ 'is-open': grainNavExpanded, 'is-active': grainSectionActive }" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <ul class="nav-submenu">
+                <li>
+                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': grainBatchesNavActive }" to="/grain/batches">
+                    <span class="nav-item-icon" aria-hidden="true">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="4" width="18" height="16" rx="2" />
+                        <path d="M7 8h10M7 12h10M7 16h6" />
+                      </svg>
+                    </span>
+                    Реестр партий
+                  </RouterLink>
+                </li>
+                <li>
+                  <RouterLink class="nav-item nav-item--sub" :class="{ 'router-link-active': grainCurrentNavActive }" to="/grain/current">
+                    <span class="nav-item-icon" aria-hidden="true">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2 2 7l10 5 10-5-10-5Z" />
+                        <path d="m2 17 10 5 10-5" />
+                        <path d="m2 12 10 5 10-5" />
+                      </svg>
+                    </span>
+                    Текущие партии
                   </RouterLink>
                 </li>
               </ul>
@@ -421,21 +542,17 @@ watch(
           <div class="nav-section-label">НАСТРОЙКИ</div>
           <ul class="nav-menu">
             <li class="nav-item-group" :class="{ 'nav-item-group--open': settingsNavExpanded }">
-              <a href="#" class="nav-item" :class="{ 'router-link-active': settingsNavActive }" @click.prevent>
+              <button
+                type="button"
+                class="nav-item nav-item--group-toggle"
+                :aria-expanded="settingsNavExpanded"
+                @click="toggleSettingsNavSubmenu"
+              >
                 <span class="nav-item-icon" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.82-.33 1.7 1.7 0 0 0-1.03 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.55 1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.64 8.4a1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.96 4.6a1.7 1.7 0 0 0 1.03-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.33 1.82 1.7 1.7 0 0 0 1.55 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1.03Z"/></svg>
                 </span>
-                Настройки
-              </a>
-              <button
-                type="button"
-                class="nav-submenu-toggle"
-                :class="{ 'is-open': settingsNavExpanded, 'is-active': referencesNavActive }"
-                aria-label="Показать подпункты раздела Настройки"
-                :aria-expanded="settingsNavExpanded"
-                @click.stop="toggleSettingsNavSubmenu"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                <span class="nav-item-label">Настройки</span>
+                <svg class="nav-group-chevron" :class="{ 'is-open': settingsNavExpanded, 'is-active': referencesNavActive }" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </button>
               <ul class="nav-submenu">
                 <li>
@@ -534,7 +651,10 @@ watch(
           </div>
           <div class="topbar-user">
             <RouterLink to="/profile" class="topbar-user-link" aria-label="Настройки профиля">
-              <div class="topbar-user-avatar">{{ userInitials }}</div>
+              <div class="topbar-user-avatar">
+                <img v-if="userAvatarUrl" :src="userAvatarUrl" alt="" class="topbar-user-avatar-img" />
+                <template v-else>{{ userInitials }}</template>
+              </div>
               <div class="topbar-user-meta">
                 <span class="topbar-user-name">{{ userDisplay }}</span>
               </div>
@@ -548,12 +668,6 @@ watch(
           <p class="app-content-bootstrap__text">Проверяем сессию и связь с сервером…</p>
         </div>
         <template v-else>
-          <AppBackendBanner
-            v-if="showBackendBanner"
-            :message="backendBannerMessage"
-            :checking="backendHealth.isChecking.value"
-            @retry="void backendHealth.check(true)"
-          />
           <RouterView v-slot="{ Component }">
             <Transition name="page" mode="out-in">
               <component v-if="Component" :is="Component" :key="$route.fullPath" />
